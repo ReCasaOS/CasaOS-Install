@@ -433,6 +433,17 @@ jobs:
         if: failure()
         run: |
           set +e
+          # a service that exits 127 before it says anything: run the binaries by
+          # hand, and watch the one that will not start
+          echo "::group::the binaries, by hand"
+          for b in /usr/bin/casaos /usr/bin/casaos-gateway /usr/bin/casaos-user-service /usr/bin/casaos-message-bus /usr/bin/casaos-local-storage /usr/bin/casaos-app-management; do
+            printf '%s: ' "$b"; ls -la "$b" 2>&1 | tail -1; sudo "$b" -v 2>&1 | head -2; echo "rc=$?"
+          done
+          sudo apt-get install -y -q strace >/dev/null 2>&1 || true
+          sudo strace -f -o /tmp/strace.txt /usr/bin/casaos-app-management -v 2>&1 | head -3 || true
+          tail -n 25 /tmp/strace.txt 2>/dev/null
+          uname -a; mount | grep -E " / | /usr " 
+          echo "::endgroup::"
           echo "::group::casaos-app-management"
           sudo tail -n 200 /var/log/casaos/app-management.log 2>/dev/null
           sudo journalctl -u casaos-app-management --no-pager -n 100
