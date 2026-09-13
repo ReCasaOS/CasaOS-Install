@@ -33,9 +33,20 @@ permissions:
 
 jobs:
   install-check:
-    name: Install the published bundle and use it
-    runs-on: ubuntu-22.04
+    name: Install the published bundle and use it (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    # The Raspberry Pi is the machine CasaOS is most often installed on, and
+    # no release had been installed on an arm64 machine before v0.4.83. The
+    # legs are independent: a red arm64 does not stop the amd64 evidence.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
@@ -110,6 +121,34 @@ jobs:
           test -n "${token}" && test "${token}" != null
           echo "::add-mask::${token}"
           echo "CASA_TOKEN=${token}" >> "$GITHUB_ENV"
+
+      # Every service used to trust any request from 127.0.0.1, and a container
+      # on the host network or any local account reaches the same addresses.
+      # Since v0.4.83 a request is one of ours when it carries the secret the
+      # gateway wrote for this boot, readable by root only; anything else needs
+      # a person's token, from loopback like from the network. Here: the routes
+      # that used to be open to loopback answer 401 without either, a service's
+      # call with the secret goes through, and the management API on its own
+      # port wants the same.
+      - name: Loopback alone is not a service
+        run: |
+          set -euo pipefail
+          for path in /v2/app_management/compose '/v1/file?path=/etc/shadow' /v1/users/current /v1/storage /v1/sys/debug /v1/gateway/port; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "${CASA_URL}${path}")"
+            echo "${path}: ${code}"
+            test "${code}" = 401
+          done
+          secret="$(sudo cat /var/run/casaos/internal.secret)"
+          test "${#secret}" -eq 64
+          test "$(sudo stat -c '%a %U' /var/run/casaos/internal.secret)" = "600 root"
+          # what local-storage posts to the core every five seconds
+          curl -fsS -o /dev/null -X POST "${CASA_URL}/v1/notify/system_status" -H "Authorization: Internal ${secret}" -H 'content-type: application/json' -d '{}'
+          # and the wrong secret is nobody
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "${CASA_URL}/v1/notify/system_status" -H "Authorization: Internal $(printf '0%.0s' $(seq 1 64))" -H 'content-type: application/json' -d '{}')" = 401
+          management="$(sudo cat /var/run/casaos/management.url)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "${management}/v1/gateway/routes")" = 401
+          curl -fsS -o /dev/null "${management}/v1/gateway/routes" -H "Authorization: Internal ${secret}"
+          echo "loopback alone is nobody; the secret is a service"
 
       # A destination is an rclone remote. `alias` onto a directory keeps the
       # test on this machine while going through exactly the same daemon, the
@@ -413,7 +452,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: install-check-${{ inputs.tag }}
+          name: install-check-${{ inputs.tag }}-${{ matrix.arch }}
           path: |
             install.log
             backup-files.txt

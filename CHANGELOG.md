@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.83] - 2026-09-13
+
+Components: CasaOS `v0.4.52`, CasaOS-AppManagement `v0.4.49`, Gateway `v0.4.26`, UserService `v0.4.25`, MessageBus `v0.4.24`, LocalStorage `v0.4.36`, Common `v0.4.24`. Unchanged from v0.4.82: CasaOS-UI `v0.4.61`, rclone `v1.75.1`.
+
+### Fixed
+
+- **Loopback is not an identity.** Every service skipped the token for any request from 127.0.0.1, and loopback is not this box's services alone: a container on the host network (Pi-hole, Plex, Home Assistant are commonly run that way), or any local account, reaches the same addresses — and could install a compose file that mounts the root filesystem, read any file as root through the file manager, change the administrator's password or switch two-factor authentication off, format a disk, or re-route the dashboard's API through the gateway's management port. The gateway now writes a random secret to `/var/run/casaos/internal.secret` at every start, readable by root only, and a request is one of ours when it comes from loopback with that secret in its Authorization header; the services send it on their own; anything else needs a person's token, from loopback like from the network. The install check proves it on both counts: the routes that used to be open answer 401 to a plain loopback request, a call with the secret goes through, a wrong secret is nobody. `casaos-cli` (not shipped here) relied on the exemption and needs a token now.
+- **`/v1/sys/debug` is behind the token.** The bug-report template (OS, version, disks, the configuration) sat outside the core's protected group, readable by anyone on the network.
+
+### Changed
+
+- **Go 1.26 and current dependencies** in every Go component: echo 4.15 with echo-jwt, x/crypto 0.57, x/net 0.59. Go 1.21, which built every release until now, has been out of support since August 2024, and the binaries carried its standard library. Dependabot alerts are on for every repository of the distribution.
+- **The install check runs on arm64 too.** The Raspberry Pi is the machine CasaOS is most often installed on; no release had been installed on one by anybody but users. Both legs are independent.
+
 ## [0.4.82] - 2026-09-13
 
 Components: CasaOS-AppManagement `v0.4.48`. Unchanged from v0.4.81: CasaOS `v0.4.51`, CasaOS-UI `v0.4.61`, Gateway `v0.4.25`, UserService `v0.4.24`, LocalStorage `v0.4.35`, MessageBus `v0.4.23`, Common `v0.4.23`, rclone `v1.75.1`.
