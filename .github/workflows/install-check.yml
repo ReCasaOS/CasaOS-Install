@@ -457,9 +457,14 @@ jobs:
           done
           echo "apps in the store: ${apps}"
           test "${apps}" -gt 50
-          curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" \
-            | jq -e '.data.list | (has("psitransfer") or has("PsiTransfer")) and (has("ayon") or has("big-bear-ayon"))' >/dev/null
-          echo "psitransfer and ayon are in the store"
+          # The store hides an app whose images are not built for this machine,
+          # and the two apps this looks for are amd64-only: on arm64 the count
+          # above is the evidence (377 against 421 on the v0.4.85 run).
+          if [ "${{ matrix.arch }}" = amd64 ]; then
+            curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" \
+              | jq -e '.data.list | (has("psitransfer") or has("PsiTransfer")) and (has("ayon") or has("big-bear-ayon"))' >/dev/null
+            echo "psitransfer and ayon are in the store"
+          fi
           sudo cp /etc/casaos/app-management.conf /tmp/app-management.conf.orig
           sudo sed -i '/^appstore = .*IceWhaleTech/d' /etc/casaos/app-management.conf
           grep -c '^appstore = ' /etc/casaos/app-management.conf
