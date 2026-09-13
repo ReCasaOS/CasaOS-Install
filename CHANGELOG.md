@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.82] - 2026-09-13
+
+Components: CasaOS-AppManagement `v0.4.48`. Unchanged from v0.4.81: CasaOS `v0.4.51`, CasaOS-UI `v0.4.61`, Gateway `v0.4.25`, UserService `v0.4.24`, LocalStorage `v0.4.35`, MessageBus `v0.4.23`, Common `v0.4.23`, rclone `v1.75.1`.
+
+### Fixed
+
+- **Two apps were missing from the store because they quote their numbers.** PsiTransfer writes `target: "3000"` and ayon `retries: "3"`; the compose specification types both as integers, compose-go's validation refused the files, and the apps were not in the store at all — the log said "contact the contributor" every ten minutes to nobody. A quoted number is a number to everyone but the schema, so where the specification wants an integer and the string is nothing but digits, it is one now. A range, or a string somebody meant as a string, is left as written; a file with nothing to coerce reaches the loader untouched. The install check now looks for both apps in the store.
+- **The store stands on a third-party catalogue alone.** Upstream's grid goes blank when only a store on the v2 schema is registered ([IceWhaleTech/CasaOS#2537](https://github.com/IceWhaleTech/CasaOS/issues/2537)). This dashboard already showed an error rather than a blank grid when categories could not be loaded; the install check now switches the box to big-bear alone, restarts, and checks that categories and apps come back with every name filled in, so a regression on either side shows up on the next release rather than in an issue.
+
 ## [0.4.81] - 2026-09-13
 
 Components: CasaOS-AppManagement `v0.4.46`. Unchanged from v0.4.80: CasaOS `v0.4.51`, CasaOS-UI `v0.4.61`, Gateway `v0.4.25`, UserService `v0.4.24`, LocalStorage `v0.4.35`, MessageBus `v0.4.23`, Common `v0.4.23`, rclone `v1.75.1`.

@@ -71,6 +71,46 @@ jobs:
           test "${version}" = "rclone ${RCLONE_TAG}"
           test -S /var/run/rclone/rclone.sock
 
+      # Two catalogue entries quote numbers the specification types as integers
+      # (PsiTransfer's port target, ayon's healthcheck retries) and were refused
+      # by the parser, so they were not in the store at all. And the store has to
+      # stand on a third-party catalogue alone: upstream's grid goes blank with
+      # only a v2-schema store registered (IceWhaleTech/CasaOS#2537), so the box
+      # is switched to big-bear alone, restarted, and asked for its categories
+      # and its apps, then switched back.
+      - name: The store, with the apps that quote their numbers, and on a v2 catalogue alone
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            apps="$(curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" | jq -r '.data.list // {} | keys | length')"
+            [ "${apps}" -gt 50 ] && break
+            sleep 5
+          done
+          echo "apps in the store: ${apps}"
+          test "${apps}" -gt 50
+          curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" \
+            | jq -e '.data.list | (has("psitransfer") or has("PsiTransfer")) and (has("ayon") or has("big-bear-ayon"))' >/dev/null
+          echo "psitransfer and ayon are in the store"
+          sudo cp /etc/casaos/app-management.conf /tmp/app-management.conf.orig
+          sudo sed -i '/^appstore = .*IceWhaleTech/d' /etc/casaos/app-management.conf
+          grep -c '^appstore = ' /etc/casaos/app-management.conf
+          sudo systemctl restart casaos-app-management
+          for _ in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "${CASA_URL}/v2/app_management/categories" -H "Authorization: ${CASA_TOKEN}" || true)"
+            [ "${code}" = 200 ] && n="$(curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" | jq -r '.data.list // {} | keys | length')" && [ "${n}" -gt 5 ] && break
+            sleep 5
+          done
+          categories="$(curl -fsS "${CASA_URL}/v2/app_management/categories" -H "Authorization: ${CASA_TOKEN}")"
+          echo "${categories}" | jq -c '.data | map(.name)'
+          jq -e '.data | length > 1 and all(.name != null and .name != "")' <<<"${categories}" >/dev/null
+          echo "apps on the v2 catalogue alone: ${n}"
+          sudo cp /tmp/app-management.conf.orig /etc/casaos/app-management.conf
+          sudo systemctl restart casaos-app-management
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" && break
+            sleep 3
+          done
+
       # No service may fail its first start. Two did on every install until v0.4.78;
       # the journals are printed so a red run says which one, and why.
       - name: First-start journals
