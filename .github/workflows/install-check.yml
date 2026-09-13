@@ -109,6 +109,26 @@ jobs:
           done
           test "${code}" = 200
 
+      # Since v0.4.84 the gateway serves the same routes over HTTPS on 443 with
+      # a certificate it made for itself, beside the plain port, when none is
+      # configured. Self-signed, so curl is told not to verify the chain; what
+      # is verified is that the dashboard and the API answer there, that the
+      # certificate is the gateway's own, and that its key is root's alone.
+      - name: HTTPS on 443 with the gateway's own certificate
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 20); do
+            curl -k -fsS -o /dev/null https://127.0.0.1:443/ && break
+            sleep 3
+          done
+          curl -k -fsS -o /dev/null https://127.0.0.1:443/
+          curl -k -fsS https://127.0.0.1:443/ping | grep -q pong
+          subject="$(openssl s_client -connect 127.0.0.1:443 </dev/null 2>/dev/null | openssl x509 -noout -subject)"
+          echo "${subject}"
+          grep -q -E 'CN *= *CasaOS' <<<"${subject}"
+          test "$(sudo stat -c '%a %U' /var/lib/casaos/tls/gateway.key)" = "600 root"
+          echo "https answers with the gateway's own certificate"
+
       - name: First user, then a token
         run: |
           set -euo pipefail
@@ -339,6 +359,12 @@ jobs:
       - name: The box itself, out and back
         run: |
           set -euo pipefail
+          # The polls below run while user-service is stopped for the copy. A token
+          # is checked against a key fetched from user-service every ten seconds;
+          # since Common v0.4.25 the key last seen serves while it is down, but a
+          # box whose app-management never saw one has nothing to check with. So
+          # the polls do not fail on the status, they keep polling; a real refusal
+          # still ends in the `test -n` below.
           sudo mkdir -p /var/lib/casaos/conf
           echo "box marker ${CASAOS_RELEASE_TAG}" | sudo tee /var/lib/casaos/conf/install-check-marker >/dev/null
           before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -347,7 +373,7 @@ jobs:
             -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
             -d '{"destination":"smoke","hold_still":true}' | jq .
           for _ in $(seq 1 60); do
-            run="$(curl -fsS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
+            run="$(curl -sS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
               | jq -c --arg b "${before}" '.data // [] | map(select(.app == "casaos-system" and .restore != true and .started_at > $b)) | first // empty')"
             [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
             sleep 3
@@ -370,7 +396,7 @@ jobs:
             -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
             -d "{\"destination\":\"smoke\",\"app\":\"casaos-system\",\"stamp\":\"${stamp}\"}" | jq .
           for _ in $(seq 1 60); do
-            run="$(curl -fsS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
+            run="$(curl -sS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
               | jq -c --arg b "${before}" '.data // [] | map(select(.app == "casaos-system" and .restore == true and .started_at > $b)) | first // empty')"
             [ -n "${run}" ] && break
             sleep 3
@@ -385,6 +411,34 @@ jobs:
           curl -fsS -o /dev/null "http://127.0.0.1:${port:-80}/"
           curl -fsS -X POST "${CASA_URL}/v1/users/login" -H 'content-type: application/json' \
             -d '{"username":"smoke","password":"Smoke-test-1"}' | jq -e '.data.token.access_token != null' >/dev/null
+
+      # A backup somebody asks for carries a retention since v0.4.84: once it has
+      # landed, older backups of that app at that destination beyond `keep` are
+      # deleted, by the arithmetic a schedule already used. Two backups with
+      # keep=1, and one is left on disk.
+      - name: A retention on demand
+        run: |
+          set -euo pipefail
+          for i in 1 2; do
+            before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            sleep 1
+            curl -fsS -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" \
+              -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
+              -d '{"destination":"smoke","hold_still":false,"keep":1}' | jq -c .
+            for _ in $(seq 1 40); do
+              run="$(curl -fsS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
+                | jq -c --arg b "${before}" '.data // [] | map(select(.app == "smoke" and .restore != true and .started_at > $b)) | first // empty')"
+              [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
+              sleep 3
+            done
+            echo "run ${i}: ${run}"
+            test -n "${run}"
+            test "$(jq -r '.error // ""' <<<"${run}")" = ""
+            sleep 2
+          done
+          sudo find /var/tmp/casaos-backup-smoke/smoke -mindepth 1 -maxdepth 1 -type d | tee kept.txt
+          test "$(wc -l < kept.txt)" -eq 1
+          echo "one backup kept, the older ones gone"
 
       # Two catalogue entries quote numbers the specification types as integers
       # (PsiTransfer's port target, ayon's healthcheck retries) and were refused

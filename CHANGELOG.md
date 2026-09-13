@@ -2,6 +2,27 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.84] - 2026-09-13
+
+Components: CasaOS `v0.4.53`, CasaOS-AppManagement `v0.4.51`, CasaOS-Gateway `v0.4.28`, UserService `v0.4.26`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, CasaOS-UI `v0.4.62`. Unchanged from v0.4.83: rclone `v1.75.1`.
+
+### Added
+
+- **HTTPS without configuring anything.** Most boxes have no certificate to supply — a LAN appliance has no public name to get one for — so the dashboard went over plain HTTP, readable on the wire, and the browser refused it the APIs that need a secure context, the clipboard first among them. When no certificate is configured, the gateway makes one for itself on first start (`/var/lib/casaos/tls`, ten years, this box's hostname and the loopback addresses) and serves the same routes over HTTPS on 443 beside the plain port. Self-signed, so the browser warns once; `httpsport=0` in `gateway.ini` turns it off, and a port somebody else holds is logged and skipped. The install check opens it, reads the certificate's name, and checks the key is root's alone.
+- **A scheduled backup that failed is said once, where the dashboard opens.** It went into the run log and nowhere else: the dashboard was closed at three in the morning. A failure still standing (the latest backup of that app to that destination, scheduled, failed) is a red notification at the next open, once per failure.
+- **Backups to keep, for the ones somebody asks for.** The manual backups piled up for ever, with only the scheduled ones under a retention. The backup dialog takes a number, `POST /compose/{id}/backup` takes `keep`: once the backup has landed, older ones of that app at that destination beyond it are deleted. Empty keeps everything, as before. The install check takes two with `keep: 1` and finds one on disk.
+- **The catalogue from its copy when the original is gone.** The App Store's catalogue is a zip of `IceWhaleTech/_appstore`, which nobody maintains; the day it goes away, every box keeps the copy it has and never sees an update again. AppManagement now fetches this distribution's nightly copy of that repository (`ReCasaOS/_appstore`) when the original stops answering. The configured URL is not changed, and the original is tried first on every update.
+
+### Fixed
+
+- **A token stays valid while user-service restarts.** Every service asked user-service for its signing key every ten seconds and gave up when it did not answer, so the dashboard's token stopped validating the moment user-service was restarting or held still for a backup of the box: both legs of the v0.4.83 install check got a 401 in that window, and every earlier run had passed it by timing. The key does not change while user-service is down; the key last seen serves until it answers again (Common `v0.4.25`, in every Go component).
+- **A first start that fails once does not fail the install.** On the amd64 leg of v0.4.83, app-management's `ExecStartPre` exited 127 with five services starting within a fifth of a second; the same bundle installed cleanly on the next run and the same binary ran by hand. 127 is what the UPX stub exits with when it cannot unpack itself, and nothing else on that path exits 127, so the Go components are built without UPX from now on (static and stripped already; gzip in the tarball does the rest), and the installer gives a service that failed its first start five seconds and one more try before calling the install failed. v0.4.83 is a pre-release, so `latest` went back to v0.4.82 until this one.
+- **The card of an app with no title shows its name.** A compose file without `x-casaos` gave a nameless card. Found by the new test that takes such an app through the screens.
+
+### Changed
+
+- The class every dashboard modal is opened with is checked: a class passed is a class some stylesheet styles. `account-modal`, passed by two dialogs and styled nowhere, is gone.
+
 ## [0.4.83] - 2026-09-13
 
 Components: CasaOS `v0.4.52`, CasaOS-AppManagement `v0.4.49`, Gateway `v0.4.26`, UserService `v0.4.25`, MessageBus `v0.4.24`, LocalStorage `v0.4.37`, Common `v0.4.24`. Unchanged from v0.4.82: CasaOS-UI `v0.4.61`, rclone `v1.75.1`.

@@ -922,7 +922,15 @@ DownloadAndInstallCasaOS() {
     for SERVICE in "${CASA_SERVICES[@]}"; do
         Show 2 "Starting ${SERVICE}..."
         GreyStart
-        ${sudo_cmd} systemctl start "${SERVICE}" || Show 3 "Service ${SERVICE} does not exist."
+        # A first start can fail once with everything else starting in the same
+        # second (seen on the amd64 leg of the v0.4.83 install check: exit 127 from
+        # app-management, clean on the next run). The unit restarts it on its own;
+        # give it that chance before calling the install failed.
+        if ! ${sudo_cmd} systemctl start "${SERVICE}"; then
+            Show 3 "Service ${SERVICE} did not start the first time, trying again in 5 seconds..."
+            sleep 5
+            ${sudo_cmd} systemctl start "${SERVICE}" || Show 3 "Service ${SERVICE} does not exist."
+        fi
         ColorReset
     done
 }
