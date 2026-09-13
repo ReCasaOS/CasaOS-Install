@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.85] - 2026-09-13
+
+Components: UserService `v0.4.27`. Unchanged from v0.4.84: CasaOS `v0.4.53`, CasaOS-AppManagement `v0.4.51`, CasaOS-Gateway `v0.4.28`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, CasaOS-UI `v0.4.62`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A session outlives a restart of user-service.** The key tokens are signed with was generated at every start and kept in memory only, so a reboot, an upgrade, or a backup of the box (which stops user-service for the copy) signed everybody out: both legs of the v0.4.84 install check found it, polling with a token issued before the box backup and refused after it, and a person would have been sent back to the login page by the very feature that promised the dashboard back in a few seconds. The key lives in `/var/lib/casaos/db/user-service.key` now, readable by root only, under the directory the box backup already carries, so a box put back from a backup keeps the sessions it had. The key for the window between a password and a second factor is still made at start.
+
 ## [0.4.84] - 2026-09-13
 
 Components: CasaOS `v0.4.53`, CasaOS-AppManagement `v0.4.51`, CasaOS-Gateway `v0.4.28`, UserService `v0.4.26`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, CasaOS-UI `v0.4.62`. Unchanged from v0.4.83: rclone `v1.75.1`.
