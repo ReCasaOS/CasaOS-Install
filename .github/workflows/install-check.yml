@@ -440,6 +440,30 @@ jobs:
           test "$(wc -l < kept.txt)" -eq 1
           echo "one backup kept, the older ones gone"
 
+      # Every app at once, since v0.4.86: what an update would do is listed first
+      # (the plan asks the registries), then the box runs the apps given one after
+      # another on its own and says what became of each. The smoke app came from a
+      # compose file naming nginx:alpine: the run leaves it current, or re-pulls
+      # it if the registry moved that tag since the install; neither is a failure.
+      - name: Every app at once
+        run: |
+          set -euo pipefail
+          plan="$(curl -fsS --max-time 300 "${CASA_URL}/v2/app_management/compose/updates?check=true" -H "Authorization: ${CASA_TOKEN}")"
+          echo "${plan}" | jq -c '.data.apps | map({id, kind, services: (.services | length)})'
+          jq -e '.data.apps | type == "array"' <<<"${plan}" >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "${CASA_URL}/v2/app_management/compose/updates" -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' -d '{"ids":[]}')" = 400
+          curl -fsS -X POST "${CASA_URL}/v2/app_management/compose/updates" -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' -d '{"ids":["smoke"]}' | jq -c '.data.apps'
+          run=""
+          for _ in $(seq 1 60); do
+            run="$(curl -fsS "${CASA_URL}/v2/app_management/compose/updates/run" -H "Authorization: ${CASA_TOKEN}")"
+            [ "$(jq -r '.data.finished_at // ""' <<<"${run}")" != "" ] && break
+            sleep 3
+          done
+          echo "${run}" | jq -c '.data'
+          jq -e '.data.finished_at != null and (.data.apps | length == 1) and (.data.apps[0].state | IN("updated", "current"))' <<<"${run}" >/dev/null
+          test "$(docker inspect -f '{{.State.Running}}' smoke)" = true
+          echo "every app at once: smoke is $(jq -r '.data.apps[0].state' <<<"${run}") and running"
+
       # Two catalogue entries quote numbers the specification types as integers
       # (PsiTransfer's port target, ayon's healthcheck retries) and were refused
       # by the parser, so they were not in the store at all. And the store has to

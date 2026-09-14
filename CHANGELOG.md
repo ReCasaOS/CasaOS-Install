@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.86] - 2026-09-14
+
+Components: CasaOS-AppManagement `v0.4.52`, CasaOS-UI `v0.4.63`. Unchanged from v0.4.85: CasaOS `v0.4.53`, Gateway `v0.4.28`, UserService `v0.4.27`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Added
+
+- **Every app at once.** The grid updated one app at a time: a click, a card, a toast; a box with fifteen apps that all moved was fifteen clicks. `Update every app…` in the apps menu opens what an update would do, app by app and image by image (the catalogue's image where the catalogue moved one, a newer build of the same tag where the registry did), checked against the registries first; the apps to take are ticked and the button names their number. That list is the second confirmation. Once confirmed the box runs them one after another on its own (`POST /compose/updates`), so closing the page changes nothing, and the dialog shows what became of each: updated, already current with the reason, or failed with the error. One run at a time; reopened during a run, the dialog finds it where it is. The install check plans, refuses an empty list, runs the smoke app through it and finds it running after.
+
 ## [0.4.85] - 2026-09-13
 
 Components: UserService `v0.4.27`. Unchanged from v0.4.84: CasaOS `v0.4.53`, CasaOS-AppManagement `v0.4.51`, CasaOS-Gateway `v0.4.28`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, CasaOS-UI `v0.4.62`, rclone `v1.75.1`.
