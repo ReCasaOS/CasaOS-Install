@@ -564,6 +564,80 @@ jobs:
       # virtual disks from scsi_debug, a RAID10 on them, a filesystem mounted
       # from it, and the storage list asked about it. One leg is enough: the
       # code under test does not depend on the architecture or on Docker.
+      # A stack somebody started with `docker compose up` by hand, shaped like the one
+      # an owner reported: a service built from its Dockerfile, a relative env_file, an
+      # override beside the main file, a key newer than the compose library CasaOS had
+      # (post_start), and no `name:`. Until v0.4.90 the compose list dropped such a stack
+      # with one log line, its containers showed as managed elsewhere, and neither its
+      # settings nor its .env could be saved. Here: the list claims it, its .env reads
+      # and saves, the save recreates it from both files with the image built here and
+      # runs its hook, and a stack CasaOS cannot read is named on its card with the reason.
+      - name: A stack started by hand, built from a Dockerfile
+        run: |
+          set -euo pipefail
+          docker compose version
+          sudo mkdir -p /opt/handmade
+          sudo tee /opt/handmade/Dockerfile >/dev/null <<'EOF'
+          FROM busybox
+          CMD ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]
+          EOF
+          sudo tee /opt/handmade/docker-compose.yml >/dev/null <<'EOF'
+          services:
+            web:
+              build: .
+              env_file: .env
+              post_start:
+                - command: touch /tmp/post-start-ran
+          EOF
+          sudo tee /opt/handmade/docker-compose.override.yml >/dev/null <<'EOF'
+          services:
+            web:
+              labels:
+                check.override: "read"
+          EOF
+          echo 'GREETING=hello' | sudo tee /opt/handmade/.env >/dev/null
+          (cd /opt/handmade && sudo docker compose -p handmade up -d --build)
+          docker exec handmade-web-1 printenv GREETING | grep -x hello
+
+          for _ in $(seq 1 20); do
+            curl -fsS "${CASA_URL}/v2/app_management/compose" -H "Authorization: ${CASA_TOKEN}" > apps.json
+            jq -e '.data.handmade' apps.json >/dev/null && break
+            sleep 3
+          done
+          jq -e '.data.handmade' apps.json >/dev/null
+
+          curl -fsS "${CASA_URL}/v2/app_management/compose/handmade/env" -H "Authorization: ${CASA_TOKEN}" | tee env.txt
+          grep -x 'GREETING=hello' env.txt >/dev/null
+          curl -fsS "${CASA_URL}/v2/app_management/compose/handmade" -H "Authorization: ${CASA_TOKEN}" \
+            -H 'accept: application/yaml' | tee handmade.yml
+          grep 'build:' handmade.yml >/dev/null
+
+          curl -fsS -X PUT "${CASA_URL}/v2/app_management/compose/handmade/env" -H "Authorization: ${CASA_TOKEN}" \
+            -H 'content-type: text/plain' --data-binary 'GREETING=bonjour' | jq .
+          for _ in $(seq 1 40); do
+            [ "$(docker exec handmade-web-1 printenv GREETING 2>/dev/null || true)" = bonjour ] && break
+            sleep 3
+          done
+          docker exec handmade-web-1 printenv GREETING | grep -x bonjour
+          test "$(docker inspect handmade-web-1 --format '{{ index .Config.Labels "check.override" }}')" = read
+          docker exec handmade-web-1 test -f /tmp/post-start-ran
+
+          # the labels compose puts on a stack's containers, pointing at a file this host
+          # cannot read, the way a Portainer or Dockge stack does
+          docker run -d --name elsewhere-web-1 \
+            --label com.docker.compose.project=elsewhere \
+            --label com.docker.compose.service=web \
+            --label com.docker.compose.oneoff=False \
+            --label com.docker.compose.container-number=1 \
+            --label com.docker.compose.config-hash=0 \
+            --label com.docker.compose.project.working_dir=/data/compose/1 \
+            --label com.docker.compose.project.config_files=/data/compose/1/docker-compose.yml \
+            busybox sleep 600 >/dev/null
+          trap 'docker rm -f elsewhere-web-1 >/dev/null 2>&1 || true' EXIT
+          curl -fsS "${CASA_URL}/v2/app_management/web/appgrid" -H "Authorization: ${CASA_TOKEN}" > grid.json
+          jq '.data[] | select(.compose_project == "elsewhere")' grid.json
+          jq -e '.data[] | select(.compose_project == "elsewhere") | .compose_load_error | test("/data/compose/1/docker-compose.yml")' grid.json
+
       - name: A RAID array is one storage
         if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
         run: |
