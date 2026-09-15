@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.89] - 2026-09-15
+
+Components: CasaOS `v0.4.54`, CasaOS-AppManagement `v0.4.54`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`. Unchanged from v0.4.88: CasaOS-UI `v0.4.64`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The Go components are built without UPX, which v0.4.84 claimed and did not do.** The v0.4.84 notes said every Go component had been rebuilt without UPX. That was wrong: the change never reached the build configuration, and every amd64 and armv7 binary from v0.4.84 to v0.4.88 was still packed with UPX 3.96. The published app-management binary has no section headers, which is what a packed binary looks like. On the Docker-current leg of the v0.4.88 install check, app-management failed its first start with status 127 and nothing logged, the same failure as on v0.4.83; the installer's second try started it, so no installation was left broken, but the first-start step of the check went red. 127 is the status the UPX stub exits with when it cannot unpack itself, app-management is the largest binary, and its arm64 build, never packed, never failed. The binaries are no longer packed.
+
 ## [0.4.88] - 2026-09-15
 
 Components: CasaOS-UI `v0.4.64`, LocalStorage `v0.4.39`. Unchanged from v0.4.87: CasaOS `v0.4.53`, CasaOS-AppManagement `v0.4.53`, Gateway `v0.4.28`, UserService `v0.4.27`, MessageBus `v0.4.25`, Common `v0.4.25`, rclone `v1.75.1`.
