@@ -21,6 +21,10 @@ Running the same command on an existing install upgrades it. Installs made from 
 
 Every package the installer downloads is verified against a SHA-256 digest before extraction, and every one of them is downloaded from a ReCasaOS release. The digests are written into `install.sh` at release time from the checksums each component publishes, or — for the dashboard and the App Store seed, whose releases publish no checksums — computed from the package as published; none is typed by hand. The uninstall script the installer downloads is verified the same way, against the digest of the copy shipped in the release.
 
+## What is in v0.4.91
+
+**Hooks run.** A container CasaOS creates now runs its `post_start` and `pre_start` hooks, which v0.4.90 loaded but never ran; its install check caught it.
+
 ## What is in v0.4.90
 
 **A stack started by hand is an app.** A stack run with `docker compose up`, built from its Dockerfile, with an override file or a relative `env_file`, is listed as an app whose settings and `.env` can be saved, and a container whose stack CasaOS cannot read says why. AppManagement reads compose files with Docker Compose v5.5.1, so a file written for current Docker loads.
@@ -495,7 +499,7 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 |---|---|
 | [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.54 |
 | [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.65 |
-| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.55 |
+| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.56 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.29 |
 | [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.28 |
 | [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.26 |

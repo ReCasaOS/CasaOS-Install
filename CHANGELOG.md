@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.91] - 2026-09-15
+
+Components: CasaOS-AppManagement `v0.4.56`. Unchanged from v0.4.90: CasaOS `v0.4.54`, CasaOS-UI `v0.4.65`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A container CasaOS creates runs its `post_start` and `pre_start` hooks.** v0.4.90 made these keys load, but AppManagement started what it had created without handing compose the project, and compose then rebuilds the project from the containers' labels, which carry no hook. The install check of v0.4.90 caught it and went red on all three legs at that one assertion: the stack started by hand was listed, its `.env` was read and saved, and the save recreated it with the new value and the override's label, but the hook had not run. The start after an install, a save, an update or a restore now gets the app's project. Starting a stopped app from the dashboard still does not run hooks.
+
+### Changed
+
+- **The install check's last two assertions on that stack say which one failed**: the override's label is printed, and a hook that did not run is named. v0.4.90's red run could not tell the two apart.
+
 ## [0.4.90] - 2026-09-15
 
 Components: CasaOS-AppManagement `v0.4.55`, CasaOS-UI `v0.4.65`. Unchanged from v0.4.89: CasaOS `v0.4.54`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.

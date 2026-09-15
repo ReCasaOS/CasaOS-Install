@@ -619,8 +619,16 @@ jobs:
             sleep 3
           done
           docker exec handmade-web-1 printenv GREETING | grep -x bonjour
-          test "$(docker inspect handmade-web-1 --format '{{ index .Config.Labels "check.override" }}')" = read
-          docker exec handmade-web-1 test -f /tmp/post-start-ran
+          # both said nothing when they failed, and v0.4.90's run could not tell which one had
+          label="$(docker inspect handmade-web-1 --format '{{ index .Config.Labels "check.override" }}')"
+          echo "the override's label on the recreated container: '${label}'"
+          test "${label}" = read
+          if docker exec handmade-web-1 test -f /tmp/post-start-ran; then
+            echo "post_start ran on the recreated container"
+          else
+            echo "post_start did not run on the recreated container"
+            exit 1
+          fi
 
           # the labels compose puts on a stack's containers, pointing at a file this host
           # cannot read, the way a Portainer or Dockge stack does
