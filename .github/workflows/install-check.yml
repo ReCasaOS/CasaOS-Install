@@ -33,20 +33,28 @@ permissions:
 
 jobs:
   install-check:
-    name: Install the published bundle and use it (${{ matrix.arch }})
+    name: Install the published bundle and use it (${{ matrix.arch }}, Docker ${{ matrix.docker }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     # The Raspberry Pi is the machine CasaOS is most often installed on, and
     # no release had been installed on an arm64 machine before v0.4.83. The
-    # legs are independent: a red arm64 does not stop the amd64 evidence.
+    # runners come with Docker 28 already there, so the installer never had to
+    # install Docker on either leg; the third leg removes it first, so the box
+    # gets what a new machine gets from get.docker.com that day. The legs are
+    # independent: one red leg does not stop the evidence of the others.
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: amd64
             runner: ubuntu-22.04
+            docker: preinstalled
           - arch: arm64
             runner: ubuntu-22.04-arm
+            docker: preinstalled
+          - arch: amd64
+            runner: ubuntu-22.04
+            docker: current
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
@@ -60,11 +68,40 @@ jobs:
           sha256sum --check install.sh.sha256
           grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|CASAOS_UI_TAG)=' components.lock >> "$GITHUB_ENV"
 
+      # Docker 29 raised the oldest API version it answers to 1.44 and made the
+      # containerd image store the default on a new installation, and until
+      # v0.4.88 nothing had run CasaOS on it.
+      - name: No Docker on this box before the installer
+        if: matrix.docker == 'current'
+        run: |
+          set -euo pipefail
+          sudo systemctl stop docker.socket docker.service containerd.service 2>/dev/null || true
+          pkgs="$(dpkg -l | awk '$1 == "ii" && $2 ~ /^(docker|moby|containerd|runc)/ {printf "%s ", $2}')"
+          echo "removing: ${pkgs}"
+          if [ -n "${pkgs}" ]; then
+            sudo apt-get purge -y -q ${pkgs}
+          fi
+          sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker
+          hash -r
+          if command -v docker; then
+            echo "docker is still on this box"
+            exit 1
+          fi
+
       - name: Run the installer as the README says
         run: |
           set -euo pipefail
           sudo -E bash install.sh 2>&1 | tee install.log
           test "${PIPESTATUS[0]}" -eq 0
+
+      - name: The Docker this box runs
+        run: |
+          set -euo pipefail
+          version="$(sudo docker version --format '{{.Server.Version}}')"
+          echo "docker ${version}, storage driver $(sudo docker info --format '{{.Driver}}')"
+          if [ "${{ matrix.docker }}" = current ]; then
+            test "${version%%.*}" -ge 29
+          fi
 
       - name: Every service is up, and it is this release
         run: |
@@ -558,7 +595,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: install-check-${{ inputs.tag }}-${{ matrix.arch }}
+          name: install-check-${{ inputs.tag }}-${{ matrix.arch }}-${{ matrix.docker }}
           path: |
             install.log
             backup-files.txt
