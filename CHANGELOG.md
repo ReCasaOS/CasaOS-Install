@@ -2,6 +2,27 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.88] - 2026-09-15
+
+Components: CasaOS-UI `v0.4.64`, LocalStorage `v0.4.39`. Unchanged from v0.4.87: CasaOS `v0.4.53`, CasaOS-AppManagement `v0.4.53`, Gateway `v0.4.28`, UserService `v0.4.27`, MessageBus `v0.4.25`, Common `v0.4.25`, rclone `v1.75.1`.
+
+Three of the small pull requests that sat unreviewed on IceWhale's repositories, taken in and finished.
+
+### Added
+
+- **The widgets can be put in any order.** Each one in Widgets Settings has a handle: drag it, or focus it and use the arrow keys. The sidebar used to rebuild the saved list in the order the dashboard ships its widgets and write that back over it, so no order could have survived a reload; the saved order wins now, and a widget a newer version adds goes at the end. After IceWhaleTech/CasaOS-UI#270, which as submitted lost the order on the next load.
+
+### Fixed
+
+- **A RAID array is one storage.** lsblk lists an MD array again under every disk it is built on, and the storage list walked every disk: a RAID10 of four disks was four storages holding the same filesystem, in Storage Manager, in the file manager's sidebar and wherever a storage is picked. An array is now a storage of its own, named after its level or System when it holds /, and each mounted filesystem is listed once. After IceWhaleTech/CasaOS-LocalStorage#72, ported onto this distribution's storage accounting.
+- **A disk is offered for formatting only when nothing on it is in use.** Only a disk's direct children were checked for a mount point, so a disk whose partitions were RAID members, or held a volume group with a mounted logical volume, was listed as available to format. A mount or swap anywhere below it, or a RAID, LVM or ZFS member anywhere in it, keeps it out of the list.
+- **A `.env` file opens as shell in the file editor**, not as JavaScript. From IceWhaleTech/CasaOS-UI#269, whose other half, showing hidden files, was already here.
+
+### Changed
+
+- **The install check runs on the Docker a new machine gets.** The runners come with Docker 28, so the installer never had to install Docker on any leg, while a machine without Docker gets whatever get.docker.com serves that day: Docker 29, which answers no API older than 1.44 and uses the containerd image store on a new installation. A third leg removes the runner's Docker first, and the whole check runs on the one the installer puts there. Its first run, on v0.4.87, installed Docker 29.8.0 and passed every step.
+- **The install check builds a RAID10 on four virtual disks** and checks that the storage list shows the array once.
+
 ## [0.4.87] - 2026-09-15
 
 Components: CasaOS-AppManagement `v0.4.53`. Unchanged from v0.4.86: CasaOS `v0.4.53`, CasaOS-UI `v0.4.63`, Gateway `v0.4.28`, UserService `v0.4.27`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, rclone `v1.75.1`.
