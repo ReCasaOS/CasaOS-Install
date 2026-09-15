@@ -558,6 +558,41 @@ jobs:
             sleep 3
           done
 
+      # lsblk lists a RAID array again under every disk it is built on, and the
+      # storage list walked every disk: a RAID10 of four disks was four storages
+      # holding the same filesystem. Since v0.4.88 an array is one storage. Four
+      # virtual disks from scsi_debug, a RAID10 on them, a filesystem mounted
+      # from it, and the storage list asked about it. One leg is enough: the
+      # code under test does not depend on the architecture or on Docker.
+      - name: A RAID array is one storage
+        if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q mdadm >/dev/null
+          if ! sudo modprobe scsi_debug dev_size_mb=128 num_tgts=4 2>/dev/null; then
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" >/dev/null
+            sudo modprobe scsi_debug dev_size_mb=128 num_tgts=4
+          fi
+          members=()
+          for _ in $(seq 1 20); do
+            mapfile -t members < <(lsblk -dn -o PATH,MODEL | awk '$2 == "scsi_debug" {print $1}')
+            [ "${#members[@]}" -eq 4 ] && break
+            sleep 1
+          done
+          echo "members: ${members[*]}"
+          test "${#members[@]}" -eq 4
+          sudo mdadm --create /dev/md/raidcheck --run --metadata=1.2 --level=10 --raid-devices=4 "${members[@]}"
+          array="$(readlink -f /dev/md/raidcheck)"
+          sudo mkfs.ext4 -q -L raidcheck "${array}"
+          sudo mkdir -p /mnt/raidcheck
+          sudo mount "${array}" /mnt/raidcheck
+          lsblk -o NAME,TYPE,FSTYPE,MOUNTPOINT "${members[@]}"
+          list="$(curl -fsS "${CASA_URL}/v1/storage" -H "Authorization: ${CASA_TOKEN}")"
+          echo "${list}" | jq -c '.data | map({disk_name, disk_model, path, type, mounts: (.children | map(.mount_point))})'
+          test "$(jq '[.data[] | .children[] | select(.mount_point == "/mnt/raidcheck")] | length' <<<"${list}")" -eq 1
+          test "$(jq -r '.data[] | select(any(.children[]; .mount_point == "/mnt/raidcheck")) | .path' <<<"${list}")" = "${array}"
+          echo "the array is one storage: ${array}"
+
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red
       # run says which step and nothing else, and the machine is gone.
