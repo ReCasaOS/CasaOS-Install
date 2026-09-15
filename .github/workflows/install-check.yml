@@ -114,7 +114,7 @@ jobs:
           marker="$(cat /var/lib/casaos/fork-release)"
           echo "fork-release marker: ${marker}"
           test "${marker}" = "${CASAOS_RELEASE_TAG}"
-          version="$(rclone --version | head -n 1)"
+          version="$(rclone --version | sed -n 1p)"
           echo "rclone: ${version}"
           test "${version}" = "rclone ${RCLONE_TAG}"
           test -S /var/run/rclone/rclone.sock
@@ -127,7 +127,7 @@ jobs:
           if grep -n 'Job for' install.log; then echo 'a service failed its first start'; failed=1; else echo 'no first-start failure in the install log'; failed=0; fi
           for unit in casaos-message-bus casaos-local-storage casaos-gateway; do
             echo "::group::${unit}"
-            sudo journalctl -u "${unit}.service" --no-pager -o short-iso | head -n 60
+            sudo journalctl -u "${unit}.service" --no-pager -o short-iso | sed -n 1,60p
             echo "::endgroup::"
           done
           test "${failed}" -eq 0
@@ -135,7 +135,7 @@ jobs:
       - name: The dashboard answers
         run: |
           set -euo pipefail
-          port="$(sed -nE 's/^[[:space:]]*HttpPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' /etc/casaos/gateway.ini | head -n 1)"
+          port="$(sed -nE 's/^[[:space:]]*HttpPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' /etc/casaos/gateway.ini | sed -n 1p)"
           port="${port:-80}"
           echo "gateway port: ${port}"
           echo "CASA_URL=http://127.0.0.1:${port}" >> "$GITHUB_ENV"
@@ -159,7 +159,7 @@ jobs:
             sleep 3
           done
           curl -k -fsS -o /dev/null https://127.0.0.1:443/
-          curl -k -fsS https://127.0.0.1:443/ping | grep -q pong
+          curl -k -fsS https://127.0.0.1:443/ping | grep pong >/dev/null
           subject="$(openssl s_client -connect 127.0.0.1:443 </dev/null 2>/dev/null | openssl x509 -noout -subject)"
           echo "${subject}"
           grep -q -E 'CN *= *CasaOS' <<<"${subject}"
@@ -242,7 +242,7 @@ jobs:
             -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/yaml' \
             --data-binary @smoke.yml | jq .
           for _ in $(seq 1 60); do
-            docker ps --format '{{.Names}} {{.Status}}' | grep -q '^smoke Up' && break
+            docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up' >/dev/null && break
             sleep 3
           done
           docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
@@ -311,10 +311,10 @@ jobs:
           curl -fsS -X DELETE "${CASA_URL}/v2/app_management/compose/smoke?delete_config_folder=true" \
             -H "Authorization: ${CASA_TOKEN}" | jq .
           for _ in $(seq 1 30); do
-            docker ps -a --format '{{.Names}}' | grep -q '^smoke$' || break
+            docker ps -a --format '{{.Names}}' | grep '^smoke$' >/dev/null || break
             sleep 2
           done
-          docker ps -a --format '{{.Names}}' | grep -q '^smoke$' && { echo "smoke is still there"; exit 1; }
+          docker ps -a --format '{{.Names}}' | grep '^smoke$' >/dev/null && { echo "smoke is still there"; exit 1; }
           sudo rm -rf /DATA/AppData/smoke
           test ! -e /DATA/AppData/smoke/html/index.html
           held="$(curl -fsS "${CASA_URL}/v2/app_management/backup/destinations/smoke/runs" -H "Authorization: ${CASA_TOKEN}")"
@@ -444,7 +444,7 @@ jobs:
           test "$(cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
           for unit in casaos casaos-user-service casaos-local-storage rclone; do test "$(systemctl is-active ${unit}.service)" = active; done
           # the dashboard is back, and so is the login
-          port="$(sed -nE 's/^[[:space:]]*HttpPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' /etc/casaos/gateway.ini | head -n 1)"
+          port="$(sed -nE 's/^[[:space:]]*HttpPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' /etc/casaos/gateway.ini | sed -n 1p)"
           curl -fsS -o /dev/null "http://127.0.0.1:${port:-80}/"
           curl -fsS -X POST "${CASA_URL}/v1/users/login" -H 'content-type: application/json' \
             -d '{"username":"smoke","password":"Smoke-test-1"}' | jq -e '.data.token.access_token != null' >/dev/null
