@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.87] - 2026-09-15
+
+Components: CasaOS-AppManagement `v0.4.53`. Unchanged from v0.4.86: CasaOS `v0.4.53`, CasaOS-UI `v0.4.63`, Gateway `v0.4.28`, UserService `v0.4.27`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The copy of the catalogue stands in for the URL boxes actually use.** v0.4.84 introduced a copy of the App Store catalogue to fall back on, and mapped it to `github.com/IceWhaleTech/_appstore`, a repository frozen since May that no configuration written since February 2025 names: the store every box fetches is the artifact `IceWhaleTech/CasaOS-AppStore` builds on its `gh-pages` branch, `store/main.zip`, through jsdelivr, 178 apps and alive. The copy (`github.com/ReCasaOS/_appstore`) now holds that artifact byte for byte, taken every night, and AppManagement falls back to it for both URLs, the current one and the one a box installed before 2025 and upgraded since may still carry. The install check fetches the copy and counts its apps.
+
 ## [0.4.86] - 2026-09-14
 
 Components: CasaOS-AppManagement `v0.4.52`, CasaOS-UI `v0.4.63`. Unchanged from v0.4.85: CasaOS `v0.4.53`, Gateway `v0.4.28`, UserService `v0.4.27`, MessageBus `v0.4.25`, LocalStorage `v0.4.38`, Common `v0.4.25`, rclone `v1.75.1`.

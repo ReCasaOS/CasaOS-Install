@@ -464,6 +464,18 @@ jobs:
           test "$(docker inspect -f '{{.State.Running}}' smoke)" = true
           echo "every app at once: smoke is $(jq -r '.data.apps[0].state' <<<"${run}") and running"
 
+      # The copy of the catalogue this distribution keeps (github.com/ReCasaOS/
+      # _appstore, IceWhale's store/main.zip taken every night) is what
+      # AppManagement fetches when IceWhale's URL stops answering. It has to be a
+      # store: a zip with the apps in it.
+      - name: The catalogue's copy is a store
+        run: |
+          set -euo pipefail
+          curl -fsSL -o mirror.zip https://raw.githubusercontent.com/ReCasaOS/_appstore/main/store/main.zip
+          apps="$(unzip -l mirror.zip | awk '{print $4}' | grep -c 'Apps/[^/]*/docker-compose.yml$')"
+          echo "apps in the copy: ${apps}"
+          test "${apps}" -gt 100
+
       # Two catalogue entries quote numbers the specification types as integers
       # (PsiTransfer's port target, ayon's healthcheck retries) and were refused
       # by the parser, so they were not in the store at all. And the store has to
