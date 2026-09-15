@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.90] - 2026-09-15
+
+Components: CasaOS-AppManagement `v0.4.55`, CasaOS-UI `v0.4.65`. Unchanged from v0.4.89: CasaOS `v0.4.54`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A stack started with `docker compose up` beside its Dockerfile is an app, and its settings and its `.env` can be saved.** An owner reported such a stack as not editable: its containers sat under Managed elsewhere, and neither its settings nor its `.env` could be saved. Six things stood in the way. AppManagement named no compose file when it loaded a stack and let compose look for a default name in the folder, so a stack started with `-f` and another file name, with an override file beside the main one, or with several `-f` was dropped from the app list with one line in a log. A save parsed the file in a temporary folder, where a relative `env_file` does not exist. The `.env` save refused a file that declares no `name:`, which a hand-written file rarely does. The settings form required an image for a service that is built rather than pulled. A pull fetched an image for every service, which for a built one fetches nothing or replaces the build with a registry image of the same name. And a save recreated the app from its first compose file only. A stack now loads from every file compose recorded for it, is parsed in its own folder, and keeps the image built on the box.
+- **Compose files written for current Docker load.** AppManagement read compose files with compose-go v2.1.0, from 2024, which refuses keys that current Docker Compose accepts, such as `gpus`, `post_start`, `models` and `label_file`. It now uses Docker Compose v5.5.1.
+- **A container whose stack CasaOS cannot read says why.** Its card under Managed elsewhere says that CasaOS cannot read its compose file, and its detail panel shows the loader's words, which name the file and the field: a Portainer or Dockge stack whose file lives inside that tool's container, a key this version does not know, a typo.
+
+### Changed
+
+- **A backup of a stack started from several compose files** still copies the first file only, and now lists the others as left out, with the reason.
+- **The install check starts a stack by hand**: a service built from its Dockerfile, a relative `env_file`, an override file, a `post_start` hook and no `name:`. It checks that the app list claims it, that its `.env` reads and saves, that the save recreates it from both files with the image built on the box and runs the hook, and that a stack whose compose file the host cannot read carries the reason on the app grid.
+
 ## [0.4.89] - 2026-09-15
 
 Components: CasaOS `v0.4.54`, CasaOS-AppManagement `v0.4.54`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`. Unchanged from v0.4.88: CasaOS-UI `v0.4.64`, Common `v0.4.25`, rclone `v1.75.1`.
