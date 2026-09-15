@@ -569,9 +569,16 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get install -y -q mdadm >/dev/null
-          if ! sudo modprobe scsi_debug dev_size_mb=128 num_tgts=4 2>/dev/null; then
+          # One virtual host per disk, each with its own store: by default every
+          # scsi_debug disk reads and writes the same memory, so the superblock
+          # mdadm wrote on the first disk was on all of them, and the second was
+          # refused as busy (the first run of this step, on v0.4.87). multipathd,
+          # when there is one, would take identical disks for paths to one LUN.
+          sudo systemctl stop multipathd.socket multipathd.service 2>/dev/null || true
+          debug="dev_size_mb=128 add_host=4 num_tgts=1 per_host_store=1"
+          if ! sudo modprobe scsi_debug ${debug} 2>/dev/null; then
             sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" >/dev/null
-            sudo modprobe scsi_debug dev_size_mb=128 num_tgts=4
+            sudo modprobe scsi_debug ${debug}
           fi
           members=()
           for _ in $(seq 1 20); do
@@ -581,7 +588,15 @@ jobs:
           done
           echo "members: ${members[*]}"
           test "${#members[@]}" -eq 4
-          sudo mdadm --create /dev/md/raidcheck --run --metadata=1.2 --level=10 --raid-devices=4 "${members[@]}"
+          sudo udevadm settle
+          if ! sudo mdadm --create /dev/md/raidcheck --run --metadata=1.2 --level=10 --raid-devices=4 "${members[@]}"; then
+            for member in "${members[@]}"; do
+              echo "${member} is held by: $(ls "/sys/block/$(basename "${member}")/holders")"
+            done
+            cat /proc/mdstat || true
+            sudo dmsetup ls || true
+            exit 1
+          fi
           array="$(readlink -f /dev/md/raidcheck)"
           sudo mkfs.ext4 -q -L raidcheck "${array}"
           sudo mkdir -p /mnt/raidcheck
