@@ -646,6 +646,106 @@ jobs:
           jq '.data[] | select(.compose_project == "elsewhere")' grid.json
           jq -e '.data[] | select(.compose_project == "elsewhere") | .compose_load_error | test("/data/compose/1/docker-compose.yml")' grid.json
 
+      # An app deployed from its git repository, the way an owner would run their own
+      # project: a bare repository on this machine stands in for GitHub. The app is
+      # created and deployed through the API, then a second commit is rebuilt
+      # automatically while its port is polled: every request made while the new
+      # version builds must be answered by the old one. A third commit whose container
+      # exits must be rolled back, with the second version still answering.
+      - name: An app deployed from its git repository
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          state() { api "${CASA_URL}/v2/app_management/git/gitcheck" | jq -r '.data.state'; }
+          trap 'api "${CASA_URL}/v2/app_management/git/gitcheck" | jq ".data | {state, operation, deployed, check, history, build_log}" || true' EXIT
+          git --version
+
+          sudo git init -q --bare --initial-branch=main /opt/gitcheck.git
+          sudo git clone -q /opt/gitcheck.git /opt/gitcheck-work
+          cd /opt/gitcheck-work
+          # an empty clone's first branch depends on git's version and configuration
+          sudo git symbolic-ref HEAD refs/heads/main
+          sudo tee Dockerfile >/dev/null <<'EOF'
+          FROM busybox
+          COPY index.html /www/index.html
+          CMD ["httpd", "-f", "-p", "80", "-h", "/www"]
+          EOF
+          sudo tee compose.yaml >/dev/null <<'EOF'
+          services:
+            web:
+              build: .
+              ports:
+                - "18080:80"
+              env_file: .env
+          EOF
+          echo 'GREETING=hello' | sudo tee .env.example >/dev/null
+          echo '.env' | sudo tee .gitignore >/dev/null
+          echo v1 | sudo tee index.html >/dev/null
+          commit() { sudo git add -A && sudo git -c user.name=check -c user.email=check@example.invalid commit -q -m "$1" && sudo git push -q origin main; }
+          commit v1
+
+          api -X POST "${CASA_URL}/v2/app_management/git" -H 'content-type: application/json' \
+            -d '{"name":"gitcheck","url":"file:///opt/gitcheck.git","access":"none"}' | jq .
+          idle_operation() {
+            for _ in $(seq 1 300); do
+              [ "$(api "${CASA_URL}/v2/app_management/git/gitcheck" | jq -r '.data.operation')" = null ] && return 0
+              sleep 2
+            done
+            return 1
+          }
+          api -X POST "${CASA_URL}/v2/app_management/git/gitcheck/check" >/dev/null
+          idle_operation
+          api "${CASA_URL}/v2/app_management/git/gitcheck" | jq '.data | {cloned, check, compose, env_template}'
+          test "$(api "${CASA_URL}/v2/app_management/git/gitcheck" | jq -r '.data.cloned')" = true
+          api -X POST "${CASA_URL}/v2/app_management/git/gitcheck/deploy" -H 'content-type: application/json' \
+            -d '{"env":"GREETING=hello\n"}' | jq .data.state
+          for _ in $(seq 1 120); do
+            [ "$(state)" = idle ] && [ "$(curl -fsS --max-time 2 http://127.0.0.1:18080/ || true)" = v1 ] && break
+            sleep 2
+          done
+          test "$(curl -fsS http://127.0.0.1:18080/)" = v1
+
+          api -X PUT "${CASA_URL}/v2/app_management/git/gitcheck" -H 'content-type: application/json' \
+            -d '{"auto_deploy":true}' | jq .data.auto_deploy
+
+          # the second version builds for at least 15 seconds, so the poll sees the build
+          sudo sed -i 's#^COPY index.html#RUN sleep 15\nCOPY index.html#' Dockerfile
+          echo v2 | sudo tee index.html >/dev/null
+          commit v2
+          api -X POST "${CASA_URL}/v2/app_management/git/gitcheck/check" >/dev/null
+          seen_building=false
+          not_v1_while_building=0
+          for _ in $(seq 1 900); do
+            st="$(state)"
+            body="$(curl -fsS --max-time 2 http://127.0.0.1:18080/ || true)"
+            if [ "${st}" = building ]; then
+              seen_building=true
+              [ "${body}" = v1 ] || not_v1_while_building=$((not_v1_while_building + 1))
+            fi
+            [ "${st}" = idle ] && [ "${body}" = v2 ] && break
+            sleep 0.2
+          done
+          echo "the build was seen: ${seen_building}; requests not answered by v1 during it: ${not_v1_while_building}"
+          test "${seen_building}" = true
+          test "${not_v1_while_building}" = 0
+          test "$(curl -fsS http://127.0.0.1:18080/)" = v2
+
+          sudo sed -i 's#^CMD .*#CMD ["sh", "-c", "exit 1"]#' Dockerfile
+          commit broken
+          api -X POST "${CASA_URL}/v2/app_management/git/gitcheck/check" >/dev/null
+          for _ in $(seq 1 150); do
+            st="$(state)"
+            case "${st}" in rolled_back|failed) break ;; esac
+            sleep 2
+          done
+          echo "state after the broken commit: ${st}"
+          test "${st}" = rolled_back
+          test "$(curl -fsS http://127.0.0.1:18080/)" = v2
+          test "$(api "${CASA_URL}/v2/app_management/git/gitcheck" | jq -r '.data.history[0].outcome')" = rolled_back
+          api "${CASA_URL}/v2/app_management/web/appgrid" > grid.json
+          jq '.data[] | select(.name == "gitcheck") | .git' grid.json
+          jq -e '.data[] | select(.name == "gitcheck") | .git.state == "rolled_back" and .git.new_commits == true' grid.json >/dev/null
+
       - name: A RAID array is one storage
         if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
         run: |
