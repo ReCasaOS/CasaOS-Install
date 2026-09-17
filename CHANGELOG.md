@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.92] - 2026-09-17
+
+Components: CasaOS-AppManagement `v0.4.57`, CasaOS-UI `v0.4.66`. Unchanged from v0.4.91: CasaOS `v0.4.54`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Added
+
+- **An app deployed from its git repository.** "From a git repository…" in the apps menu clones a repository, shows what its compose file will run, lets the `.env` be filled in, then builds and starts it. A stack started by hand whose folder is a git repository can be adopted from its new Repository tab. CasaOS checks the branch every 5 minutes and shows new commits on the card; a switch per app rebuilds them automatically. The running version keeps serving while the new one builds, a failed build changes nothing, and a new version that does not start correctly is rolled back to the previous one. Private repositories are reached with a deploy key CasaOS generates, or with a token. The last three versions can be reverted to in one click.
+- **A backup of such an app records where its code comes from.** A restore on a box that does not have the app clones it again at the backed-up commit and builds it; a private repository first asks for its access.
+
+### Changed
+
+- **`git` is installed with CasaOS.**
+- **One operation at a time per app.** A build, an update, a settings or `.env` save, and a backup of the same app no longer overlap: the second one is refused and says which operation is running.
+- **The install check deploys an app from a bare repository**, rebuilds it while polling its port, and rolls a broken commit back.
+
 ## [0.4.91] - 2026-09-15
 
 Components: CasaOS-AppManagement `v0.4.56`. Unchanged from v0.4.90: CasaOS `v0.4.54`, CasaOS-UI `v0.4.65`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
