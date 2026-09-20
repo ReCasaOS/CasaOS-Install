@@ -22,14 +22,14 @@ echo -e "\e[0m\c"
 
 # shellcheck disable=SC2016
 echo '
-   _____                 ____   _____
-  / ____|               / __ \ / ____|
- | |     __ _ ___  __ _| |  | | (___
- | |    / _` / __|/ _` | |  | |\___ \
- | |___| (_| \__ \ (_| | |__| |____) |
-  \_____\__,_|___/\__,_|\____/|_____/
+  _____       _____                 ____   _____
+ |  __ \     / ____|               / __ \ / ____|
+ | |__) |___| |     __ _ ___  __ _| |  | | (___
+ |  _  // _ \ |    / _` / __|/ _` | |  | |\___ \
+ | | \ \  __/ |___| (_| \__ \ (_| | |__| |____) |
+ |_|  \_\___|\_____\__,_|___/\__,_|\____/|_____/
 
-   --- ReCasaOS, built on CasaOS by IceWhale ---
+   --- built on CasaOS by IceWhale ---
 '
 export PATH=/usr/sbin:$PATH
 export DEBIAN_FRONTEND=noninteractive
@@ -973,7 +973,7 @@ Welcome_Banner() {
     CASA_TAG="$(casaos -v), distribution ${CASAOS_INSTALL_RELEASE_TAG}"
 
     echo -e "${GREEN_LINE}${aCOLOUR[1]}"
-    echo -e " CasaOS ${CASA_TAG}${COLOUR_RESET} is running at${COLOUR_RESET}${GREEN_SEPARATOR}"
+    echo -e " ReCasaOS ${CASA_TAG}${COLOUR_RESET} is running at${COLOUR_RESET}${GREEN_SEPARATOR}"
     echo -e "${GREEN_LINE}"
     Get_IPs
     echo -e " Open your browser and visit the above address."
