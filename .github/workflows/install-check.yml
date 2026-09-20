@@ -250,18 +250,30 @@ jobs:
       - name: A backup of it, through rclone, found on disk
         run: |
           set -euo pipefail
-          curl -fsS -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" \
-            -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
-            -d '{"destination":"smoke","hold_still":true}' | jq .
-          for _ in $(seq 1 40); do
-            run="$(curl -fsS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
-              | jq -c '.data // [] | map(select(.app == "smoke")) | first // empty')"
-            [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
-            sleep 3
+          # One operation at a time per app: the install keeps its hold for a moment
+          # after the container is up, and a backup asked for inside that window is
+          # refused in the background with `is busy`. Ask again until it is taken.
+          error=""
+          for attempt in $(seq 1 6); do
+            curl -fsS -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" \
+              -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
+              -d '{"destination":"smoke","hold_still":true}' | jq .
+            run=""
+            for _ in $(seq 1 40); do
+              run="$(curl -fsS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
+                | jq -c '.data // [] | map(select(.app == "smoke" and .restore != true)) | sort_by(.stamp) | last // empty')"
+              [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
+              sleep 3
+            done
+            echo "attempt ${attempt} run: ${run}"
+            test -n "${run}"
+            error="$(jq -r '.error // ""' <<<"${run}")"
+            case "${error}" in
+              *"is busy"*) echo "refused: ${error}"; sleep 5 ;;
+              *) break ;;
+            esac
           done
-          echo "run: ${run}"
-          test -n "${run}"
-          test "$(jq -r '.error // ""' <<<"${run}")" = ""
+          test "${error}" = ""
           test "$(jq -r '.containers_stopped' <<<"${run}")" = true
           sudo find /var/tmp/casaos-backup-smoke -type f | tee backup-files.txt
           grep -q 'index.html$' backup-files.txt
