@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.93] - 2026-09-20
+
+Components: CasaOS `v0.4.55`. Unchanged from v0.4.92: CasaOS-AppManagement `v0.4.57`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The main service no longer crashes at random.** The network counters behind the dashboard's hardware widget were reinterpreted from one struct into a longer one, which read 24 bytes past the end of the shorter one. Those bytes became a string's data pointer, and the garbage collector fell over it with `found bad pointer in Go heap` or `found pointer to free object`; the box then restarted `casaos.service` and carried on, with a different stack every time. It ran every 5 seconds on every box, and on two HTTP routes besides, so a box could crash several times a day. The counters are copied field by field now, and the three `unsafe` conversions are gone. The code has been there since at least v0.3.7 (2022); it is reported upstream as IceWhaleTech/CasaOS#2581.
+
 ## [0.4.92] - 2026-09-17
 
 Components: CasaOS-AppManagement `v0.4.57`, CasaOS-UI `v0.4.66`. Unchanged from v0.4.91: CasaOS `v0.4.54`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
