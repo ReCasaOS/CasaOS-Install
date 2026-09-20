@@ -49,7 +49,7 @@ build_target() {
             -buildvcs=false \
             -trimpath \
             -tags "musl netgo osusergo" \
-            -ldflags "-s -w -X main.commit=${ACTUAL_COMMIT} -X main.date=${BUILD_DATE}" \
+            -ldflags "-s -w -X main.commit=${ACTUAL_COMMIT} -X main.date=${BUILD_DATE} -X github.com/ReCasaOS/CasaOS/common.VERSION=${CASAOS_TAG#v}" \
             -o "${output_file}" \
             .
     )

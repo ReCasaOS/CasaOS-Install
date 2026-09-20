@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.95] - 2026-09-20
+
+Components: CasaOS `v0.4.56`. Unchanged from v0.4.94: CasaOS-AppManagement `v0.4.58`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The version a box reports is the version it runs.** `casaos -v`, the system information and the line at the end of an install all read a constant left at `0.4.15` -- the version this fork was taken from in 2022 -- so a box installed today announced itself as four years old. The release build stamps the real tag now, as it already did for the commit and the build date, and a test fails the build if any architecture is left unstamped. The distribution version shown beside it was always right; it comes from somewhere else.
+
 ## [0.4.94] - 2026-09-20
 
 Components: CasaOS-AppManagement `v0.4.58`. Unchanged from v0.4.93: CasaOS `v0.4.55`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
