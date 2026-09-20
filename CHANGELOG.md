@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.94] - 2026-09-20
+
+Components: CasaOS-AppManagement `v0.4.58`. Unchanged from v0.4.93: CasaOS `v0.4.55`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A backup asked for while the app is busy waits its turn instead of failing.** One operation at a time per app refused a backup started during an install, an update or a deployment -- which is exactly when somebody clicks Backup, and what a scheduled backup runs into on a busy box. The refused run was written to the history with `is busy` and nothing was copied. A backup held still now waits for the hold to be let go, up to ten minutes, and only then gives up with the same message. Every other operation still refuses at once, because a refusal somebody can read beats a click that hangs.
+
+### Changed
+
+- The installer's banner spells ReCasaOS, and the line at the end of an install says ReCasaOS too. The credit to IceWhale stays under the art.
+
 ## [0.4.93] - 2026-09-20
 
 Components: CasaOS `v0.4.55`. Unchanged from v0.4.92: CasaOS-AppManagement `v0.4.57`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
