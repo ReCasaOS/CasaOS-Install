@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.96] - 2026-09-21
+
+Components: CasaOS-LocalStorage `v0.4.41`. Unchanged from v0.4.95: CasaOS `v0.4.56`, CasaOS-AppManagement `v0.4.58`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, Common `v0.4.25`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A malformed request to add a storage is refused cleanly.** The call that adds a storage, and can format the disk under it, read its body with unchecked type assertions: a field of the wrong type, or a missing path, made the handler panic and answer 500. It answers 400 now, before any disk is touched.
+
 ## [0.4.95] - 2026-09-20
 
 Components: CasaOS `v0.4.56`. Unchanged from v0.4.94: CasaOS-AppManagement `v0.4.58`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, LocalStorage `v0.4.40`, Common `v0.4.25`, rclone `v1.75.1`.
