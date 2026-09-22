@@ -2,6 +2,29 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.97] - 2026-09-22
+
+Components: CasaOS `v0.4.57`, CasaOS-AppManagement `v0.4.59`, CasaOS-LocalStorage `v0.4.42`, CasaOS-UserService `v0.4.29`, CasaOS-Gateway `v0.4.30`, CasaOS-MessageBus `v0.4.27`, CasaOS-UI `v0.4.68`, Common `v0.4.26`. Unchanged: rclone `v1.75.1`.
+
+### Security
+
+- **The message bus no longer answers anyone who asks.** It let a request through without a token when its `Host` header said `unix`, a header any client sets and the gateway passes on: anyone who could reach the dashboard's port could read and publish every event. It also trusted any process on the box. Local services now need the boot's secret, as they already did everywhere else, and the socket it serves on is root-only. Only the event subscriptions stay open to whoever reaches the dashboard; they carry app activity and dashboard settings, no credential.
+- **Every service is built with the current Go.** The release builds were pinned to Go 1.26.0 and missed two dozen fixes in Go's own libraries (HTTP/2, TLS, certificates, HTML templates). They use the latest 1.26 patch now, and the code requires 1.26.8.
+- **Dependencies with known vulnerabilities are updated or gone**: the JWT library of every service (a crafted token could exhaust memory), go-getter behind the app store download (file reads outside the target, symlink attacks, command execution through git), the image decoders behind thumbnails, kin-openapi's request validation, containerd, and in the dashboard axios, DOMPurify, the socket.io parser and the markdown renderer. The unmaintained archive library behind folder downloads is replaced.
+- **The app store download is locked down**: http(s) only, no symlinks, no header redirects, no `.netrc`, and a URL that downloads nothing is refused instead of replacing the catalogue with an empty one.
+
+### Changed
+
+- **Folder downloads stream** as the archive is written and stop when the browser does. Entries now sit under one top folder named after the folder downloaded, and a file that cannot be read aborts the download instead of being left out silently.
+- **LocalStorage lost its unreachable rclone cloud-drive code** (the core serves cloud drives): the service is less than half its former size.
+- **App descriptions and tips render without v-md-editor**, which is unmaintained: code blocks lose their colouring, the text follows the dark theme, and forms or styles inside a description are stripped. PDFs open with pdf.js `eval` turned off. The markdown editor no file could open is gone.
+
+### Fixed
+
+- A tip without a translation for the current language no longer breaks the tips window.
+- A v2 API request without a `Content-Type` is validated like any other instead of making the core drop the connection.
+- The dashboard's event registration at start authenticates, gives up after 30 seconds rather than hold up the start, and logs a failure to the journal.
+
 ## [0.4.96] - 2026-09-21
 
 Components: CasaOS-LocalStorage `v0.4.41`. Unchanged from v0.4.95: CasaOS `v0.4.56`, CasaOS-AppManagement `v0.4.58`, CasaOS-UI `v0.4.66`, Gateway `v0.4.29`, UserService `v0.4.28`, MessageBus `v0.4.26`, Common `v0.4.25`, rclone `v1.75.1`.
