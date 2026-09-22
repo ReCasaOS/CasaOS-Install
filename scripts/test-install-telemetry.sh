@@ -14,6 +14,7 @@
 # is built.
 
 set -euo pipefail
+unset RECASAOS_TELEMETRY # the checks below set it themselves
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
@@ -140,6 +141,9 @@ out="$(NO_TELEMETRY=1 Write_Telemetry_Markers)"
 [[ -e "${CASA_STATE_DIR}/telemetry-off" ]] || fail "NO_TELEMETRY=1 wrote no telemetry-off"
 expect_mode "${CASA_STATE_DIR}/telemetry-off" 600
 [[ "${out}" == *"Anonymous statistics turned off."* ]] || fail "NO_TELEMETRY=1 did not say so: ${out}"
+# upgraded-from too: turned back on from the dashboard, the box still sends its version_changed.
+[[ -s "${CASA_STATE_DIR}/upgraded-from" ]] || fail "NO_TELEMETRY=1 wrote no upgraded-from"
+expect_mode "${CASA_STATE_DIR}/upgraded-from" 600
 
 reset kept
 mkdir -p "${CASA_STATE_DIR}"

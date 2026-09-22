@@ -262,6 +262,10 @@ Detach_From_CasaOS_Service() {
         "${CASAOS_UPDATE_LOG}" \
         "${CASAOS_INSTALLER_SELF_URL}"
 
+    # The detached run gets no arguments: an opt-out goes through the environment.
+    local telemetry_env=()
+    if ((NO_TELEMETRY)); then telemetry_env=(--setenv=RECASAOS_TELEMETRY=0); fi
+
     Show 2 "Handing the update to ${update_unit}.service..."
     if ! ${sudo_cmd} systemd-run \
         --quiet \
@@ -269,6 +273,7 @@ Detach_From_CasaOS_Service() {
         --unit="${update_unit}" \
         --property=Type=exec \
         --setenv=CASAOS_INSTALLER_DETACHED=1 \
+        "${telemetry_env[@]}" \
         /bin/bash -o pipefail -c "${detached_command}"; then
         Show 1 "Failed to detach the in-app update from casaos.service"
     fi
