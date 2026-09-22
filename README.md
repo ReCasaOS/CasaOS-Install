@@ -21,6 +21,10 @@ Running the same command on an existing install upgrades it. Installs made from 
 
 Every package the installer downloads is verified against a SHA-256 digest before extraction, and every one of them is downloaded from a ReCasaOS release. The digests are written into `install.sh` at release time from the checksums each component publishes, or — for the dashboard and the App Store seed, whose releases publish no checksums — computed from the package as published; none is typed by hand. The uninstall script the installer downloads is verified the same way, against the digest of the copy shipped in the release.
 
+## What is in v0.4.98
+
+**The core names the version it runs.** v0.4.97's core still called itself 0.4.56; it now reports its own tag, and the install check makes sure of it.
+
 ## What is in v0.4.97
 
 **A security release.** The message bus stops answering unauthenticated requests, every service is built with the current Go, and the dependencies with known vulnerabilities are updated or removed, in the services and in the dashboard. Folder downloads stream, and LocalStorage is half its size.
@@ -521,7 +525,7 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 
 | Component | Release |
 |---|---|
-| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.57 |
+| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.58 |
 | [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.68 |
 | [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.59 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |

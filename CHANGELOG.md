@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.98] - 2026-09-22
+
+Components: CasaOS `v0.4.58`. Unchanged from v0.4.97: CasaOS-AppManagement `v0.4.59`, CasaOS-LocalStorage `v0.4.42`, CasaOS-UserService `v0.4.29`, CasaOS-Gateway `v0.4.30`, CasaOS-MessageBus `v0.4.27`, CasaOS-UI `v0.4.68`, Common `v0.4.26`, rclone `v1.75.1`.
+
+### Fixed
+
+- **`casaos -v` reports the version the box runs, this time for real.** v0.4.95 put the version stamp in a GoReleaser file the release build does not use, so the number came from a default that happened to equal v0.4.56, and v0.4.97 installed a core that called itself 0.4.56. The stamp is now in the build that runs, a build without it says `0.0.0-dev`, and the install check compares `casaos -v` with the tag the distribution pins.
+
 ## [0.4.97] - 2026-09-22
 
 Components: CasaOS `v0.4.57`, CasaOS-AppManagement `v0.4.59`, CasaOS-LocalStorage `v0.4.42`, CasaOS-UserService `v0.4.29`, CasaOS-Gateway `v0.4.30`, CasaOS-MessageBus `v0.4.27`, CasaOS-UI `v0.4.68`, Common `v0.4.26`. Unchanged: rclone `v1.75.1`.
