@@ -66,7 +66,7 @@ jobs:
           gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" \
             -p install.sh -p install.sh.sha256 -p components.lock
           sha256sum --check install.sh.sha256
-          grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|CASAOS_UI_TAG)=' components.lock >> "$GITHUB_ENV"
+          grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|CASAOS_UI_TAG|CASAOS_TAG)=' components.lock >> "$GITHUB_ENV"
 
       # Docker 29 raised the oldest API version it answers to 1.44 and made the
       # containerd image store the default on a new installation, and until
@@ -114,6 +114,10 @@ jobs:
           marker="$(cat /var/lib/casaos/fork-release)"
           echo "fork-release marker: ${marker}"
           test "${marker}" = "${CASAOS_RELEASE_TAG}"
+          # the core names its own version; v0.4.57 shipped saying 0.4.56, and nothing noticed
+          core="$(casaos -v)"
+          echo "casaos -v: ${core}"
+          test "${core}" = "${CASAOS_TAG}"
           version="$(rclone --version | sed -n 1p)"
           echo "rclone: ${version}"
           test "${version}" = "rclone ${RCLONE_TAG}"
