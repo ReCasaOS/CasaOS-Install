@@ -892,6 +892,85 @@ jobs:
           test "$(jq -r '.data[] | select(any(.children[]; .mount_point == "/mnt/raidcheck")) | .path' <<<"${list}")" = "${array}"
           echo "the array is one storage: ${array}"
 
+      # Statistics on, sent to a capture server on this runner, never to PostHog.
+      # PostHog's host resolves to this runner, as a net under the endpoint
+      # check: a core that ignored the test endpoint fails here instead. The
+      # core is restarted with the test endpoint first, and the endpoint is
+      # read back from the running process's environment before statistics are
+      # turned on. upgraded-from is then written as the installer writes it (the
+      # core's first check, with statistics off, deleted the installer's), and a
+      # second restart sends at once (CASAOS_TELEMETRY_START_DELAY=0s).
+      - name: Statistics reach a local capture server, never PostHog
+        run: |
+          set -euo pipefail
+          endpoint=http://127.0.0.1:18099/i/v0/e/
+          cat > capture.py <<'PY'
+          import http.server, sys
+
+          class Capture(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = self.rfile.read(int(self.headers["Content-Length"]))
+                  with open(sys.argv[2], "ab") as out:
+                      out.write(body + b"\n")
+                  self.send_response(200)
+                  self.send_header("Content-Type", "application/json")
+                  self.end_headers()
+                  self.wfile.write(b'{"status":"Ok"}')
+
+          http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Capture).serve_forever()
+          PY
+          : > capture.jsonl
+          python3 capture.py 18099 capture.jsonl > capture.log 2>&1 &
+          server=$!
+          trap 'kill "${server}" 2>/dev/null || true; echo "::group::captured"; cat capture.jsonl; echo "::endgroup::"; echo "::group::casaos"; sudo journalctl -u casaos.service --no-pager -o cat -n 40; echo "::endgroup::"' EXIT
+          for _ in $(seq 1 20); do
+            curl -s -o /dev/null http://127.0.0.1:18099/ && break
+            sleep 0.5
+          done
+
+          # The core is built with CGO_ENABLED=0 and netgo: Go's own resolver
+          # reads /etc/hosts first, so its default endpoint would be 127.0.0.1:443.
+          echo '127.0.0.1 eu.i.posthog.com' | sudo tee -a /etc/hosts >/dev/null
+
+          sudo mkdir -p /etc/systemd/system/casaos.service.d
+          printf '[Service]\nEnvironment=CASAOS_TELEMETRY_ENDPOINT=%s\nEnvironment=CASAOS_TELEMETRY_START_DELAY=0s\n' "${endpoint}" \
+            | sudo tee /etc/systemd/system/casaos.service.d/telemetry-check.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart casaos.service
+          pid="$(systemctl show -p MainPID --value casaos.service)"
+          sudo cat "/proc/${pid}/environ" | tr '\0' '\n' | grep -Fx "CASAOS_TELEMETRY_ENDPOINT=${endpoint}"
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "${CASA_URL}/v1/sys/telemetry" -H "Authorization: ${CASA_TOKEN}" && break
+            sleep 2
+          done
+
+          curl -fsS -X PUT "${CASA_URL}/v1/sys/telemetry" -H "Authorization: ${CASA_TOKEN}" \
+            -H 'content-type: application/json' -d '{"enabled":true}' | jq -e '.data.enabled == true' >/dev/null
+          sudo install -m 0600 /dev/null /var/lib/casaos/upgraded-from
+          printf 'new\n' | sudo tee /var/lib/casaos/upgraded-from >/dev/null
+          sudo systemctl restart casaos.service
+
+          for _ in $(seq 1 60); do
+            jq -s -e 'map(.event) | index("heartbeat") != null and index("version_changed") != null' capture.jsonl >/dev/null 2>&1 && break
+            sleep 2
+          done
+          events="$(jq -s -c . capture.jsonl)"
+          arch="$(dpkg --print-architecture)"
+          os="$(. /etc/os-release && echo "${ID} ${VERSION_ID}")"
+          echo "expecting distribution ${CASAOS_RELEASE_TAG}, core ${CASAOS_TAG}, arch ${arch}, os ${os}"
+          jq -e --arg tag "${CASAOS_RELEASE_TAG}" --arg core "${CASAOS_TAG}" --arg arch "${arch}" --arg os "${os}" '
+            map(select(.event == "heartbeat")) | length >= 1 and all(
+              .api_key == "phc_C5T8QbrhBttzgkWuKm2Xr9S4TLGh3sCVAZai2oaFEuhD"
+              and .properties.distribution == $tag and .properties.core == $core
+              and .properties.arch == $arch and .properties.os == $os
+              and .properties["$process_person_profile"] == false
+              and .properties["$lib"] == "recasaos-core"
+              and (.properties | has("$geoip_disable") | not))' <<<"${events}" >/dev/null
+          jq -e --arg tag "${CASAOS_RELEASE_TAG}" '
+            map(select(.event == "version_changed")) | length == 1 and all(
+              .properties.previous_distribution == "new" and .properties.distribution == $tag)' <<<"${events}" >/dev/null
+          echo "heartbeat and version_changed captured, from this release, on this machine"
+
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red
       # run says which step and nothing else, and the machine is gone.
@@ -933,4 +1012,5 @@ jobs:
           path: |
             install.log
             backup-files.txt
+            capture.jsonl
           if-no-files-found: ignore
