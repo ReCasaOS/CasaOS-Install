@@ -207,6 +207,33 @@ jobs:
           curl -fsS -o /dev/null "${management}/v1/gateway/routes" -H "Authorization: Internal ${secret}"
           echo "loopback alone is nobody; the secret is a service"
 
+      # The message bus was the one service still trusting loopback, and a Host
+      # header of "unix" besides. Every service registers its event types with it
+      # at start, over loopback: one that does not send the secret loses its
+      # events and nothing else fails, so the bus has to list all five, refuse a
+      # local call with no credential, and take one with the secret.
+      - name: The message bus knows every service, and asks local callers for the secret
+        run: |
+          set -euo pipefail
+          types="$(curl -fsS "${CASA_URL}/v2/message_bus/event_type" -H "Authorization: ${CASA_TOKEN}" \
+            | jq -c 'if type == "array" then . else (.data // []) end')"
+          echo "sources: $(jq -c '[.[].sourceID] | unique' <<<"${types}")"
+          for source in casaos app-management local-storage CasaOS-UserService casaos-ui; do
+            jq -e --arg s "${source}" 'any(.[]; .sourceID == $s)' <<<"${types}" >/dev/null \
+              || { echo "no event types registered by ${source}"; exit 1; }
+          done
+          bus="$(sudo cat /var/run/casaos/message-bus.url)"
+          code="$(curl -s -o /dev/null -w '%{http_code}' "${bus}/v2/message_bus/event_type")"
+          echo "loopback, no credential: ${code}"
+          test "${code}" = 401
+          code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: unix' "${bus}/v2/message_bus/event_type")"
+          echo "loopback, Host: unix: ${code}"
+          test "${code}" = 401
+          secret="$(sudo cat /var/run/casaos/internal.secret)"
+          code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Internal ${secret}" "${bus}/v2/message_bus/event_type")"
+          echo "loopback with the secret: ${code}"
+          test "${code}" = 200
+
       # A destination is an rclone remote. `alias` onto a directory keeps the
       # test on this machine while going through exactly the same daemon, the
       # same socket and the same rc calls an S3 bucket would.
