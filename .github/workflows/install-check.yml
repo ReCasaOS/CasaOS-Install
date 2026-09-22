@@ -269,6 +269,7 @@ jobs:
           test "${code}" = 401
           test "$(sudo stat -c '%a %U %F' /var/run/casaos/message-bus.sock)" = "600 root socket"
           test ! -e /tmp/message-bus.sock
+          test "$(sudo stat -c '%a %U' /var/run/casaos)" = "755 root"
           sudo journalctl -u casaos.service --no-pager -o cat | grep 'register-ui-events.sh' | tee start-scripts.txt
           grep 'start script ran' start-scripts.txt >/dev/null
           grep 'UI events registered' start-scripts.txt >/dev/null

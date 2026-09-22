@@ -864,6 +864,10 @@ DownloadAndInstallCasaOS() {
         fi
     done
 
+    # the message bus listened on /tmp/message-bus.sock until v0.4.99; its socket
+    # is in the runtime path now, and the old one would only linger
+    ${sudo_cmd} rm -f /tmp/message-bus.sock
+
     MIGRATION_SCRIPT_DIR=$(realpath -e "${BUILD_DIR}"/scripts/migration/script.d || Show 1 "Failed to find migration script directory")
 
     for MIGRATION_SCRIPT in "${MIGRATION_SCRIPT_DIR}"/*.sh; do
