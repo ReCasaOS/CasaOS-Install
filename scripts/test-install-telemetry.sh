@@ -146,7 +146,29 @@ Write_Telemetry_Markers >/dev/null
 [[ -e "${CASA_STATE_DIR}/telemetry-off" ]] || fail "a run without the flag removed telemetry-off"
 [[ "$(cat "${CASA_STATE_DIR}/telemetry.json")" == '{"enabled":false,"id":"kept","notice_seen":true}' ]] ||
     fail "a run without the flag touched telemetry.json"
+
+reset not-asked
+Write_Telemetry_Markers >/dev/null
+[[ ! -e "${CASA_STATE_DIR}/telemetry-off" ]] || fail "a run without the flag wrote telemetry-off"
 echo "ok: telemetry-off only when asked, an earlier choice kept"
+
+# no_telemetry <install.sh arguments>: the NO_TELEMETRY that install.sh's own
+# lines give for those arguments and this environment. The lines are copied out
+# of install.sh the way the functions are, so this runs anywhere.
+no_telemetry() {
+    (
+        # shellcheck disable=SC2329 # called by the getopts loop copied below
+        usage() { exit "$1"; }
+        eval "$(sed -n '/^NO_TELEMETRY=0$/,/^fi$/p' "${INSTALL_SH}")"
+        eval "$(sed -n '/^while getopts /,/^done$/p' "${INSTALL_SH}")"
+        echo "${NO_TELEMETRY}"
+    )
+}
+[[ "$(no_telemetry)" == 0 ]] || fail "no flag set NO_TELEMETRY"
+[[ "$(no_telemetry --no-telemetry)" == 1 ]] || fail "--no-telemetry did not set NO_TELEMETRY"
+[[ "$(RECASAOS_TELEMETRY=0 no_telemetry)" == 1 ]] || fail "RECASAOS_TELEMETRY=0 did not set NO_TELEMETRY"
+[[ "$(RECASAOS_TELEMETRY=1 no_telemetry)" == 0 ]] || fail "RECASAOS_TELEMETRY=1 set NO_TELEMETRY"
+echo "ok: --no-telemetry and RECASAOS_TELEMETRY=0 set NO_TELEMETRY, nothing else does"
 
 # The option itself, through install.sh's own parsing.
 if [[ -r /etc/os-release ]]; then
