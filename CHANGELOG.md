@@ -2,6 +2,16 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.0] - 2026-09-22
+
+Components: CasaOS-LocalStorage `v0.4.44`. Unchanged from v0.4.99: CasaOS `v0.4.59`, CasaOS-AppManagement `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-Gateway `v0.4.30`, CasaOS-UI `v0.4.69`, Common `v0.4.27`, rclone `v1.75.1`.
+
+The distribution moves to 0.5 after the security work of 0.4.97 to 0.4.99; nothing in how it installs or upgrades changes.
+
+### Fixed
+
+- **An encrypted disk is no longer offered for formatting.** A locked LUKS container, or a BitLocker volume on a box that also boots Windows, mounts nothing and holds a format CasaOS cannot read, so its disk was listed as available storage with formatting as the only thing to do with it. Both now count as in use, like RAID, LVM and ZFS members. An opened LUKS stack (dm-crypt, LVM, then a filesystem mounted from fstab), reported upstream as IceWhaleTech/CasaOS-LocalStorage#73, was already kept out.
+
 ## [0.4.99] - 2026-09-22
 
 Components: CasaOS `v0.4.59`, CasaOS-AppManagement `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.43`, CasaOS-UI `v0.4.69`, Common `v0.4.27`. Unchanged: CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
