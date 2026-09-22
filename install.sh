@@ -167,6 +167,13 @@ REGION="UNKNOWN"
 # mirror -- curl <install.sh> | sudo CASA_DOWNLOAD_DOMAIN=https://mirror/ bash -- rather
 # than being geo-located: this script used to curl a geo-IP service to guess it.
 CASA_DOWNLOAD_DOMAIN="${CASA_DOWNLOAD_DOMAIN:-https://github.com/}"
+# Anonymous statistics are turned off by --no-telemetry, or by
+# RECASAOS_TELEMETRY=0 on the install line -- curl <install.sh> | sudo
+# RECASAOS_TELEMETRY=0 bash. Without either, the owner's earlier choice stands.
+NO_TELEMETRY=0
+if [[ "${RECASAOS_TELEMETRY:-}" == "0" ]]; then
+    NO_TELEMETRY=1
+fi
 STOPPED_CASA_SERVICES=()
 INSTALL_COMPLETED=0
 
@@ -832,6 +839,13 @@ Write_Telemetry_Markers() {
     ${sudo_cmd} mkdir -p "${CASA_STATE_DIR}" || Show 1 "Failed to create ${CASA_STATE_DIR}"
     ${sudo_cmd} install -m 0600 /dev/null "${CASA_STATE_DIR}/upgraded-from" || Show 1 "Failed to write ${CASA_STATE_DIR}/upgraded-from"
     printf '%s\n' "${previous}" | ${sudo_cmd} tee "${CASA_STATE_DIR}/upgraded-from" >/dev/null || Show 1 "Failed to write ${CASA_STATE_DIR}/upgraded-from"
+
+    # telemetry-off only when asked; the core folds it into telemetry.json at
+    # its next start. Without the flag nothing here touches the owner's choice.
+    if ((NO_TELEMETRY)); then
+        ${sudo_cmd} install -m 0600 /dev/null "${CASA_STATE_DIR}/telemetry-off" || Show 1 "Failed to turn anonymous statistics off"
+        Show 0 "Anonymous statistics turned off."
+    fi
 }
 
 # Download And Install CasaOS
@@ -1038,22 +1052,37 @@ Welcome_Banner() {
 
 #Usage
 usage() {
-    cat <<-EOF
-		Usage: install.sh [options]
-		Valid options are:
-		    -p <build_dir>          Specify build directory (Local install)
-		    -h                      Show this help message and exit
-	EOF
+    cat <<EOF
+Usage: install.sh [options]
+Valid options are:
+    -p <build_dir>          Specify build directory (Local install)
+    --no-telemetry          Turn anonymous statistics off (same as RECASAOS_TELEMETRY=0)
+    -h                      Show this help message and exit
+
+Anonymous statistics: https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics
+EOF
     exit "$1"
 }
 
-while getopts ":p:h" arg; do
+# "-:" makes getopts hand over a long option: --no-telemetry arrives as "-",
+# with OPTARG=no-telemetry.
+while getopts ":p:h-:" arg; do
     case "$arg" in
     p)
         BUILD_DIR=$OPTARG
         ;;
     h)
         usage 0
+        ;;
+    -)
+        case "$OPTARG" in
+        no-telemetry)
+            NO_TELEMETRY=1
+            ;;
+        *)
+            usage 1
+            ;;
+        esac
         ;;
     *)
         usage 1

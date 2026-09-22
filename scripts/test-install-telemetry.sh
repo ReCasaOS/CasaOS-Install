@@ -50,6 +50,7 @@ line_of() {
 
 # What those functions take from install.sh's globals.
 sudo_cmd=""
+NO_TELEMETRY=0
 Show() { echo "$2"; }
 
 # reset <case>: a state directory that does not exist yet, and an empty
@@ -128,3 +129,34 @@ copy="$(line_of -F 'cp -rf "${SYSROOT_DIR}"/* /')"
 ((stop < call && call < copy)) ||
     fail "Write_Telemetry_Markers is called at line ${call}, not between the services' stop (line ${stop}) and the copy onto / (line ${copy})"
 echo "ok: install.sh writes the markers with the services stopped, before the copy onto /"
+
+# --no-telemetry or RECASAOS_TELEMETRY=0 (both set NO_TELEMETRY): telemetry-off,
+# root's alone. Without either, an earlier choice is left exactly as it is.
+reset turned-off
+out="$(NO_TELEMETRY=1 Write_Telemetry_Markers)"
+[[ -e "${CASA_STATE_DIR}/telemetry-off" ]] || fail "NO_TELEMETRY=1 wrote no telemetry-off"
+expect_mode "${CASA_STATE_DIR}/telemetry-off" 600
+[[ "${out}" == *"Anonymous statistics turned off."* ]] || fail "NO_TELEMETRY=1 did not say so: ${out}"
+
+reset kept
+mkdir -p "${CASA_STATE_DIR}"
+: >"${CASA_STATE_DIR}/telemetry-off"
+printf '{"enabled":false,"id":"kept","notice_seen":true}\n' >"${CASA_STATE_DIR}/telemetry.json"
+Write_Telemetry_Markers >/dev/null
+[[ -e "${CASA_STATE_DIR}/telemetry-off" ]] || fail "a run without the flag removed telemetry-off"
+[[ "$(cat "${CASA_STATE_DIR}/telemetry.json")" == '{"enabled":false,"id":"kept","notice_seen":true}' ]] ||
+    fail "a run without the flag touched telemetry.json"
+echo "ok: telemetry-off only when asked, an earlier choice kept"
+
+# The option itself, through install.sh's own parsing.
+if [[ -r /etc/os-release ]]; then
+    bash "${ROOT}/install.sh" -h >"${WORK}/usage.txt" 2>/dev/null || fail "install.sh -h failed"
+    grep -e '--no-telemetry' "${WORK}/usage.txt" >/dev/null || fail "usage does not name --no-telemetry"
+    grep -F 'https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics' "${WORK}/usage.txt" >/dev/null ||
+        fail "usage does not link the README section"
+    bash "${ROOT}/install.sh" --no-telemetry -h >/dev/null 2>&1 || fail "--no-telemetry is refused"
+    if bash "${ROOT}/install.sh" --no-such-option >/dev/null 2>&1; then
+        fail "an unknown long option is accepted"
+    fi
+    echo "ok: install.sh takes --no-telemetry and refuses other long options"
+fi
