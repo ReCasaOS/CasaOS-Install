@@ -33,6 +33,9 @@ jobs:
       - name: Checkout installer
         uses: actions/checkout@v4
 
+      - name: Check the installer's statistics functions
+        run: bash scripts/test-install-telemetry.sh
+
       - name: Load component pins
         run: |
           set -euo pipefail

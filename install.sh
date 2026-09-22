@@ -75,6 +75,9 @@ readonly UNAME_U
 
 readonly CASA_CONF_PATH=/etc/casaos/gateway.ini
 readonly CASA_UNINSTALL_PATH=/usr/bin/casaos-uninstall
+# The core's state: the overlay's fork-release marker, and the markers of the
+# anonymous statistics (see Write_Telemetry_Markers).
+readonly CASA_STATE_DIR=/var/lib/casaos
 readonly CASAOS_APP_MANAGEMENT_TAG="__CASAOS_APP_MANAGEMENT_TAG__"
 readonly CASAOS_INSTALL_RELEASE_TAG="__CASAOS_RELEASE_TAG__"
 readonly CASAOS_RELEASE_BASE_URL="https://github.com/ReCasaOS/CasaOS-Install/releases/download/${CASAOS_INSTALL_RELEASE_TAG}"
@@ -795,6 +798,42 @@ Verify_Fork_Package() {
     Show 0 "Verified ${package_file}"
 }
 
+# What this run replaces, for the core's version_changed statistic: the tag the
+# previous ReCasaOS release left in fork-release, "upstream" when a casaos
+# binary is there without one (a box coming from IceWhale's CasaOS), "new"
+# otherwise. Builtins only.
+Previous_Release() {
+    local previous=""
+
+    if [[ -f "${CASA_STATE_DIR}/fork-release" ]]; then
+        read -r previous <"${CASA_STATE_DIR}/fork-release" || true
+        previous="${previous//[[:space:]]/}"
+    fi
+
+    if [[ -n "${previous}" ]]; then
+        echo "${previous}"
+    elif command -v casaos >/dev/null 2>&1; then
+        echo upstream
+    else
+        echo new
+    fi
+}
+
+# The markers of the anonymous statistics (README.md, "Anonymous statistics"),
+# written with the services stopped and before the release overlay replaces
+# fork-release. upgraded-from, on every run, names what this run replaces: the
+# core sends it once as version_changed, or deletes it unsent when statistics
+# are off. The dashboard's update button runs this same path.
+Write_Telemetry_Markers() {
+    local previous
+    previous="$(Previous_Release)"
+    Show 2 "Previous release: ${previous}"
+
+    ${sudo_cmd} mkdir -p "${CASA_STATE_DIR}" || Show 1 "Failed to create ${CASA_STATE_DIR}"
+    ${sudo_cmd} install -m 0600 /dev/null "${CASA_STATE_DIR}/upgraded-from" || Show 1 "Failed to write ${CASA_STATE_DIR}/upgraded-from"
+    printf '%s\n' "${previous}" | ${sudo_cmd} tee "${CASA_STATE_DIR}/upgraded-from" >/dev/null || Show 1 "Failed to write ${CASA_STATE_DIR}/upgraded-from"
+}
+
 # Download And Install CasaOS
 DownloadAndInstallCasaOS() {
     # With -p <build_dir> the packages are neither downloaded nor verified:
@@ -867,6 +906,8 @@ DownloadAndInstallCasaOS() {
     # the message bus listened on /tmp/message-bus.sock until v0.4.99; its socket
     # is in the runtime path now, and the old one would only linger
     ${sudo_cmd} rm -f /tmp/message-bus.sock
+
+    Write_Telemetry_Markers
 
     MIGRATION_SCRIPT_DIR=$(realpath -e "${BUILD_DIR}"/scripts/migration/script.d || Show 1 "Failed to find migration script directory")
 
