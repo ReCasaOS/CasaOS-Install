@@ -21,6 +21,53 @@ Running the same command on an existing install upgrades it. Installs made from 
 
 Every package the installer downloads is verified against a SHA-256 digest before extraction, and every one of them is downloaded from a ReCasaOS release. The digests are written into `install.sh` at release time from the checksums each component publishes, or — for the dashboard and the App Store seed, whose releases publish no checksums — computed from the package as published; none is typed by hand. The uninstall script the installer downloads is verified the same way, against the digest of the copy shipped in the release.
 
+## Anonymous statistics
+
+A ReCasaOS box sends anonymous statistics, so that the maintainers know how many boxes are running, which release they run, how fast they update after a release, and on what hardware: what GitHub's download counters cannot tell. They are **on by default**, and they say so: at the end of every install and upgrade, in a notice the dashboard shows once, and here. Any one of the three ways below turns them off.
+
+**Who receives them.** [PostHog](https://posthog.com) Cloud, in its EU region. The CasaOS core posts them to `https://eu.i.posthog.com/i/v0/e/`; the dashboard sends nothing.
+
+**When.** Two events: `heartbeat`, at most once every 24 hours, which counts the boxes running, and `version_changed`, once after an install or an upgrade, which measures how fast boxes update. A failed send waits for the next hourly check; nothing is queued.
+
+**Which box.** A random UUID, made on first use and kept in `/var/lib/casaos/telemetry.json` (root only). It derives from nothing on the machine; a reinstall that removes `/var/lib/casaos` makes a new one.
+
+**What is sent.** These properties, on both events, `previous_distribution` on `version_changed` only. *See what is sent*, in the dashboard's settings, shows the values this box would send, built by the code that sends them.
+
+| Property | Example | Source |
+|---|---|---|
+| `distribution` | `v0.5.0` | `/var/lib/casaos/fork-release`, trimmed; `unknown` if absent |
+| `previous_distribution` | `v0.4.99`, `new`, `upstream` | `/var/lib/casaos/upgraded-from`, written by the installer: the release it replaced, `new` on a machine without CasaOS, `upstream` on a box coming from IceWhale's CasaOS |
+| `core` | `v0.4.59` | `"v" + common.VERSION` |
+| `arch` | `amd64`, `arm64`, `arm-7` | `runtime.GOARCH`, plus `GOARM` from the build info for `arm` |
+| `os` | `ubuntu 24.04`, `debian 12`, `arch` | `/etc/os-release`: `ID` and `VERSION_ID` (ID alone when there is no VERSION_ID); `unknown` if unreadable |
+| `kernel` | `6.8` | `uname` release, major.minor |
+| `virtualization` | `none`, `kvm`, `lxc`, `wsl`, `unknown` | `systemd-detect-virt` output; `unknown` if it cannot run |
+| `model` | `Raspberry Pi 5 Model B Rev 1.0`, `ZimaBoard` | `/proc/device-tree/model`, else `/sys/class/dmi/id/product_name`; NUL and spaces trimmed, 64 characters max; `unknown` if empty or a known placeholder (`To Be Filled By O.E.M.`, `System Product Name`, `Default string`, `Not Specified`) |
+| `docker` | `28.3.1` | `GET /version` on `/var/run/docker.sock`, field `Version`; `unknown` if unavailable |
+| `cpu_cores` | `4` | `runtime.NumCPU()` |
+| `ram_gb` | `8` | `MemTotal` from `/proc/meminfo`, rounded to the nearest of 1, 2, 4, 8, 16, 32, 64, then `128+` |
+| `disks` | `3` | entries of `/sys/block` whose resolved path is not under `/sys/devices/virtual/`, excluding `sr*` and `mmcblk*boot*` |
+| `storage_tb` | `4-8` | sum of those disks' sizes (`/sys/block/<d>/size` × 512 bytes), bucketed: `<0.5`, `0.5-1`, `1-2`, `2-4`, `4-8`, `8-16`, `16-32`, `32+` (TB, 10^12 bytes) |
+| `raid` | `true` | `/proc/mdstat` lists an active `md` array |
+
+Every event also carries `$process_person_profile: false`, so PostHog makes no person profile, and `$lib: "recasaos-core"`. PostHog derives the **country** from the address the event comes from: the project discards that address, and keeps the country and the continent only, every finer location being dropped before anything is stored.
+
+**Never sent:** IP address (discarded by the project setting), hostname, MAC address, serial numbers, disk names, labels or paths, installed apps, user accounts, anything about the local network.
+
+### Turning them off
+
+Any one of these; an upgrade never turns them back on.
+
+- **With the installer**: `--no-telemetry`, or `RECASAOS_TELEMETRY=0`, on an install or on an upgrade.
+
+  ```bash
+  curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash -s -- --no-telemetry
+  curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo RECASAOS_TELEMETRY=0 bash
+  ```
+
+- **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
+- **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
+
 ## What is in v0.5.0
 
 **Encrypted disks stay out of the formatting list.** A locked LUKS container or a BitLocker volume is no longer offered as fresh storage. The distribution moves to 0.5 after the security releases 0.4.97 to 0.4.99.

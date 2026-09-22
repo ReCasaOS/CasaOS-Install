@@ -1046,6 +1046,28 @@ Welcome_Banner() {
     echo -e "${COLOUR_RESET}"
 }
 
+# The closing block of every run: whether this box sends anonymous statistics,
+# what they contain, and how to turn them off. Off when this run turned them
+# off, when that request still waits for the core, or when the core has them off.
+Telemetry_Notice() {
+    echo -e "${GREEN_LINE}"
+    if ((NO_TELEMETRY)) || [[ -e "${CASA_STATE_DIR}/telemetry-off" ]] ||
+        ${sudo_cmd} grep -Eqs '"enabled"[[:space:]]*:[[:space:]]*false' "${CASA_STATE_DIR}/telemetry.json"; then
+        echo -e " ${aCOLOUR[1]}Anonymous statistics are off.${COLOUR_RESET}"
+        echo -e " Upgrades keep them off; the dashboard's settings can turn them on."
+    else
+        echo -e " ${aCOLOUR[1]}Anonymous statistics are on.${COLOUR_RESET}"
+        echo -e " Once a day this box tells the ReCasaOS maintainers which release it runs"
+        echo -e " and on what hardware, through PostHog (EU), which keeps the country of"
+        echo -e " the connection, never its address. No apps, files, accounts or names."
+        echo -e " Turn them off in the dashboard's settings (Anonymous usage statistics),"
+        echo -e " or run the installer again with --no-telemetry or RECASAOS_TELEMETRY=0."
+    fi
+    echo -e " What they contain: https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics"
+    echo -e "${GREEN_LINE}"
+    echo -e "${COLOUR_RESET}"
+}
+
 ###############################################################################
 # Main                                                                        #
 ###############################################################################
@@ -1134,3 +1156,6 @@ fi
 
 # Step 10: Clear Term and Show Welcome Banner
 Welcome_Banner
+
+# Step 11: Anonymous statistics, on or off, and how to turn them off
+Telemetry_Notice
