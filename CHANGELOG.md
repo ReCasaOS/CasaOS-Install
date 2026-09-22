@@ -2,6 +2,25 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.4.99] - 2026-09-22
+
+Components: CasaOS `v0.4.59`, CasaOS-AppManagement `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.43`, CasaOS-UI `v0.4.69`, Common `v0.4.27`. Unchanged: CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Security
+
+- **Subscribing to the message bus needs a token.** Anyone who could reach the dashboard's port could subscribe to every event, app activity and dashboard settings included, without signing in. The subscriptions now want the user's token, which the dashboard sends as `?token=` since a browser cannot put a header on a websocket; no other route takes a token from the query. The services' own subscriber sends the boot's secret.
+- **Tokens stay out of the logs.** The core, AppManagement, UserService, LocalStorage and the message bus wrote the request URI, query string included, to their access logs, and the terminal, file and event websockets carry the user's token there. They log the path now.
+- **The message bus socket left /tmp**, where any local user could create the path first and keep the bus from listening. It is `/var/run/casaos/message-bus.sock`, readable by root only, in a directory only root can write; an upgrade removes the old one.
+
+### Fixed
+
+- **Start scripts run as written, leave a trace, and cannot hold up the start.** The core ran every script in `/etc/casaos/start.d` with `/bin/sh` whatever its first line said, threw away its output, stopped at the first failure and had no time limit, before telling systemd it was ready: a hung script got the core killed and restarted in a loop. Scripts now run after readiness, with their own interpreter, for at most 60 seconds each; each run is logged with its output, and a failure does not stop the others.
+
+### Upgrade notes
+
+- A dashboard left open in another tab during the update keeps its old code and loses its live updates until it is reloaded.
+- IceWhale's `casaos-cli`, if it is still on the box, can no longer subscribe to the message bus: it has neither a token nor the boot's secret.
+
 ## [0.4.98] - 2026-09-22
 
 Components: CasaOS `v0.4.58`. Unchanged from v0.4.97: CasaOS-AppManagement `v0.4.59`, CasaOS-LocalStorage `v0.4.42`, CasaOS-UserService `v0.4.29`, CasaOS-Gateway `v0.4.30`, CasaOS-MessageBus `v0.4.27`, CasaOS-UI `v0.4.68`, Common `v0.4.26`, rclone `v1.75.1`.

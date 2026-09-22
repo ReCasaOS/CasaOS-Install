@@ -21,6 +21,10 @@ Running the same command on an existing install upgrades it. Installs made from 
 
 Every package the installer downloads is verified against a SHA-256 digest before extraction, and every one of them is downloaded from a ReCasaOS release. The digests are written into `install.sh` at release time from the checksums each component publishes, or — for the dashboard and the App Store seed, whose releases publish no checksums — computed from the package as published; none is typed by hand. The uninstall script the installer downloads is verified the same way, against the digest of the copy shipped in the release.
 
+## What is in v0.4.99
+
+**Nothing on the message bus without signing in.** Subscribing to the bus's events needs a token, tokens stay out of the logs, the bus socket left `/tmp`, and the start scripts run as written without being able to hold up the start.
+
 ## What is in v0.4.98
 
 **The core names the version it runs.** v0.4.97's core still called itself 0.4.56; it now reports its own tag, and the install check makes sure of it.
@@ -525,13 +529,13 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 
 | Component | Release |
 |---|---|
-| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.58 |
-| [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.68 |
-| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.59 |
+| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.59 |
+| [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.69 |
+| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.60 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |
-| [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.29 |
-| [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.27 |
-| [CasaOS-LocalStorage](https://github.com/ReCasaOS/CasaOS-LocalStorage) | v0.4.42 |
+| [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.30 |
+| [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.28 |
+| [CasaOS-LocalStorage](https://github.com/ReCasaOS/CasaOS-LocalStorage) | v0.4.43 |
 | [rclone](https://github.com/rclone/rclone) | v1.75.1 |
 
 The installer downloads every package from a ReCasaOS release. The App Store seed — the snapshot a new box needs for its store to be populated before the first refresh — is IceWhale's, mirrored into our release at release time and pinned by the digest of the copy we serve; nothing about the catalogue changes, AppManagement keeps polling IceWhale's live store feed and IceWhale keeps curating it. IceWhale's CasaOS-CLI is no longer installed: nothing in the distribution ever called it. The exact commits behind a release are in its `components.lock` asset.
