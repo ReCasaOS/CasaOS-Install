@@ -12,7 +12,10 @@ name: install-check
 #
 # Called by release.yml after every publish, and runnable by hand against any
 # tag -- which publishes nothing again. Red does not unpublish anything; it is
-# the alarm.
+# the alarm. The install step passes --no-telemetry, which the installers
+# released before the anonymous statistics refuse: to check one of those tags
+# by hand, dispatch with "Use workflow from" set to that same tag, whose own
+# install-check.yml installs without the flag.
 
 on:
   workflow_call:
@@ -88,10 +91,14 @@ jobs:
             exit 1
           fi
 
+      # With --no-telemetry, as the README gives it: no step may run the core
+      # with anonymous statistics on and the default endpoint, PostHog. They are
+      # turned on once, in the last step, with the core pointed at a capture
+      # server on this runner.
       - name: Run the installer as the README says
         run: |
           set -euo pipefail
-          sudo -E bash install.sh 2>&1 | tee install.log
+          sudo -E bash install.sh --no-telemetry 2>&1 | tee install.log
           test "${PIPESTATUS[0]}" -eq 0
 
       - name: The Docker this box runs
@@ -182,6 +189,22 @@ jobs:
           test -n "${token}" && test "${token}" != null
           echo "::add-mask::${token}"
           echo "CASA_TOKEN=${token}" >> "$GITHUB_ENV"
+
+      # The install above ran with --no-telemetry on a machine that never had
+      # CasaOS: the installer named what it replaced, closed on the statistics
+      # being off, and the core came up with them off. Its preview is what it
+      # would send, built by the code that sends.
+      - name: Statistics are off after an install with --no-telemetry
+        run: |
+          set -euo pipefail
+          grep -E '\] Previous release: new *$' install.log
+          grep -F 'Anonymous statistics are off.' install.log
+          grep -F 'https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics' install.log
+          state="$(curl -fsS "${CASA_URL}/v1/sys/telemetry" -H "Authorization: ${CASA_TOKEN}")"
+          echo "${state}" | jq -c '.data'
+          jq -e --arg tag "${CASAOS_RELEASE_TAG}" \
+            '.data.enabled == false and .data.preview.event == "heartbeat" and .data.preview.properties.distribution == $tag' \
+            <<<"${state}" >/dev/null
 
       # Every service used to trust any request from 127.0.0.1, and a container
       # on the host network or any local account reaches the same addresses.
