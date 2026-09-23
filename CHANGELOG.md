@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.2] - 2026-09-23
+
+Components: CasaOS-AppManagement `v0.4.61`, CasaOS-UI `v0.4.71`. Unchanged from v0.5.1: CasaOS `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **Webhooks for apps deployed from git.** A push to the app's repository makes the box check it at once instead of at the next five-minute poll. Turn on *Check on every push* in the app's Repository tab, then give the forge the URL and the secret shown there; the tab has short setup guides for GitHub, Gitea/Forgejo and GitLab, and shows the last delivery. A webhook only checks: it deploys only when the app's automatic rebuild would. Deliveries are signed with the app's own secret (`X-Hub-Signature-256`, `X-Gitea-Signature`, `X-Forgejo-Signature`, `X-Gogs-Signature` or `X-Gitlab-Token`); anything else is refused, an unknown app and a webhook turned off get the same answer, and nothing in the body is trusted. Pushes close together share one check, plus one when ten seconds have passed so that the last push is never left to the poll; an app busy with a build gets one check queued for when it is free. The forge must be able to reach the box (a public address, a tunnel, or a forge on the same network). A backup does not carry the secret: a restored app comes back with its webhook off.
+
 ## [0.5.1] - 2026-09-23
 
 Components: CasaOS `v0.4.60`, CasaOS-UI `v0.4.70`. Unchanged from v0.5.0: CasaOS-AppManagement `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
