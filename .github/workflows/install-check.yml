@@ -966,6 +966,176 @@ jobs:
           esac
           echo "secret or signature in the AppManagement log: none"
 
+      # An app that follows the releases of its repository instead of a branch. The test
+      # repository gets version tags, and a second app, gittags, is registered from it in
+      # tag mode, on port 18081 (gitcheck keeps 18080). v1.0.0 is deployed by hand; with
+      # automatic deployment and the webhook on, v1.1.0 is tagged and a signed push posted,
+      # and it is deployed. Then nothing may deploy: a pre-release tag, v1.1.0 deleted (the
+      # app does not go back to v1.0.0), and v1.1.0 tagged again on another commit, which
+      # the check reports as moved. v1.0.0 and the second v1.1.0 are annotated tags, so the
+      # commit the box reads for them must be the peeled one, not the tag object.
+      - name: An app that follows tags
+        run: |
+          set -euo pipefail
+          app_view() { curl -fsS "${CASA_URL}/v2/app_management/git/gittags" -H "Authorization: ${CASA_TOKEN}"; }
+          trap 'app_view | jq ".data | {state, operation, follow, branch, head, deployed, check, history, build_log}" || true' EXIT
+          # g: git in the work clone the previous steps pushed from, as the owner of that clone
+          g() { sudo git -C /opt/gitcheck-work -c user.name=check -c user.email=check@example.invalid "$@"; }
+          # publish <text>: commits index.html saying <text> on main and pushes main
+          publish() {
+            echo "$1" | sudo tee /opt/gitcheck-work/index.html >/dev/null
+            g add Dockerfile compose.yaml index.html
+            g commit -q -m "$1"
+            g push -q origin main
+          }
+          # send <method> <path after /v2/app_management/git> [<json body>]: an API call, asked
+          # again while another operation holds the app (409), such as the five-minute check;
+          # prints the answer, or the refusal and its message
+          send() {
+            local code body=()
+            if [[ $# -ge 3 ]]; then body=(-H 'content-type: application/json' -d "$3"); fi
+            for _ in $(seq 1 30); do
+              rm -f answer.json
+              code="$(curl -sS -o answer.json -w '%{http_code}' -X "$1" "${CASA_URL}/v2/app_management/git$2" \
+                -H "Authorization: ${CASA_TOKEN}" "${body[@]}")"
+              [[ "${code}" == 409 ]] || break
+              sleep 2
+            done
+            [[ "${code}" == 2* ]] || { echo "$1 $2: ${code} $(cat answer.json 2>/dev/null)" >&2; return 1; }
+            cat answer.json
+          }
+          # wait_for <label> <jq condition> [jq options]: polls the app, up to five minutes,
+          # until no operation is recorded and the condition holds on the summary below;
+          # prints the last summary seen
+          wait_for() {
+            local label="$1" condition="$2" seen=""
+            shift 2
+            for _ in $(seq 1 150); do
+              seen="$(app_view | jq -c '.data | {state, operation, branch, cloned, head: .head.commit, deployed, check}')"
+              if jq -e "$@" ".operation == null and (${condition})" <<<"${seen}" >/dev/null; then
+                echo "${label}: ${seen}"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "${label}, never reached: ${seen}"
+            return 1
+          }
+          # answers <text>: the app's port answers <text>
+          answers() {
+            local body
+            body="$(curl -fsS --max-time 5 http://127.0.0.1:18081/)"
+            [[ "${body}" == "$1" ]] || { echo "18081 answers ${body}, not $1"; return 1; }
+          }
+          # announce <label> <tag> <commit>: posts what GitHub sends when refs/tags/<tag>
+          # changes, signed with the app's secret (the box reads the signature, never the body)
+          announce() {
+            local signature code
+            printf '{"ref":"refs/tags/%s","after":"%s"}' "$2" "$3" > push.json
+            signature="$(openssl dgst -sha256 -hmac "${secret}" <push.json | awk '{print $NF}')"
+            code="$(curl -sS -o hook.json -w '%{http_code}' -X POST "${CASA_URL}${path}" \
+              -H 'content-type: application/json' -H 'X-GitHub-Event: push' \
+              -H "X-Hub-Signature-256: sha256=${signature}" --data-binary @push.json)"
+            echo "webhook for $1: ${code} $(cat hook.json)"
+            test "${code}" = 202
+            case "$(jq -r '.message' hook.json)" in checking|coalesced|queued) ;; *) return 1 ;; esac
+          }
+          # nothing_deployed <label>: five seconds after the check ended, no deployment runs,
+          # and the folder, the deployed version and the history are what they were once
+          # v1.1.0 was deployed: nothing was deployed, and nothing was tried and refused
+          nothing_deployed() {
+            local now
+            sleep 5
+            now="$(app_view | jq -c '.data | {operation, kept: {head: .head.commit, deployed, history}}')"
+            if ! jq -e --argjson kept "${kept}" '(.operation == null or .operation.kind == "check") and .kept == $kept' <<<"${now}" >/dev/null; then
+              echo "$1: the app changed: ${now}"
+              return 1
+            fi
+            answers v1.1.0
+            echo "$1: nothing deployed, v1.1.0 still answers"
+          }
+
+          # the previous steps left main's Dockerfile exiting at once: the first release
+          # starts again, on a port of its own
+          sudo tee /opt/gitcheck-work/Dockerfile >/dev/null <<'EOF'
+          FROM busybox
+          COPY index.html /www/index.html
+          CMD ["httpd", "-f", "-p", "80", "-h", "/www"]
+          EOF
+          sudo tee /opt/gitcheck-work/compose.yaml >/dev/null <<'EOF'
+          services:
+            web:
+              build: .
+              ports:
+                - "18081:80"
+              env_file: .env
+          EOF
+          publish v1.0.0
+          c1="$(g rev-parse HEAD)"
+          g tag -a v1.0.0 -m v1.0.0
+          g push -q origin refs/tags/v1.0.0
+
+          answer="$(send POST "" '{"name":"gittags","url":"file:///opt/gitcheck.git","access":"none","follow":"tags"}')"
+          echo "registered: $(jq -c '.data | {follow, tag_pattern, prereleases, branch}' <<<"${answer}")"
+          jq -e '.data.follow == "tags" and .data.branch == ""' <<<"${answer}" >/dev/null
+          send POST /gittags/check >/dev/null
+          # cloned at the tag, and still no branch: the check never writes the remote's default
+          wait_for "first check" '.cloned and .head == $c and .branch == "" and .check.remote_tag == "v1.0.0" and .check.remote_commit == $c and .check.error == ""' --arg c "${c1}"
+
+          answer="$(send POST /gittags/deploy '{"tag":"v1.0.0","env":"GREETING=hello\n"}')"
+          echo "deployment asked: $(jq -c '.data.operation | {kind, commit, tag}' <<<"${answer}")"
+          jq -e --arg c "${c1}" '.data.operation.commit == $c and .data.operation.tag == "v1.0.0"' <<<"${answer}" >/dev/null
+          wait_for "v1.0.0 deployed by hand" '.state == "idle" and .head == $c and .deployed.tag == "v1.0.0" and .deployed.commit == $c' --arg c "${c1}"
+          answers v1.0.0
+
+          answer="$(send PUT /gittags '{"auto_deploy":true,"webhook_enabled":true}')"
+          secret="$(jq -r '.data.webhook.secret' <<<"${answer}")"
+          [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || { echo "the view holds no 64-hex secret"; exit 1; }
+          echo "::add-mask::${secret}"
+          echo "automatic deployment and webhook: $(jq -c '.data | {follow, auto_deploy, webhook: (.webhook | del(.secret))}' <<<"${answer}")"
+          jq -e '.data.follow == "tags" and .data.auto_deploy == true and .data.webhook.enabled == true' <<<"${answer}" >/dev/null
+          path="$(jq -r '.data.webhook.path' <<<"${answer}")"
+          test "${path}" = /v2/app_management/git/gittags/webhook
+
+          publish v1.1.0
+          c2="$(g rev-parse HEAD)"
+          g tag v1.1.0
+          g push -q origin refs/tags/v1.1.0
+          announce v1.1.0 v1.1.0 "${c2}"
+          wait_for "v1.1.0 deployed automatically" '.state == "idle" and .head == $c and .deployed.tag == "v1.1.0" and .deployed.commit == $c and .check.remote_tag == "v1.1.0"' --arg c "${c2}"
+          answers v1.1.0
+          kept="$(app_view | jq -c '.data | {head: .head.commit, deployed, history}')"
+          jq -e '.history[0].tag == "v1.1.0" and .history[0].outcome == "deployed" and .history[1].tag == "v1.0.0"' <<<"${kept}" >/dev/null
+
+          # a pre-release is not a release while the app leaves pre-releases out
+          publish v1.2.0-rc.1
+          c3="$(g rev-parse HEAD)"
+          g tag v1.2.0-rc.1
+          g push -q origin refs/tags/v1.2.0-rc.1
+          before="$(app_view | jq -r '.data.check.at')"
+          announce v1.2.0-rc.1 v1.2.0-rc.1 "${c3}"
+          wait_for "after v1.2.0-rc.1" '.check.at != $b and .check.remote_tag == "v1.1.0" and .check.remote_commit == $c' --arg b "${before}" --arg c "${c2}"
+          nothing_deployed v1.2.0-rc.1
+          tags="$(send GET /gittags/tags | jq -c '[.data[] | {name, commit}]')"
+          echo "eligible tags: ${tags}"
+          jq -e --arg c1 "${c1}" --arg c2 "${c2}" '. == [{name: "v1.1.0", commit: $c2}, {name: "v1.0.0", commit: $c1}]' <<<"${tags}" >/dev/null
+
+          # the newest release deleted: v1.0.0 is the newest left, and older than what runs
+          g tag -d v1.1.0 >/dev/null
+          g push -q origin :refs/tags/v1.1.0
+          announce "the deletion of v1.1.0" v1.1.0 0000000000000000000000000000000000000000
+          wait_for "after v1.1.0 was deleted" '.check.remote_tag == "v1.0.0" and .check.remote_commit == $c and (.check.tag_moved | not)' --arg c "${c1}"
+          nothing_deployed "v1.1.0 deleted"
+
+          # v1.1.0 again, on another commit: the version that runs, moved
+          publish v1.1.0-moved
+          c4="$(g rev-parse HEAD)"
+          g tag -a v1.1.0 -m v1.1.0
+          g push -q origin refs/tags/v1.1.0
+          announce "v1.1.0 moved" v1.1.0 "${c4}"
+          wait_for "after v1.1.0 moved" '.check.remote_tag == "v1.1.0" and .check.remote_commit == $c and .check.tag_moved == true' --arg c "${c4}"
+          nothing_deployed "v1.1.0 moved"
+
       - name: A RAID array is one storage
         if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
         run: |
