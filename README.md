@@ -68,6 +68,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.4
+
+**Git apps can follow tags.** Instead of the head of a branch, an app deployed from git can run the highest release tag of its repository, optionally within a pattern such as `v2.*`, and upgrade by itself when a higher one appears. It never goes back on its own; any tag can still be deployed by hand from the Repository tab.
+
 ## What is in v0.5.3
 
 **Switches read the right way round in the dark theme.** A switch that is on is now the bright one there, as it is in the light theme.
@@ -592,9 +596,9 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 
 | Component | Release |
 |---|---|
-| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.60 |
-| [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.72 |
-| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.61 |
+| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.61 |
+| [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.73 |
+| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.62 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |
 | [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.30 |
 | [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.28 |

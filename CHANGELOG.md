@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.4] - 2026-09-23
+
+Components: CasaOS `v0.4.61`, CasaOS-AppManagement `v0.4.62`, CasaOS-UI `v0.4.73`. Unchanged from v0.5.3: CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **An app deployed from git can follow tags instead of a branch.** Choose *Follow tags* when registering the app, or later in its Repository tab. The app then runs the highest semver tag of its repository (`v1.4.2`, `1.4.2`), pre-releases (`-rc`, `-beta`) excluded unless you include them, optionally within a pattern such as `v2.*`. Automatic deployment only ever goes up: a deleted tag, a narrowed pattern or a tag moved to another commit never makes the app go back or rebuild by itself (a moved tag is reported). By hand, *Deploy a tag…* lists the eligible tags and deploys any of them, an older one after a confirmation, which pauses automatic deployment. Webhooks work as they are: a tag push starts a check (on GitLab, tick *Tag push events*). Backups record the mode and the tag, and a restore comes back at that tag.
+- **Each anonymous-statistics event that leaves the box is logged**: `journalctl -u casaos | grep 'telemetry: sent'` shows them.
+
 ## [0.5.3] - 2026-09-23
 
 Components: CasaOS-UI `v0.4.72`. Unchanged from v0.5.2: CasaOS `v0.4.60`, CasaOS-AppManagement `v0.4.61`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
