@@ -1259,6 +1259,19 @@ jobs:
               .properties.previous_distribution == "new" and .properties.distribution == $tag)' <<<"${events}" >/dev/null
           echo "heartbeat and version_changed captured, from this release, on this machine"
 
+          # The README's check: the core logs each event it sent. It logs once the
+          # capture server has answered, so journald may lag the capture a little.
+          for _ in $(seq 1 15); do
+            journal="$(sudo journalctl -u casaos.service --no-pager -o cat)"
+            sent="$(grep -F 'telemetry: sent' <<<"${journal}" || true)"
+            grep -qF '"event": "heartbeat"' <<<"${sent}" && grep -qF '"event": "version_changed"' <<<"${sent}" && break
+            sleep 1
+          done
+          echo "${sent}"
+          grep -F '"event": "heartbeat"' <<<"${sent}" >/dev/null
+          grep -F '"event": "version_changed"' <<<"${sent}" >/dev/null
+          echo "the core logged heartbeat and version_changed as sent"
+
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red
       # run says which step and nothing else, and the machine is gone.
