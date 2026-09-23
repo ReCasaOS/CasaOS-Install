@@ -875,9 +875,21 @@ jobs:
               -H 'content-type: application/json' -H "X-GitHub-Event: $4" \
               -H "X-Hub-Signature-256: sha256=${signature}" --data-binary @"$2"
           }
+          # put_app <body>: the app's PUT, asked again while the five-minute check holds the
+          # app (409); prints the answer
+          put_app() {
+            local code
+            for _ in $(seq 1 30); do
+              code="$(curl -sS -o put.json -w '%{http_code}' -X PUT "${CASA_URL}/v2/app_management/git/gitcheck" \
+                -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' -d "$1")"
+              [[ "${code}" == 409 ]] || break
+              sleep 2
+            done
+            [[ "${code}" == 2* ]] || { echo "PUT $1: ${code} $(cat put.json)" >&2; return 1; }
+            cat put.json
+          }
 
-          answer="$(api -X PUT "${CASA_URL}/v2/app_management/git/gitcheck" -H 'content-type: application/json' \
-            -d '{"auto_deploy":false,"webhook_enabled":true}')"
+          answer="$(put_app '{"auto_deploy":false,"webhook_enabled":true}')"
           secret="$(jq -r '.data.webhook.secret' <<<"${answer}")"
           [[ "${secret}" =~ ^[0-9a-f]{64}$ ]] || { echo "the view holds no 64-hex secret"; exit 1; }
           echo "::add-mask::${secret}"
@@ -930,8 +942,7 @@ jobs:
           test "${code}" = 401
           test "$(app_view | jq -c '.data.webhook.last_delivery')" = "${delivery}"
 
-          answer="$(api -X PUT "${CASA_URL}/v2/app_management/git/gitcheck" -H 'content-type: application/json' \
-            -d '{"webhook_enabled":false}')"
+          answer="$(put_app '{"webhook_enabled":false}')"
           jq -e '.data.webhook.enabled == false and (.data.webhook | has("secret") | not)' <<<"${answer}" >/dev/null
           code="$(hook "${path}" push.json "${secret}" push)"
           echo "push to a disabled webhook: ${code}"
@@ -945,9 +956,14 @@ jobs:
           # AppManagement logged neither the secret nor any signature it was sent; the log
           # must exist, or the search below would prove nothing
           sudo test -s /var/log/casaos/app-management.log
-          if sudo grep -qF -e "${secret}" -f signatures.txt /var/log/casaos/app-management.log; then
-            echo "the AppManagement log holds the secret or a signature"; exit 1
-          fi
+          # 1 is "not found"; 0 is a leak, and 2 a search that did not run
+          rc=0
+          sudo grep -qF -e "${secret}" -f signatures.txt /var/log/casaos/app-management.log || rc=$?
+          case "${rc}" in
+            1) ;;
+            0) echo "the AppManagement log holds the secret or a signature"; exit 1 ;;
+            *) echo "the search of the AppManagement log failed (${rc})"; exit 1 ;;
+          esac
           echo "secret or signature in the AppManagement log: none"
 
       - name: A RAID array is one storage
