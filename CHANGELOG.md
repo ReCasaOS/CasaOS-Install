@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.1] - 2026-09-23
+
+Components: CasaOS `v0.4.60`, CasaOS-UI `v0.4.70`. Unchanged from v0.5.0: CasaOS-AppManagement `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **Anonymous usage statistics, on by default, and said so.** A box now tells the maintainers that it runs, which release it runs, how fast it updated, and on what kind of hardware: a `heartbeat` at most once a day and a `version_changed` after an install or an upgrade, sent by the core to PostHog Cloud in its EU region. The box is a random id made on first use; no IP address is kept, no name, no file, no app, no network detail. Every install and upgrade ends on a line saying whether statistics are on, the dashboard says it once after login, and its settings show the exact values this box would send. Three ways to turn them off: `--no-telemetry` (or `RECASAOS_TELEMETRY=0`) on the install command, the *Anonymous usage statistics* switch in the dashboard's settings, or `"enabled": false` in `/var/lib/casaos/telemetry.json`. Everything is listed in the README, under [Anonymous statistics](https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics).
+- **The installer logs the release it replaces** (`Previous release: v0.5.0`, `upstream` or `new`).
+
 ## [0.5.0] - 2026-09-22
 
 Components: CasaOS-LocalStorage `v0.4.44`. Unchanged from v0.4.99: CasaOS `v0.4.59`, CasaOS-AppManagement `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-Gateway `v0.4.30`, CasaOS-UI `v0.4.69`, Common `v0.4.27`, rclone `v1.75.1`.

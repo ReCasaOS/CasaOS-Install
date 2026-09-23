@@ -45,7 +45,7 @@ A ReCasaOS box sends anonymous statistics, so that the maintainers know how many
 | `model` | `Raspberry Pi 5 Model B Rev 1.0`, `ZimaBoard` | `/proc/device-tree/model`, else `/sys/class/dmi/id/product_name`; NUL and spaces trimmed, 64 characters max; `unknown` if empty or a known placeholder (`To Be Filled By O.E.M.`, `System Product Name`, `Default string`, `Not Specified`) |
 | `docker` | `28.3.1` | `GET /version` on `/var/run/docker.sock`, field `Version`; `unknown` if unavailable |
 | `cpu_cores` | `4` | `runtime.NumCPU()` |
-| `ram_gb` | `8` | `MemTotal` from `/proc/meminfo`, rounded to the nearest of 1, 2, 4, 8, 16, 32, 64, then `128+` |
+| `ram_gb` | `"8"` (a string, because of `128+`) | `MemTotal` from `/proc/meminfo`, rounded to the nearest of 1, 2, 4, 8, 16, 32, 64, then `128+` |
 | `disks` | `3` | entries of `/sys/block` whose resolved path is not under `/sys/devices/virtual/`, excluding `sr*` and `mmcblk*boot*` |
 | `storage_tb` | `4-8` | sum of those disks' sizes (`/sys/block/<d>/size` × 512 bytes), bucketed: `<0.5`, `0.5-1`, `1-2`, `2-4`, `4-8`, `8-16`, `16-32`, `32+` (TB, 10^12 bytes) |
 | `raid` | `true` | `/proc/mdstat` lists an active `md` array |
@@ -67,6 +67,10 @@ Any one of these; an upgrade never turns them back on.
 
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
+
+## What is in v0.5.1
+
+**Anonymous usage statistics, on by default, and said so.** A daily heartbeat and one event per upgrade tell the maintainers how many boxes run, which release, and on what hardware. No IP address, no name, no file, no app. The install says so, the dashboard says so once, and its settings show exactly what is sent. Turn them off with `--no-telemetry`, the dashboard switch, or by hand: see [Anonymous statistics](#anonymous-statistics).
 
 ## What is in v0.5.0
 
@@ -580,8 +584,8 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 
 | Component | Release |
 |---|---|
-| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.59 |
-| [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.69 |
+| [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.60 |
+| [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.70 |
 | [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.60 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |
 | [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.30 |
