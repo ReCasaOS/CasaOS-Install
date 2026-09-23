@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.3] - 2026-09-23
+
+Components: CasaOS-UI `v0.4.72`. Unchanged from v0.5.2: CasaOS `v0.4.60`, CasaOS-AppManagement `v0.4.61`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **In the dark theme, a switch that is on is the bright one.** Every settings switch read the other way round there: on drew a track barely lighter than the panel, while off stood out in mid-grey. Off is now a dim track under a light knob, and on a light track under a dark knob. The light theme is unchanged.
+
 ## [0.5.2] - 2026-09-23
 
 Components: CasaOS-AppManagement `v0.4.61`, CasaOS-UI `v0.4.71`. Unchanged from v0.5.1: CasaOS `v0.4.60`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
