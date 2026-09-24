@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.5] - 2026-09-24
+
+Components: CasaOS-UI `v0.4.74`. Unchanged from v0.5.4: CasaOS `v0.4.61`, CasaOS-AppManagement `v0.4.62`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **OneDrive, Google Drive and Dropbox as backup destinations.** The backend picker of a backup destination offers them, each with the fields rclone needs and a line saying how to get the token: a box has no browser to sign in with, so rclone signs in on a computer that has one (`rclone authorize`, or `rclone config` then `rclone config show` for OneDrive) and the token is pasted into the destination. The *Connect OneDrive* of the Files app still does not work: it needs an app registration the official builds carried and ours do not (ReCasaOS/CasaOS#7).
+
 ## [0.5.4] - 2026-09-23
 
 Components: CasaOS `v0.4.61`, CasaOS-AppManagement `v0.4.62`, CasaOS-UI `v0.4.73`. Unchanged from v0.5.3: CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
