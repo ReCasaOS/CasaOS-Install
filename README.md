@@ -68,6 +68,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.6
+
+**OneDrive, Google Drive and Dropbox destinations save.** Saving one from the dashboard no longer times out.
+
 ## What is in v0.5.5
 
 **Back up to OneDrive, Google Drive or Dropbox.** A backup destination can now be one of them: sign in with rclone on a computer that has a browser, and paste the token it gives.
@@ -602,7 +606,7 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 |---|---|
 | [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.61 |
 | [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.74 |
-| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.62 |
+| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.63 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |
 | [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.30 |
 | [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.28 |

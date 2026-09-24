@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.6] - 2026-09-24
+
+Components: CasaOS-AppManagement `v0.4.63`. Unchanged from v0.5.5: CasaOS `v0.4.61`, CasaOS-UI `v0.4.74`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A OneDrive, Google Drive or Dropbox destination can be saved from the dashboard.** Given the token `rclone authorize` printed on another computer, rclone's default was to refresh it, which starts its own sign-in and waits for a browser the box does not have: saving the destination timed out. The token is now kept as it is given (ReCasaOS/CasaOS#7).
+
 ## [0.5.5] - 2026-09-24
 
 Components: CasaOS-UI `v0.4.74`. Unchanged from v0.5.4: CasaOS `v0.4.61`, CasaOS-AppManagement `v0.4.62`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
