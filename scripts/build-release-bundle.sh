@@ -31,8 +31,9 @@
 #   linux-zz-casaos-compat-overlay-<tag>.tar.gz
 #                         the setup scripts of the six components, plus the
 #                         release marker read by the in-app updater
-#   version.json          what the in-app updater polls: the tag and the
-#                         CHANGELOG.md section of this release
+#   version.json          what the in-app updater polls: the tag, when this
+#                         bundle was built, and the CHANGELOG.md section of
+#                         this release
 #   release-notes.md      that same section, the body of the GitHub release
 #   components.lock       the exact commits and tags this release was cut from
 #   checksums.txt         digests of everything above
@@ -299,8 +300,12 @@ write_version_manifest() {
     notes="$(release_notes)"
     printf '%s\n' "${notes}" >"${OUTPUT_DIR}/release-notes.md"
 
-    printf '{\n  "version": "%s",\n  "change_log": %s\n}\n' \
+    # published_at is when this bundle was built, in UTC: a box that updates
+    # itself installs a release only once it is 48 hours old, and never one
+    # without it. Cores older than automatic updates ignore the key.
+    printf '{\n  "version": "%s",\n  "published_at": "%s",\n  "change_log": %s\n}\n' \
         "${RELEASE_TAG}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "$(json_string "${notes}"$'\n\n'"https://github.com/${GITHUB_OWNER}/CasaOS-Install/releases/tag/${RELEASE_TAG}")" \
         >"${OUTPUT_DIR}/version.json"
 }
