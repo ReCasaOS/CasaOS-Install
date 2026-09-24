@@ -1272,6 +1272,131 @@ jobs:
           grep -F '"event": "version_changed"' <<<"${sent}" >/dev/null
           echo "the core logged heartbeat and version_changed as sent"
 
+      # An automatic update is the dashboard's update, started by the core at
+      # night once a release is two days old. Here the night is now and the
+      # releases are fake: a server on this runner answers a version.json and an
+      # installer, and the core is pointed at them with its test overrides and
+      # checks every ten seconds. The feature is off after the install. Turned on
+      # with a window around now, v99.0.0, published three days ago, whose
+      # installer only writes its version to fork-release, has to go through
+      # "updating" to installed, run in the button's unit and log. Then v99.0.1,
+      # whose installer fails: one attempt per night, so the window is moved to
+      # open after the first attempt, and it has to end failed with nothing
+      # installed. fork-release, the feature and the core's environment are put
+      # back as they were.
+      - name: Automatic update
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          view() { api "${CASA_URL}/v1/sys/autoupdate" | jq -c '.data'; }
+          base=http://127.0.0.1:18098
+          dropin=/etc/systemd/system/casaos.service.d/autoupdate-check.conf
+          # offer <version>: the server advertises <version>, published three days ago
+          offer() {
+            jq -n --arg v "$1" --arg p "$(date -u -d '-3 days' +%Y-%m-%dT%H:%M:%SZ)" \
+              '{version: $v, published_at: $p, change_log: "install check"}' > autoupdate-served/version.json
+          }
+          # window <start> <end>: turns the feature on with that window; prints the view
+          window() {
+            api -X PUT "${CASA_URL}/v1/sys/autoupdate" -H 'content-type: application/json' \
+              -d "{\"enabled\":true,\"window_start\":\"$1\",\"window_end\":\"$2\"}" | jq -c '.data'
+          }
+          restart_core() {
+            sudo systemctl restart casaos.service
+            for _ in $(seq 1 30); do
+              api -o /dev/null "${CASA_URL}/v1/sys/autoupdate" && return 0
+              sleep 2
+            done
+            return 1
+          }
+          # settled <label> <jq condition>: polls the view into ${state}, up to three
+          # minutes, until the condition holds; notes whether it ever said "updating"
+          updating_seen=false
+          settled() {
+            for _ in $(seq 1 180); do
+              state="$(view)"
+              [ "$(jq -r '.state' <<<"${state}")" = updating ] && updating_seen=true
+              jq -e "$2" <<<"${state}" >/dev/null && { echo "$1: ${state}"; return 0; }
+              sleep 1
+            done
+            echo "$1, never reached: ${state}"
+            return 1
+          }
+
+          mkdir -p autoupdate-served
+          cat > autoupdate-served/install.sh <<'EOF'
+          echo "install check: installing v99.0.0"
+          echo v99.0.0 > /var/lib/casaos/fork-release
+          EOF
+          offer v99.0.0
+          python3 -m http.server 18098 --bind 127.0.0.1 --directory autoupdate-served > autoupdate-server.log 2>&1 &
+          server=$!
+          # the core is stopped while the feature's state is removed: a missing file is
+          # the defaults, off
+          trap '
+            kill "${server}" 2>/dev/null || true
+            echo "::group::automatic update"
+            view || true
+            sudo cat /var/log/casaos/upgrade.log || true
+            cat autoupdate-server.log || true
+            sudo journalctl -u casaos.service --no-pager -o cat -n 40 || true
+            echo "::endgroup::"
+            sudo systemctl stop casaos.service || true
+            sudo rm -f "${dropin}" /var/lib/casaos/autoupdate.json || true
+            echo "${CASAOS_RELEASE_TAG}" | sudo tee /var/lib/casaos/fork-release >/dev/null || true
+            sudo systemctl daemon-reload || true
+            sudo systemctl start casaos.service || true' EXIT
+          for _ in $(seq 1 20); do
+            curl -fsS -o /dev/null "${base}/version.json" && break
+            sleep 0.5
+          done
+          curl -fsS "${base}/version.json" | jq -c .
+
+          sudo mkdir -p /etc/systemd/system/casaos.service.d
+          printf '[Service]\nEnvironment=CASAOS_AUTOUPDATE_START_DELAY=0s\nEnvironment=CASAOS_AUTOUPDATE_INTERVAL=10s\nEnvironment=CASAOS_AUTOUPDATE_VERSION_URL=%s\nEnvironment=CASAOS_AUTOUPDATE_INSTALLER_URL=%s\n' \
+            "${base}/version.json" "${base}/install.sh" | sudo tee "${dropin}"
+          sudo systemctl daemon-reload
+          restart_core
+          pid="$(systemctl show -p MainPID --value casaos.service)"
+          environ="$(sudo cat "/proc/${pid}/environ" | tr '\0' '\n')"
+          grep -Fx "CASAOS_AUTOUPDATE_VERSION_URL=${base}/version.json" <<<"${environ}"
+          grep -Fx "CASAOS_AUTOUPDATE_INSTALLER_URL=${base}/install.sh" <<<"${environ}"
+
+          state="$(view)"
+          echo "after the install: ${state}"
+          jq -e '.enabled == false and .state == "off" and .last == null' <<<"${state}" >/dev/null
+
+          start="$(date -d '-1 hour' +%H:%M)"
+          end="$(date -d '+2 hours' +%H:%M)"
+          state="$(window "${start}" "${end}")"
+          echo "on, from ${start} to ${end}: ${state}"
+          jq -e --arg s "${start}" --arg e "${end}" '.enabled == true and .window.start == $s and .window.end == $e' <<<"${state}" >/dev/null
+          settled "v99.0.0" '.last.version == "v99.0.0" and .last.result == "succeeded"'
+          echo "updating seen: ${updating_seen}"
+          test "${updating_seen}" = true
+          jq -e '.state == "up_to_date"' <<<"${state}" >/dev/null
+          test "$(cat /var/lib/casaos/fork-release)" = v99.0.0
+          sudo grep -Fx 'install check: installing v99.0.0' /var/log/casaos/upgrade.log
+
+          # the window now opens in a later minute than the first attempt's
+          first="$(date -d "$(jq -r '.last.started_at' <<<"${state}")" +%H:%M)"
+          while [ "$(date +%H:%M)" = "${first}" ]; do sleep 1; done
+          cat > autoupdate-served/install.sh <<'EOF'
+          echo "install check: v99.0.1 fails on purpose"
+          exit 1
+          EOF
+          offer v99.0.1
+          start="$(date +%H:%M)"
+          end="$(date -d '+2 hours' +%H:%M)"
+          state="$(window "${start}" "${end}")"
+          echo "moved, from ${start} to ${end}: ${state}"
+          # the core keeps the version.json it read for twenty minutes; a restart forgets it
+          restart_core
+          settled "v99.0.1" '.last.version == "v99.0.1" and .last.result == "failed"'
+          test "$(cat /var/lib/casaos/fork-release)" = v99.0.0
+          sudo grep -Fx 'install check: v99.0.1 fails on purpose' /var/log/casaos/upgrade.log
+          echo "v99.0.0 installed itself, and v99.0.1 failed without installing anything"
+
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red
       # run says which step and nothing else, and the machine is gone.
