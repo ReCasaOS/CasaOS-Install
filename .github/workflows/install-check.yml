@@ -1278,12 +1278,16 @@ jobs:
       # installer, and the core is pointed at them with its test overrides and
       # checks every ten seconds. The feature is off after the install. Turned on
       # with a window around now, v99.0.0, published three days ago, whose
-      # installer only writes its version to fork-release, has to go through
-      # "updating" to installed, run in the button's unit and log. Then v99.0.1,
-      # whose installer fails: one attempt per night, so the window is moved to
-      # open after the first attempt, and it has to end failed with nothing
-      # installed. fork-release, the feature and the core's environment are put
-      # back as they were.
+      # installer only writes its version to fork-release and prints install.sh's
+      # closing line, has to go through "updating" to installed, run in the
+      # button's unit and log. Then v99.0.1, whose installer fails the way
+      # install.sh fails after its copy onto /: fork-release holds v99.0.1
+      # through at least one check of the core while the unit still runs, then
+      # the previous tag goes back and the log says the upgrade failed. One
+      # attempt per night, so the window is moved to open after the first
+      # attempt, and it has to end failed: a core that counts fork-release
+      # before the unit is done calls it succeeded. fork-release, the feature
+      # and the core's environment are put back as they were.
       - name: Automatic update
         run: |
           set -euo pipefail
@@ -1327,6 +1331,7 @@ jobs:
           cat > autoupdate-served/install.sh <<'EOF'
           echo "install check: installing v99.0.0"
           echo v99.0.0 > /var/lib/casaos/fork-release
+          echo "[  OK  ] CasaOS upgrade successfully  "
           EOF
           offer v99.0.0
           python3 -m http.server 18098 --bind 127.0.0.1 --directory autoupdate-served > autoupdate-server.log 2>&1 &
@@ -1383,6 +1388,10 @@ jobs:
           while [ "$(date +%H:%M)" = "${first}" ]; do sleep 1; done
           cat > autoupdate-served/install.sh <<'EOF'
           echo "install check: v99.0.1 fails on purpose"
+          echo v99.0.1 > /var/lib/casaos/fork-release
+          sleep 15
+          echo v99.0.0 > /var/lib/casaos/fork-release
+          echo "CasaOS upgrade failed"
           exit 1
           EOF
           offer v99.0.1
@@ -1395,7 +1404,7 @@ jobs:
           settled "v99.0.1" '.last.version == "v99.0.1" and .last.result == "failed"'
           test "$(cat /var/lib/casaos/fork-release)" = v99.0.0
           sudo grep -Fx 'install check: v99.0.1 fails on purpose' /var/log/casaos/upgrade.log
-          echo "v99.0.0 installed itself, and v99.0.1 failed without installing anything"
+          echo "v99.0.0 installed itself, and v99.0.1, failed after its copy, was counted failed"
 
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red
