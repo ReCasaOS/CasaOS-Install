@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.7] - 2026-09-24
+
+Components: CasaOS-AppManagement `v0.4.64`. Unchanged from v0.5.6: CasaOS `v0.4.61`, CasaOS-UI `v0.4.74`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **AdGuard Home and Pi-hole are no longer stopped for their own backup.** A backup that holds its app still stopped the DNS server for the length of the copy: the whole network lost its names meanwhile, and so did the box when it used that server, so a copy to a cloud destination failed at its first lookup (ReCasaOS/CasaOS#7). An app that publishes port 53, or AdGuard Home or Pi-hole on the host's network, is now copied running, and the History says it was not stopped.
+
 ## [0.5.6] - 2026-09-24
 
 Components: CasaOS-AppManagement `v0.4.63`. Unchanged from v0.5.5: CasaOS `v0.4.61`, CasaOS-UI `v0.4.74`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
