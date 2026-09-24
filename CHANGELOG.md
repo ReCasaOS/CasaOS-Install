@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.8] - 2026-09-24
+
+Components: CasaOS `v0.4.62`, CasaOS-AppManagement `v0.4.65`, CasaOS-UI `v0.4.75`. Unchanged from v0.5.7: CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **Automatic updates, if you want them.** Turn on *Update automatically* in the dashboard's settings and the box installs new ReCasaOS releases by itself: at night, inside a window you choose (03:00 to 05:00 by default, the box's time), once a release is two days old, and never while a backup, a restore or another app operation runs. It is the same update the button starts. A failed update is tried once more the next night; after a second failure the box waits for you (*Try again*) or for a newer release. The dashboard says what it is waiting for, and tells you once when it has updated itself. Off by default. Releases carry their publication date from this one on, so the first automatic update will be to the release after v0.5.8.
+
+### Fixed
+
+- **An update that fails after copying its files no longer claims the new version.** The installer puts the previous release name back, so the dashboard and the automatic updates see the release the box really runs.
+
 ## [0.5.7] - 2026-09-24
 
 Components: CasaOS-AppManagement `v0.4.64`. Unchanged from v0.5.6: CasaOS `v0.4.61`, CasaOS-UI `v0.4.74`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
