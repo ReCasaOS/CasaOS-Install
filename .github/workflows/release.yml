@@ -96,6 +96,18 @@ jobs:
           GITHUB_OWNER: ${{ github.repository_owner }}
         run: scripts/build-release-bundle.sh dist
 
+      # Nothing else reads the published version.json before boxes do, and a
+      # box that updates itself never installs a release whose published_at is
+      # missing or unreadable: it would silently stop updating. It has to name
+      # this release and say, in UTC, that it was built within the hour.
+      - name: Check version.json
+        run: |
+          set -euo pipefail
+          jq 'del(.change_log)' dist/version.json
+          jq -e --arg t "${CASAOS_RELEASE_TAG}" \
+            '(.published_at | fromdateiso8601) as $p | .version == $t and $p <= now and $p > now - 3600' \
+            dist/version.json
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
