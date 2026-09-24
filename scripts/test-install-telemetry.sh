@@ -2,9 +2,10 @@
 # shellcheck disable=SC2016,SC2034 # install.sh's text is grepped literally; the globals are read by the functions copied out of it
 #
 # Checks the anonymous-statistics parts of install.sh without installing
-# anything: each function is copied out of install.sh as it stands and run
-# against a temporary directory standing in for /var/lib/casaos, and the lines
-# that call them are checked to be where the install needs them.
+# anything, and the fork-release marker they read: each function is copied out
+# of install.sh as it stands and run against a temporary directory standing in
+# for /var/lib/casaos, and the lines that call them are checked to be where the
+# install needs them.
 #
 #   bash scripts/test-install-telemetry.sh
 #
@@ -33,7 +34,7 @@ tr -d '\r' <"${ROOT}/install.sh" >"${INSTALL_SH}"
 bash -n "${INSTALL_SH}" || fail "install.sh does not parse"
 
 # The functions under test, as install.sh defines them.
-FUNCTIONS=(Previous_Release Write_Telemetry_Markers Telemetry_Notice)
+FUNCTIONS=(Previous_Release Write_Telemetry_Markers Telemetry_Notice onExit)
 for f in "${FUNCTIONS[@]}"; do
     eval "$(sed -n "/^${f}() {\$/,/^}\$/p" "${INSTALL_SH}")"
     declare -F "${f}" >/dev/null || fail "install.sh defines no ${f}()"
@@ -133,6 +134,51 @@ copy="$(line_of -F 'cp -rf "${SYSROOT_DIR}"/* /')"
 ((stop < call && call < copy)) ||
     fail "Write_Telemetry_Markers is called at line ${call}, not between the services' stop (line ${stop}) and the copy onto / (line ${copy})"
 echo "ok: install.sh writes the markers with the services stopped, before the copy onto /"
+
+# The copy onto / writes this release's tag into fork-release, and the run can
+# still fail after it (setup scripts, downloads, the services' check). Then
+# onExit puts the previous one back, or none when there was none: the update
+# is still offered, and the core counts an automatic one as failed and tries
+# it again. A run that got through, or failed before the copy, leaves it be.
+save="$(line_of -F 'PREVIOUS_FORK_RELEASE="$(')"
+flag="$(line_of -xF '    FORK_RELEASE_REPLACED=1')"
+((call < save && flag == save + 1 && flag < copy)) ||
+    fail "fork-release is saved at line ${save} and flagged at ${flag}, not just before the copy onto / (line ${copy})"
+reset saved
+mkdir -p "${CASA_STATE_DIR}"
+printf 'v0.5.7\n' >"${CASA_STATE_DIR}/fork-release"
+eval "$(sed -n "${save}p" "${INSTALL_SH}")"
+[[ "${PREVIOUS_FORK_RELEASE}" == v0.5.7 ]] || fail "fork-release v0.5.7 was saved as '${PREVIOUS_FORK_RELEASE}'"
+reset unsaved
+eval "$(sed -n "${save}p" "${INSTALL_SH}")"
+[[ -z "${PREVIOUS_FORK_RELEASE}" ]] || fail "no fork-release was saved as '${PREVIOUS_FORK_RELEASE}'"
+
+# exit_after <INSTALL_COMPLETED> <FORK_RELEASE_REPLACED> <PREVIOUS_FORK_RELEASE>:
+# fork-release holds v0.5.8, the copy's, and the run exits 1; in a subshell, as
+# onExit turns errexit off
+exit_after() {
+    mkdir -p "${CASA_STATE_DIR}"
+    printf 'v0.5.8\n' >"${CASA_STATE_DIR}/fork-release"
+    (
+        STOPPED_CASA_SERVICES=()
+        INSTALL_COMPLETED="$1" FORK_RELEASE_REPLACED="$2" PREVIOUS_FORK_RELEASE="$3"
+        onExit 1
+    )
+}
+reset restored
+out="$(exit_after 0 1 v0.5.7)"
+[[ "$(cat "${CASA_STATE_DIR}/fork-release")" == v0.5.7 ]] || fail "a failure after the copy left fork-release $(cat "${CASA_STATE_DIR}/fork-release")"
+[[ "${out}" == *"CasaOS upgrade failed"* ]] || fail "a failure after the copy did not log 'CasaOS upgrade failed': ${out}"
+reset removed
+exit_after 0 1 "" >/dev/null
+[[ ! -e "${CASA_STATE_DIR}/fork-release" ]] || fail "a failure after the copy, with no fork-release before it, left one"
+reset completed
+exit_after 1 1 v0.5.7 >/dev/null
+[[ "$(cat "${CASA_STATE_DIR}/fork-release")" == v0.5.8 ]] || fail "a failure after the services' check changed fork-release"
+reset before-copy
+exit_after 0 0 "" >/dev/null
+[[ "$(cat "${CASA_STATE_DIR}/fork-release")" == v0.5.8 ]] || fail "a failure before the copy changed fork-release"
+echo "ok: a run that fails after the copy onto / puts the previous fork-release back"
 
 # --no-telemetry or RECASAOS_TELEMETRY=0 (both set NO_TELEMETRY): telemetry-off,
 # root's alone. Without either, an earlier choice is left exactly as it is.

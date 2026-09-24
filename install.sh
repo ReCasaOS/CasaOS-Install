@@ -176,6 +176,9 @@ if [[ "${RECASAOS_TELEMETRY:-}" == "0" ]]; then
 fi
 STOPPED_CASA_SERVICES=()
 INSTALL_COMPLETED=0
+# fork-release as it was before the copy onto / replaced it (see onExit)
+PREVIOUS_FORK_RELEASE=""
+FORK_RELEASE_REPLACED=0
 
 trap 'onCtrlC' INT
 trap 'onExit $?' EXIT
@@ -193,6 +196,18 @@ onExit() {
     fi
 
     set +e
+    # The copy onto / wrote this release's tag into fork-release, but the run
+    # did not get through the services' check: the previous tag goes back, or
+    # none when there was none, before any service restarts. The update is
+    # still offered, and the core counts an automatic one as failed.
+    if ((INSTALL_COMPLETED == 0 && FORK_RELEASE_REPLACED)); then
+        if [[ -n "${PREVIOUS_FORK_RELEASE}" ]]; then
+            printf '%s\n' "${PREVIOUS_FORK_RELEASE}" | ${sudo_cmd} tee "${CASA_STATE_DIR}/fork-release" >/dev/null
+        else
+            ${sudo_cmd} rm -f "${CASA_STATE_DIR}/fork-release"
+        fi
+    fi
+
     if ((INSTALL_COMPLETED == 0 && ${#STOPPED_CASA_SERVICES[@]} > 0)); then
         echo "CasaOS installation failed; restarting services that were stopped."
         for service in "${STOPPED_CASA_SERVICES[@]}"; do
@@ -948,6 +963,10 @@ DownloadAndInstallCasaOS() {
     GreyStart
     find "${SYSROOT_DIR}" -type f | ${sudo_cmd} cut -c ${#SYSROOT_DIR}- | ${sudo_cmd} cut -c 2- | ${sudo_cmd} tee "${MANIFEST_FILE}" >/dev/null || Show 1 "Failed to create manifest file"
 
+    # The copy carries the overlay's fork-release: from here on, a failure
+    # puts the previous one back (onExit)
+    PREVIOUS_FORK_RELEASE="$(cat "${CASA_STATE_DIR}/fork-release" 2>/dev/null || true)"
+    FORK_RELEASE_REPLACED=1
     ${sudo_cmd} cp -rf "${SYSROOT_DIR}"/* / || Show 1 "Failed to install CasaOS"
     ColorReset
 
