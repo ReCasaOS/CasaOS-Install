@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.11] - 2026-09-25
+
+Components: CasaOS-MessageBus `v0.4.29`. Unchanged from v0.5.10: CasaOS `v0.4.63`, CasaOS-AppManagement `v0.4.67`, CasaOS-UI `v0.4.76`, CasaOS-UserService `v0.4.30`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **Push alerts stayed silent after the core restarted.** When several listeners left the message bus at once, the bus could lock itself up: every listener that came after it was connected but never received anything. The alerts of v0.5.10 were the first to notice, as the core listens again each time it restarts. The bus also no longer drops an event that arrives while it is busy with another.
+
 ## [0.5.10] - 2026-09-25
 
 Components: CasaOS `v0.4.63`, CasaOS-AppManagement `v0.4.67`, CasaOS-UI `v0.4.76`. Unchanged from v0.5.9: CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
