@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.9] - 2026-09-25
+
+Components: CasaOS-AppManagement `v0.4.66`. Unchanged from v0.5.8: CasaOS `v0.4.62`, CasaOS-UI `v0.4.75`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **Backup schedules save again.** Once a schedule had run, saving the list failed with `readOnly property "last_run" in request`: the dashboard sends the schedules back as it read them, and the request validator of the newer OpenAPI library this release line moved to refuses such fields. The server ignores them anyway and keeps its own, so the validator now lets them through (ReCasaOS/CasaOS#7).
+
 ## [0.5.8] - 2026-09-24
 
 Components: CasaOS `v0.4.62`, CasaOS-AppManagement `v0.4.65`, CasaOS-UI `v0.4.75`. Unchanged from v0.5.7: CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

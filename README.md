@@ -68,6 +68,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.9
+
+**Backup schedules save again.** Saving the schedules no longer fails once one of them has run.
+
 ## What is in v0.5.8
 
 **Automatic updates, opt-in.** The box can install new releases by itself, at night, two days after they come out, never during a backup or an app operation. Turn it on in the dashboard's settings.
@@ -614,7 +618,7 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 |---|---|
 | [CasaOS](https://github.com/ReCasaOS/CasaOS) | v0.4.62 |
 | [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.75 |
-| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.65 |
+| [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.66 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |
 | [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.30 |
 | [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.28 |
