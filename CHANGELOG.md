@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.12] - 2026-09-25
+
+Components: CasaOS-UI `v0.4.77`. Unchanged from v0.5.11: CasaOS `v0.4.63`, CasaOS-AppManagement `v0.4.67`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Changed
+
+- **A tidier settings panel.** The settings are grouped under Display, System and Updates, every row lines up, and the panel is as wide as it needs to be instead of most of the screen. It scrolls when the window is short, and fits a phone.
+- **Dialogs that look and behave alike.** Backups, alerts, updates, system packages, apps from git, the Web UI port, app launching and the wallpaper now share one layout: buttons that no longer touch each other, the main action last, errors as short messages, a loading indicator that shows, and tabs that read clearly in the dark theme. Every text passes the contrast AA level in both themes.
+
+### Fixed
+
+- An error no longer shows the "nothing here" message at the same time (system packages, backups, app updates).
+- The dialog after an update can be closed with the keyboard.
+- The browser no longer fills the dashboard password into a backup's encryption password.
+- The port range message is translated.
+
 ## [0.5.11] - 2026-09-25
 
 Components: CasaOS-MessageBus `v0.4.29`. Unchanged from v0.5.10: CasaOS `v0.4.63`, CasaOS-AppManagement `v0.4.67`, CasaOS-UI `v0.4.76`, CasaOS-UserService `v0.4.30`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
