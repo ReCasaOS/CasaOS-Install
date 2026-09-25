@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.10] - 2026-09-25
+
+Components: CasaOS `v0.4.63`, CasaOS-AppManagement `v0.4.67`, CasaOS-UI `v0.4.76`. Unchanged from v0.5.9: CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **Push alerts.** Add a channel under *Alerts* in the dashboard's settings (ntfy, Telegram and e-mail have guided forms; Discord, Gotify, Pushover, Matrix and the other Shoutrrr services take a URL) and the box tells you when something needs you: a backup or a restore that failed; a disk whose SMART check fails, a storage above a threshold (90 % by default), a disk that disappeared; an automatic update that succeeded, failed or paused, or a new release when automatic updates are off; an app whose install, update, start or git deployment failed, a container that crashed, went unhealthy or keeps restarting. The same alert is not repeated for six hours, and a message says when a problem is resolved. A channel's address and its tokens stay on the box: the dashboard never shows them back. Nothing is sent until you add a channel.
+
 ## [0.5.9] - 2026-09-25
 
 Components: CasaOS-AppManagement `v0.4.66`. Unchanged from v0.5.8: CasaOS `v0.4.62`, CasaOS-UI `v0.4.75`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.28`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
