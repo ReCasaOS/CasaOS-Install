@@ -1411,30 +1411,47 @@ jobs:
       # gives a URL back. A server on this runner plays ntfy: it records every POST,
       # with its path, and answers the way ntfy does; the channel is a ntfy:// URL
       # pointing at it with ?scheme=http. The channel is added through the API, and its
-      # test has to arrive at the topic. Then two failures nobody is watching: a backup
-      # to a destination that cannot be written, and an app whose container exits with
-      # code 1. Each has to arrive as an alert of its category within a bounded wait.
-      # The channel, the app, the destination and the server are removed afterwards.
+      # test has to arrive at the topic. Two more channels fail: one on a port nothing
+      # listens on, whose test has to answer its error, and one whose server takes the
+      # message and never answers. A failed send's error names the URL in Shoutrrr's
+      # words, so no answer and no line the core logs may carry any channel's topic.
+      # Then two failures nobody is watching: a backup to a destination that cannot be
+      # written, while the silent channel is still listed, and an app whose container
+      # exits with code 1, once the channel is alone again and given by its id only.
+      # Each has to arrive as an alert of its category within a bounded wait. The
+      # channels, the app, the destination and the servers are removed afterwards.
       - name: Alerts
         run: |
           set -euo pipefail
+          since="$(date +%s)"
           api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
           topic=recasaos-install-check
-          # arrived <n> <seconds> <jq condition>: waits up to <seconds> for a message to the
-          # topic, after the first <n> requests recorded, whose title and body together meet
-          # <condition>
+          closed=recasaos-install-check-closed
+          hung=recasaos-install-check-hung
+          # arrived <n> <seconds> <jq condition> [topic]: waits up to <seconds> for a message
+          # to <topic>, the working channel's by default, after the first <n> requests
+          # recorded, whose title and body together meet <condition>
           arrived() {
+            local to="${4:-${topic}}"
             for _ in $(seq 1 "$2"); do
-              jq -s -e --argjson n "$1" --arg p "/${topic}" \
+              jq -s -e --argjson n "$1" --arg p "/${to}" \
                 '.[$n:] | map(select(.path == $p) | .title + " " + .body) | any(.[]; '"$3"')' alerts.jsonl >/dev/null && return 0
               sleep 1
             done
-            echo "nothing arrived at /${topic} for: $3"
+            echo "nothing arrived at /${to} for: $3"
             return 1
+          }
+          # unrevealed <what> <text>: fails when <text> names a channel's topic, the part
+          # of its URL that is the secret
+          unrevealed() {
+            if grep -qF -e "${topic}" -e "${closed}" -e "${hung}" <<<"$2"; then
+              echo "$1 gives a channel's URL away"
+              return 1
+            fi
           }
 
           cat > ntfy.py <<'PY'
-          import http.server, json, sys, urllib.parse
+          import http.server, json, sys, time, urllib.parse
 
           class Ntfy(http.server.BaseHTTPRequestHandler):
               def do_POST(self):
@@ -1444,6 +1461,10 @@ jobs:
                   record = {"path": urllib.parse.urlsplit(self.path).path, "title": title, "body": body.decode("utf-8", "replace")}
                   with open(sys.argv[2], "a") as out:
                       out.write(json.dumps(record) + "\n")
+                  # "hang": the message is taken, and the answer never comes
+                  if sys.argv[3:] == ["hang"]:
+                      time.sleep(3600)
+                      return
                   # what ntfy answers a publish with: Shoutrrr reads the answer as JSON
                   answer = json.dumps({"id": "installcheck", "time": 0, "event": "message", "topic": record["path"].strip("/")}).encode()
                   self.send_response(200)
@@ -1452,16 +1473,18 @@ jobs:
                   self.end_headers()
                   self.wfile.write(answer)
 
-          http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Ntfy).serve_forever()
+          http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Ntfy).serve_forever()
           PY
           : > alerts.jsonl
           python3 ntfy.py 18097 alerts.jsonl > ntfy.log 2>&1 &
           server=$!
+          python3 ntfy.py 18095 alerts.jsonl hang > ntfy-hung.log 2>&1 &
+          hung_server=$!
           trap '
-            kill "${server}" 2>/dev/null || true
+            kill "${server}" "${hung_server}" 2>/dev/null || true
             echo "::group::alerts"
             api "${CASA_URL}/v1/sys/alerts" | jq -c .data || true
-            cat alerts.jsonl ntfy.log || true
+            cat alerts.jsonl ntfy.log ntfy-hung.log || true
             api "${CASA_URL}/v2/app_management/backup/runs" | jq -c "[.data // [] | .[] | select(.destination == \"alerts-broken\") | {app, started_at, error}]" || true
             docker ps -a --filter name=crashcheck --format "{{.Names}} {{.Status}}" || true
             sudo journalctl -u casaos.service --no-pager -o cat -n 40 || true
@@ -1470,9 +1493,11 @@ jobs:
             api -X DELETE "${CASA_URL}/v2/app_management/compose/crashcheck?delete_config_folder=true" >/dev/null || true
             api -X DELETE "${CASA_URL}/v2/app_management/backup/destinations/alerts-broken" >/dev/null || true
             sudo rm -f /var/tmp/casaos-alerts-broken || true' EXIT
-          for _ in $(seq 1 20); do
-            curl -s -o /dev/null http://127.0.0.1:18097/ && break
-            sleep 0.5
+          for port in 18097 18095; do
+            for _ in $(seq 1 20); do
+              curl -s -o /dev/null "http://127.0.0.1:${port}/" && break
+              sleep 0.5
+            done
           done
           # the step above left the core restarting
           for _ in $(seq 1 30); do
@@ -1482,25 +1507,56 @@ jobs:
 
           # the channel: listed by name, service and host, its URL nowhere in the answer,
           # and the file that holds it root's alone
-          api -X PUT "${CASA_URL}/v1/sys/alerts" -H 'content-type: application/json' \
-            -d "$(jq -nc --arg url "ntfy://127.0.0.1:18097/${topic}?scheme=http" '{channels: [{name: "Install check", url: $url}]}')" | jq -c '.data'
+          answer="$(api -X PUT "${CASA_URL}/v1/sys/alerts" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg url "ntfy://127.0.0.1:18097/${topic}?scheme=http" '{channels: [{name: "Install check", url: $url}]}')")"
+          echo "put: $(jq -c '.data' <<<"${answer}")"
+          unrevealed "the PUT answer" "${answer}"
           view="$(api "${CASA_URL}/v1/sys/alerts")"
           echo "alerts: $(jq -c '.data' <<<"${view}")"
           jq -e '.data.channels | length == 1 and .[0].name == "Install check" and .[0].service == "ntfy" and (.[0].host | startswith("127.0.0.1"))' <<<"${view}" >/dev/null
-          if grep -qF "${topic}" <<<"${view}"; then echo "the answer gives the channel's URL away"; exit 1; fi
+          unrevealed "the view" "${view}"
           test "$(sudo stat -c '%a %U' /var/lib/casaos/alerts.json)" = "600 root"
           id="$(jq -r '.data.channels[0].id' <<<"${view}")"
           answer="$(api -X POST "${CASA_URL}/v1/sys/alerts/test" -H 'content-type: application/json' \
             -d "$(jq -nc --arg id "${id}" '{channel_id: $id}')")"
           echo "test: $(jq -c '.data' <<<"${answer}")"
           jq -e --arg id "${id}" 'any(.data[]; .id == $id and .ok == true)' <<<"${answer}" >/dev/null
+          unrevealed "the test answer" "${answer}"
           arrived 0 15 true
           echo "the test message arrived"
 
+          # Two channels that fail, the silent one first, and the working one given by
+          # its id alone: it keeps the URL it has. The closed one's test answers its
+          # error, kept as the last failure, and neither says where it was sent.
+          answer="$(api -X PUT "${CASA_URL}/v1/sys/alerts" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg id "${id}" \
+              --arg hung "ntfy://127.0.0.1:18095/${hung}?scheme=http" \
+              --arg closed "ntfy://127.0.0.1:18096/${closed}?scheme=http" \
+              '{channels: [{name: "Hung", url: $hung}, {id: $id, name: "Install check"}, {name: "Closed", url: $closed}]}')")"
+          echo "put: $(jq -c '.data' <<<"${answer}")"
+          unrevealed "the PUT answer" "${answer}"
+          view="$(api "${CASA_URL}/v1/sys/alerts")"
+          echo "alerts: $(jq -c '.data' <<<"${view}")"
+          jq -e --arg id "${id}" '.data.channels | length == 3 and any(.[]; .id == $id and .name == "Install check" and (.host | startswith("127.0.0.1")))' <<<"${view}" >/dev/null
+          closed_id="$(jq -r '.data.channels[] | select(.name == "Closed") | .id' <<<"${view}")"
+          test -n "${closed_id}"
+          answer="$(api -X POST "${CASA_URL}/v1/sys/alerts/test" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg id "${closed_id}" '{channel_id: $id}')")"
+          echo "test: $(jq -c '.data' <<<"${answer}")"
+          jq -e --arg id "${closed_id}" 'any(.data[]; .id == $id and .ok == false and (.error | type == "string" and length > 0))' <<<"${answer}" >/dev/null
+          unrevealed "the test answer" "${answer}"
+          view="$(api "${CASA_URL}/v1/sys/alerts")"
+          echo "alerts: $(jq -c '.data' <<<"${view}")"
+          jq -e '.data.last_failure | .channel == "Closed" and (.error | type == "string" and length > 0)' <<<"${view}" >/dev/null
+          unrevealed "the view" "${view}"
+          echo "the closed channel's test failed, and said so without its URL"
+
           # A backup to a destination whose directory cannot be made, its parent being a
-          # file, whatever rclone runs as. The step above restarted the core, which
-          # subscribes to the message bus on its own time: a failure it may not have been
-          # listening for yet is asked for again, three times at most.
+          # file, whatever rclone runs as, while the silent channel holds its copy for 15
+          # seconds: the working channel's still arrives within the wait. The step above
+          # restarted the core, which subscribes to the message bus on its own time: a
+          # failure it may not have been listening for yet is asked for again, three
+          # times at most.
           sudo touch /var/tmp/casaos-alerts-broken
           api -X PUT "${CASA_URL}/v2/app_management/backup/destinations/alerts-broken" -H 'content-type: application/json' \
             -d '{"backend":"alias","parameters":{"remote":"/var/tmp/casaos-alerts-broken/backups"}}' | jq -c .
@@ -1511,7 +1567,15 @@ jobs:
             arrived "${n}" 40 'test("backups"; "i") and test("smoke"; "i")' && break
             test "${attempt}" -lt 3
           done
-          echo "the failed backup arrived as a backups alert"
+          arrived "${n}" 15 'test("backups"; "i") and test("smoke"; "i")' "${hung}"
+          echo "the failed backup arrived as a backups alert, at the silent channel too"
+
+          # the working channel alone again, by its id: the crash below has to reach it
+          answer="$(api -X PUT "${CASA_URL}/v1/sys/alerts" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg id "${id}" '{channels: [{id: $id, name: "Install check"}]}')")"
+          echo "put: $(jq -c '.data' <<<"${answer}")"
+          unrevealed "the PUT answer" "${answer}"
+          jq -e --arg id "${id}" '.data.channels | length == 1 and .[0].id == $id' <<<"$(api "${CASA_URL}/v1/sys/alerts")" >/dev/null
 
           # An app whose container exits with code 1 when told to, once nothing holds the
           # app: the install keeps its hold for a moment after the container is up, and a
@@ -1546,6 +1610,9 @@ jobs:
           arrived "${n}" 90 'test("apps"; "i") and test("crashcheck"; "i")'
           echo "crashcheck: $(docker inspect -f '{{.State.Status}}, exit code {{.State.ExitCode}}' crashcheck)"
           echo "the test, the failed backup and the crashed app each reached the channel"
+          # nothing the core logged since this step began, its failed sends included,
+          # names a channel's topic
+          unrevealed "the core's log" "$(sudo journalctl -u casaos.service --no-pager -o cat --since "@${since}")"
 
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red
