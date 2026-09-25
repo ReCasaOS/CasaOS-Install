@@ -1632,6 +1632,13 @@ jobs:
           tail -n 25 /tmp/strace.txt 2>/dev/null
           uname -a; mount | grep -E " / | /usr " 
           echo "::endgroup::"
+          echo "::group::message bus and alerts"
+          sudo journalctl -u casaos-message-bus --no-pager | grep -iE "websocket|sending event|backup:error|container-" | tail -n 60
+          sudo tail -n 300 /var/log/casaos/message-bus.log 2>/dev/null | grep -iE "websocket|sending event|backup:error|container-" | tail -n 60
+          sudo journalctl -u casaos --no-pager | grep -iE "alerts" | tail -n 40
+          sudo tail -n 300 /var/log/casaos/casaos.log 2>/dev/null | grep -iE "alerts" | tail -n 40
+          sudo grep -iE "publish|backup:error|container-died" /var/log/casaos/app-management.log 2>/dev/null | tail -n 40
+          echo "::endgroup::"
           echo "::group::casaos-app-management"
           sudo tail -n 200 /var/log/casaos/app-management.log 2>/dev/null
           sudo journalctl -u casaos-app-management --no-pager -n 100

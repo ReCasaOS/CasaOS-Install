@@ -68,6 +68,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.11
+
+**Push alerts that arrive.** A fix in the message bus: the alerts of v0.5.10 could stay silent after the core restarted.
+
 ## What is in v0.5.10
 
 **Push alerts.** A failed backup, a failing or full disk, a crashed app or an update that paused now reaches your phone or your mail box (ntfy, Telegram, e-mail, Discord and others). Add a channel under *Alerts* in the settings.
@@ -625,7 +629,7 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 | [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.67 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |
 | [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.30 |
-| [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.28 |
+| [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.29 |
 | [CasaOS-LocalStorage](https://github.com/ReCasaOS/CasaOS-LocalStorage) | v0.4.44 |
 | [rclone](https://github.com/rclone/rclone) | v1.75.1 |
 
