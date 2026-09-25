@@ -1406,6 +1406,147 @@ jobs:
           sudo grep -Fx 'install check: v99.0.1 fails on purpose' /var/log/casaos/upgrade.log
           echo "v99.0.0 installed itself, and v99.0.1, failed after its copy, was counted failed"
 
+      # Push alerts: the core sends what needs the owner (a backup that failed, an app
+      # that crashed, a disk, an update) to channels given as Shoutrrr URLs, and never
+      # gives a URL back. A server on this runner plays ntfy: it records every POST,
+      # with its path, and answers the way ntfy does; the channel is a ntfy:// URL
+      # pointing at it with ?scheme=http. The channel is added through the API, and its
+      # test has to arrive at the topic. Then two failures nobody is watching: a backup
+      # to a destination that cannot be written, and an app whose container exits with
+      # code 1. Each has to arrive as an alert of its category within a bounded wait.
+      # The channel, the app, the destination and the server are removed afterwards.
+      - name: Alerts
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          topic=recasaos-install-check
+          # arrived <n> <seconds> <jq condition>: waits up to <seconds> for a message to the
+          # topic, after the first <n> requests recorded, whose title and body together meet
+          # <condition>
+          arrived() {
+            for _ in $(seq 1 "$2"); do
+              jq -s -e --argjson n "$1" --arg p "/${topic}" \
+                '.[$n:] | map(select(.path == $p) | .title + " " + .body) | any(.[]; '"$3"')' alerts.jsonl >/dev/null && return 0
+              sleep 1
+            done
+            echo "nothing arrived at /${topic} for: $3"
+            return 1
+          }
+
+          cat > ntfy.py <<'PY'
+          import http.server, json, sys, urllib.parse
+
+          class Ntfy(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                  # http.server reads headers as Latin-1; the title is UTF-8
+                  title = (self.headers.get("Title") or self.headers.get("X-Title") or "").encode("latin-1").decode("utf-8", "replace")
+                  record = {"path": urllib.parse.urlsplit(self.path).path, "title": title, "body": body.decode("utf-8", "replace")}
+                  with open(sys.argv[2], "a") as out:
+                      out.write(json.dumps(record) + "\n")
+                  # what ntfy answers a publish with: Shoutrrr reads the answer as JSON
+                  answer = json.dumps({"id": "installcheck", "time": 0, "event": "message", "topic": record["path"].strip("/")}).encode()
+                  self.send_response(200)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", str(len(answer)))
+                  self.end_headers()
+                  self.wfile.write(answer)
+
+          http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Ntfy).serve_forever()
+          PY
+          : > alerts.jsonl
+          python3 ntfy.py 18097 alerts.jsonl > ntfy.log 2>&1 &
+          server=$!
+          trap '
+            kill "${server}" 2>/dev/null || true
+            echo "::group::alerts"
+            api "${CASA_URL}/v1/sys/alerts" | jq -c .data || true
+            cat alerts.jsonl ntfy.log || true
+            api "${CASA_URL}/v2/app_management/backup/runs" | jq -c "[.data // [] | .[] | select(.destination == \"alerts-broken\") | {app, started_at, error}]" || true
+            docker ps -a --filter name=crashcheck --format "{{.Names}} {{.Status}}" || true
+            sudo journalctl -u casaos.service --no-pager -o cat -n 40 || true
+            echo "::endgroup::"
+            api -X PUT "${CASA_URL}/v1/sys/alerts" -H "content-type: application/json" -d "{\"channels\":[]}" >/dev/null || true
+            api -X DELETE "${CASA_URL}/v2/app_management/compose/crashcheck?delete_config_folder=true" >/dev/null || true
+            api -X DELETE "${CASA_URL}/v2/app_management/backup/destinations/alerts-broken" >/dev/null || true
+            sudo rm -f /var/tmp/casaos-alerts-broken || true' EXIT
+          for _ in $(seq 1 20); do
+            curl -s -o /dev/null http://127.0.0.1:18097/ && break
+            sleep 0.5
+          done
+          # the step above left the core restarting
+          for _ in $(seq 1 30); do
+            api -o /dev/null "${CASA_URL}/v1/sys/alerts" && break
+            sleep 2
+          done
+
+          # the channel: listed by name, service and host, its URL nowhere in the answer,
+          # and the file that holds it root's alone
+          api -X PUT "${CASA_URL}/v1/sys/alerts" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg url "ntfy://127.0.0.1:18097/${topic}?scheme=http" '{channels: [{name: "Install check", url: $url}]}')" | jq -c '.data'
+          view="$(api "${CASA_URL}/v1/sys/alerts")"
+          echo "alerts: $(jq -c '.data' <<<"${view}")"
+          jq -e '.data.channels | length == 1 and .[0].name == "Install check" and .[0].service == "ntfy" and (.[0].host | startswith("127.0.0.1"))' <<<"${view}" >/dev/null
+          if grep -qF "${topic}" <<<"${view}"; then echo "the answer gives the channel's URL away"; exit 1; fi
+          test "$(sudo stat -c '%a %U' /var/lib/casaos/alerts.json)" = "600 root"
+          id="$(jq -r '.data.channels[0].id' <<<"${view}")"
+          answer="$(api -X POST "${CASA_URL}/v1/sys/alerts/test" -H 'content-type: application/json' \
+            -d "$(jq -nc --arg id "${id}" '{channel_id: $id}')")"
+          echo "test: $(jq -c '.data' <<<"${answer}")"
+          jq -e --arg id "${id}" 'any(.data[]; .id == $id and .ok == true)' <<<"${answer}" >/dev/null
+          arrived 0 15 true
+          echo "the test message arrived"
+
+          # A backup to a destination whose directory cannot be made, its parent being a
+          # file, whatever rclone runs as. The step above restarted the core, which
+          # subscribes to the message bus on its own time: a failure it may not have been
+          # listening for yet is asked for again, three times at most.
+          sudo touch /var/tmp/casaos-alerts-broken
+          api -X PUT "${CASA_URL}/v2/app_management/backup/destinations/alerts-broken" -H 'content-type: application/json' \
+            -d '{"backend":"alias","parameters":{"remote":"/var/tmp/casaos-alerts-broken/backups"}}' | jq -c .
+          n="$(jq -s length alerts.jsonl)"
+          for attempt in 1 2 3; do
+            api -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" -H 'content-type: application/json' \
+              -d '{"destination":"alerts-broken","hold_still":false}' | jq -c .
+            arrived "${n}" 40 'test("backups"; "i") and test("smoke"; "i")' && break
+            test "${attempt}" -lt 3
+          done
+          echo "the failed backup arrived as a backups alert"
+
+          # An app whose container exits with code 1 when told to, once nothing holds the
+          # app: the install keeps its hold for a moment after the container is up, and a
+          # container that stops while an operation holds its app is that operation's.
+          cat > crashcheck.yml <<'YAML'
+          name: crashcheck
+          services:
+            app:
+              image: busybox
+              container_name: crashcheck
+              command: ["sh", "-c", "trap 'exit 0' TERM; while [ ! -e /tmp/crash ]; do sleep 1; done; exit 1"]
+          x-casaos:
+            main: app
+            title:
+              en_us: Crashcheck
+          YAML
+          api -X POST "${CASA_URL}/v2/app_management/compose" -H 'content-type: application/yaml' \
+            --data-binary @crashcheck.yml | jq -c .
+          up=""
+          held=""
+          for _ in $(seq 1 60); do
+            up="$(docker ps --format '{{.Names}} {{.Status}}' | grep '^crashcheck Up' || true)"
+            held="$(api "${CASA_URL}/v2/app_management/operations" | jq -c '[.operations // [] | .[] | select(.app == "crashcheck")]')"
+            [ -n "${up}" ] && [ "${held}" = "[]" ] && break
+            sleep 3
+          done
+          echo "crashcheck: ${up:-not up}, held by ${held}"
+          test -n "${up}"
+          test "${held}" = "[]"
+          n="$(jq -s length alerts.jsonl)"
+          docker exec crashcheck touch /tmp/crash
+          arrived "${n}" 90 'test("apps"; "i") and test("crashcheck"; "i")'
+          echo "crashcheck: $(docker inspect -f '{{.State.Status}}, exit code {{.State.ExitCode}}' crashcheck)"
+          echo "the test, the failed backup and the crashed app each reached the channel"
+
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red
       # run says which step and nothing else, and the machine is gone.
@@ -1448,4 +1589,5 @@ jobs:
             install.log
             backup-files.txt
             capture.jsonl
+            alerts.jsonl
           if-no-files-found: ignore
