@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.13] - 2026-09-27
+
+Components: CasaOS-AppManagement `v0.4.68`. Unchanged from v0.5.12: CasaOS `v0.4.63`, CasaOS-UI `v0.4.77`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **No more "Could not check" for an app built on the box.** An app whose services are all built on the box, like an app deployed from git, runs nothing a registry publishes. The app update check listed it as an app it could not check after every run; it now leaves it out.
+- **An app written by hand shows its image.** A compose file without `x-casaos` reached the dashboard without its image, so the dashboard could not recognise what it runs.
+
 ## [0.5.12] - 2026-09-25
 
 Components: CasaOS-UI `v0.4.77`. Unchanged from v0.5.11: CasaOS `v0.4.63`, CasaOS-AppManagement `v0.4.67`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
