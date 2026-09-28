@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.14] - 2026-09-28
+
+Components: CasaOS `v0.4.64`, CasaOS-UI `v0.4.78`. Unchanged from v0.5.13: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+Thanks to [@Vinz2168](https://github.com/Vinz2168) for the Files, App Store and Syncthing changes below.
+
+### Changed
+
+- **The anonymous statistics' heartbeat goes out every three hours** instead of once a day, so the count of running boxes follows the day. Nothing else in what is sent changes, and the dashboard's preview of what is sent says so.
+
+### Added
+
+- **Files and the App Store can open in a tab of their own.** They now follow Settings › App launching like the other apps: with apps set to open in a new tab, or with Files or App Store ticked among the exceptions, they open in their own browser tab. Closing a Files tab while an upload runs asks first. With the setting as it is by default, both keep opening in their windows.
+
+### Fixed
+
+- **The "Sync your data" widget finds Syncthing again.** It asked routes the current app management no longer serves, so it always offered to install Syncthing. It now finds an installed Syncthing, starts a stopped one, opens its web interface the way the app card does, and opens the App Store on Syncthing's page.
+
 ## [0.5.13] - 2026-09-27
 
 Components: CasaOS-AppManagement `v0.4.68`. Unchanged from v0.5.12: CasaOS `v0.4.63`, CasaOS-UI `v0.4.77`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
