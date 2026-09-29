@@ -9,6 +9,28 @@
 
 This is the installer for **ReCasaOS**: a maintained release of the personal-cloud OS after upstream [IceWhaleTech/CasaOS](https://github.com/IceWhaleTech/CasaOS) stopped shipping in 2025. It builds on [alvins82's fork](https://github.com/alvins82/CasaOS-Install), which kept CasaOS installable on Docker 29 and Ubuntu 26, and adds authenticated shares, a Compose editor, TLS, and a release pipeline that runs entirely in CI.
 
+## What you get
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="The settings panel, grouped under Display, System and Updates" width="300">
+  &nbsp;
+  <img src="docs/screenshots/backups.png" alt="Backups: destinations, schedules and history" width="520">
+</p>
+
+On top of what CasaOS did:
+
+- **Backups.** Apps and the box itself, to S3, SFTP, WebDAV, OneDrive, Google Drive or Dropbox, optionally encrypted, on a schedule, with a history and a restore.
+- **Alerts.** A notification on your phone or an e-mail when a backup fails, a disk fails or fills up, an app crashes or an update pauses (ntfy, Telegram, e-mail, Discord, Gotify, Matrix and more). Nothing is sent until you add a channel.
+- **Updates you decide.** The update button in the dashboard, or opt-in automatic updates at night, two days after a release and never during a backup.
+- **Apps from git.** Deploy an app from a repository, follow a branch or its release tags, and redeploy on every push with a webhook.
+- **A release you can check.** Every package is verified against a SHA-256 digest, and each release is installed and exercised in CI on amd64 and arm64.
+
+<p align="center">
+  <img src="docs/screenshots/alerts.png" alt="Alerts: ntfy, Telegram and e-mail channels" width="480">
+</p>
+
+<sub>The screenshots are the dashboard rendered with sample data.</sub>
+
 ## Install
 
 ```bash
