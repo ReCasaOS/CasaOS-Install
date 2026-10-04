@@ -679,6 +679,18 @@ Nothing is built on a workstation.
 
 `scripts/build-release-bundle.sh` is that step. It can be run locally: `WORKSPACE_ROOT` names the directory holding the six component checkouts at the pinned commits, `CHECKSUMS_BASE_URL` is where the six components' `checksums.txt` and the dashboard tarball are downloaded from, and `UPSTREAM_BASE_URL` is where the App Store seed tarball is downloaded from. Both default to GitHub; a `file://` URL pointing at a local tree laid out as `<repo>/releases/download/<tag>/` exercises the whole chain before any release exists.
 
+## How it is developed
+
+A large part of the code, the tests and the documentation of this distribution is written with an AI coding assistant. The maintainer runs the result on their own machines, decides what is merged and tags every release; nothing is published automatically.
+
+Who or what wrote a line says little about whether it works, so what stands between a change and your machine does not depend on it:
+
+- each release is installed from its published bundle and used end to end by CI, on amd64 and arm64;
+- every package is verified against a SHA-256 digest before extraction, and the release workflow refuses to produce an installer with a placeholder left in it;
+- the components' CI builds them and runs their tests.
+
+If something in the code looks wrong, please [open an issue](https://github.com/ReCasaOS/CasaOS/issues): reading it is the review this project most needs.
+
 ## Uninstall
 
 ```bash
