@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.15] - 2026-10-07
+
+Components: CasaOS-UserService `v0.4.31`. Unchanged from v0.5.14: CasaOS `v0.4.64`, CasaOS-UI `v0.4.78`, CasaOS-AppManagement `v0.4.68`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Security
+
+- **Passwords are stored with argon2id instead of an unsalted MD5.** A stolen `user.db` used to give the passwords back to a wordlist in minutes. New accounts, password changes and `casaos-user-service -ru` now store an argon2id hash. An existing account keeps signing in with its password, and its first sign-in after the update replaces the old hash; nothing is asked of you.
+
+### Before you roll back
+
+Once an account has signed in on this release, `user.db` holds an argon2id hash that older releases, and IceWhale's CasaOS, cannot read. If you go back to one, set a new password with the old binary first: `casaos-user-service -ru -user <name>` (it also turns two-factor sign-in off for that account).
+
 ## [0.5.14] - 2026-09-28
 
 Components: CasaOS `v0.4.64`, CasaOS-UI `v0.4.78`. Unchanged from v0.5.13: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.30`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

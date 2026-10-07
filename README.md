@@ -90,6 +90,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.15
+
+**Passwords are stored with argon2id** instead of an unsalted MD5, and each account is upgraded the first time it signs in. Going back to an older release needs a password reset first: see the [changelog](CHANGELOG.md).
+
 ## What is in v0.5.14
 
 **Files and the App Store in a tab.** They follow Settings › App launching like the other apps, and the "Sync your data" widget finds Syncthing again. Thanks to [@Vinz2168](https://github.com/Vinz2168).
@@ -662,7 +666,7 @@ The first release cut from this account, kept here because it is what v0.4.41 bu
 | [CasaOS-UI](https://github.com/ReCasaOS/CasaOS-UI) | v0.4.78 |
 | [CasaOS-AppManagement](https://github.com/ReCasaOS/CasaOS-AppManagement) | v0.4.68 |
 | [CasaOS-Gateway](https://github.com/ReCasaOS/CasaOS-Gateway) | v0.4.30 |
-| [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.30 |
+| [CasaOS-UserService](https://github.com/ReCasaOS/CasaOS-UserService) | v0.4.31 |
 | [CasaOS-MessageBus](https://github.com/ReCasaOS/CasaOS-MessageBus) | v0.4.29 |
 | [CasaOS-LocalStorage](https://github.com/ReCasaOS/CasaOS-LocalStorage) | v0.4.44 |
 | [rclone](https://github.com/rclone/rclone) | v1.75.1 |
