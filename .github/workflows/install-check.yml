@@ -1666,19 +1666,58 @@ jobs:
             alerts.jsonl
           if-no-files-found: ignore
 
-  # Debian is what a Raspberry Pi and most small servers run, and the runners
-  # have none. The machine is a QEMU guest booted from Debian's own cloud image,
-  # with KVM, and the questions it is asked are a subset of the ones above:
-  # scripts/debian13-smoke.sh. Independent of the legs above, like they are of
-  # each other.
-  debian13:
-    name: Install on Debian 13 (amd64, QEMU)
+  # The Raspberry Pi and most small servers run Debian or Ubuntu, in the
+  # versions people have not upgraded from, and the runners have one Ubuntu.
+  # Each machine here is a QEMU guest booted with KVM from the distribution's
+  # own cloud image, and it is asked a subset of the questions above:
+  # scripts/vm-smoke.sh. The systems are the ones the anonymous statistics say
+  # boxes run. Independent of the legs above, like they are of each other.
+  vm:
+    name: Install on ${{ matrix.name }} (amd64, QEMU)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 13
+            id: debian
+            version: '13'
+            base: https://cloud.debian.org/images/cloud/trixie/latest
+            image: debian-13-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+          - name: Debian 12
+            id: debian
+            version: '12'
+            base: https://cloud.debian.org/images/cloud/bookworm/latest
+            image: debian-12-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+          - name: Ubuntu 24.04
+            id: ubuntu
+            version: '24.04'
+            base: https://cloud-images.ubuntu.com/releases/24.04/release
+            image: ubuntu-24.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+          - name: Ubuntu 26.04
+            id: ubuntu
+            version: '26.04'
+            base: https://cloud-images.ubuntu.com/releases/26.04/release
+            image: ubuntu-26.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
       TAG: ${{ inputs.tag }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      EXPECT_ID: ${{ matrix.id }}
+      EXPECT_VERSION_ID: ${{ matrix.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1691,13 +1730,12 @@ jobs:
           grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|CASAOS_UI_TAG|CASAOS_TAG)=' published/components.lock > published/expected.env
           cat published/expected.env
 
-      - name: Debian 13 cloud image
+      - name: The distribution's cloud image
         run: |
           set -euo pipefail
-          base=https://cloud.debian.org/images/cloud/trixie/latest
-          curl -fsSL -o debian.qcow2 "${base}/debian-13-genericcloud-amd64.qcow2"
-          curl -fsSL "${base}/SHA512SUMS" | grep ' debian-13-genericcloud-amd64.qcow2$' \
-            | sed 's/debian-13-genericcloud-amd64.qcow2/debian.qcow2/' | sha512sum --check
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
 
       - name: Boot it
         run: |
@@ -1711,19 +1749,19 @@ jobs:
           cat > user-data <<EOF
           #cloud-config
           users:
-            - name: debian
+            - name: casa
               sudo: ALL=(ALL) NOPASSWD:ALL
               shell: /bin/bash
               ssh_authorized_keys:
                 - $(cat vm_key.pub)
           EOF
           cloud-localds seed.img user-data
-          qemu-img resize debian.qcow2 30G
+          qemu-img resize disk.img 30G
           cat > ssh_config <<EOF
           Host vm
             HostName 127.0.0.1
             Port 2222
-            User debian
+            User casa
             IdentityFile ${PWD}/vm_key
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
@@ -1731,7 +1769,7 @@ jobs:
             ServerAliveInterval 30
           EOF
           qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
-            -drive file=debian.qcow2,if=virtio,format=qcow2 \
+            -drive file=disk.img,if=virtio,format=qcow2 \
             -drive file=seed.img,if=virtio,format=raw \
             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
             -serial file:serial.log
@@ -1744,8 +1782,8 @@ jobs:
       - name: Install and ask the questions
         run: |
           set -euo pipefail
-          scp -F ssh_config published/install.sh published/expected.env scripts/debian13-smoke.sh vm:
-          ssh -F ssh_config vm 'bash debian13-smoke.sh'
+          scp -F ssh_config published/install.sh published/expected.env scripts/vm-smoke.sh vm:
+          ssh -F ssh_config vm "EXPECT_ID=${EXPECT_ID} EXPECT_VERSION_ID=${EXPECT_VERSION_ID} bash vm-smoke.sh"
 
       - name: What the machine says when it is not well
         if: always()
@@ -1758,7 +1796,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: install-check-${{ inputs.tag }}-debian13
+          name: install-check-${{ inputs.tag }}-${{ matrix.id }}-${{ matrix.version }}
           path: |
             install.log
             serial.log

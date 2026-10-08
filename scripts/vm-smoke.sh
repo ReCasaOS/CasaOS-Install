@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Runs inside a Debian 13 machine, as a normal user with passwordless sudo, next
-# to install.sh (the published installer), expected.env (the pins of that
+# Runs inside a Debian or Ubuntu machine, as a normal user with passwordless sudo,
+# next to install.sh (the published installer), expected.env (the pins of that
 # release, from components.lock) and nothing else. It installs the way the
 # README says and then asks the questions install-check.yml asks of a fresh
-# Ubuntu: the services are up and are this release, the dashboard answers on
+# Ubuntu: it is the system EXPECT_ID and EXPECT_VERSION_ID name, the services are up and are this release, the dashboard answers on
 # both ports, a first user can sign in, loopback alone is not a service.
 set -euo pipefail
 
 . /etc/os-release
 echo "os: ${PRETTY_NAME} (VERSION_ID=${VERSION_ID})"
-test "${VERSION_ID}" = 13
+test "${ID}" = "${EXPECT_ID}"
+test "${VERSION_ID}" = "${EXPECT_VERSION_ID}"
 
 set -a
 . ./expected.env
@@ -82,4 +83,4 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "${url}/v1/users/current" -H "Aut
 echo "/v1/users/current with the token: ${code}"
 test "${code}" = 200
 
-echo 'debian 13: all questions answered'
+echo "${PRETTY_NAME}: all questions answered"
