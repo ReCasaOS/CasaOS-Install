@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.17] - 2026-10-08
+
+Components: all unchanged from v0.5.16. Only the installer and its documentation change.
+
+### Fixed
+
+- **A Docker that does not answer is said, not met with silence.** The installer asked Docker for its version in a way `set -e` turned into a silent exit: with the `docker` command present and its daemon stopped, the install simply ended. It now says that Docker is installed but does not answer, and how to start it, and does not reinstall Docker over it. The same check after Docker was installed no longer starts the installation again if the daemon does not answer. The two checks also compare the Docker major version as a number (a one-digit major broke the comparison), and the message about the minimum version had lost a line break (`\Current`).
+
+### Added
+
+- **The install check runs on Docker 28 and on the current Docker, on both architectures.** Until now the Raspberry Pi leg (arm64) only ever ran the Docker 28 the runner image comes with. It now also installs the current Docker the way a new machine does, and runs the steps that touch the engine: a compose app, a stack built from a Dockerfile, an app deployed from git. Every leg that starts with a Docker also checks that the installer left its version as it was.
+- **The install check can run on any one Docker engine** (`docker_version`, with `engine_arch`, when dispatching it by hand). Docker 24.0.5, the oldest engine in the statistics, and 20.10.24, the oldest the installer accepts, were each installed this way on v0.5.16 and passed the engine steps (compose app, stack built from a Dockerfile, app deployed from git). Those are one-off runs, not part of every release.
+
+### Documentation
+
+- The README says which Docker engines every release is tested on, that the SHA-256 digests do not cover Docker (it is installed with get.docker.com, and apt verifies its packages against Docker's key), and how to update Docker yourself. It also says what the dashboard's *System packages* update does today with Docker: it runs a plain `apt-get upgrade`, which includes Docker's packages when Docker's repository is configured, and that restarts the Docker daemon and stops every container until it is back.
+
 ## [0.5.16] - 2026-10-08
 
 Components: all unchanged from v0.5.15 (CasaOS `v0.4.64`, CasaOS-UI `v0.4.78`, CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`). Only the installer changes.

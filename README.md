@@ -37,11 +37,25 @@ On top of what CasaOS did:
 curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash
 ```
 
-Supported architectures: amd64, arm64 and arm/v7. The installer detects the distribution and architecture at run time. Ubuntu 26 is supported but not required. Every release is installed from scratch by CI right after it is published, on Ubuntu 22.04 (amd64 and arm64), Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (amd64). Debian 11 (amd64) is out of support and its security repository still lists packages it no longer serves, so a fresh install would stop at the first one it needs from there: the installer says so and offers to take that repository from archive.debian.org (`--use-debian-archive` says yes in advance), and CI installs it that way.
+Supported architectures: amd64, arm64 and arm/v7. The installer detects the distribution and architecture at run time. Ubuntu 26 is supported but not required. Every release is installed from scratch by CI right after it is published, on Ubuntu 22.04 (amd64 and arm64), Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (amd64). Debian 11 (amd64) is out of support and its security repository still lists packages it no longer serves, so a fresh install would stop at the first one it needs from there: the installer says so and offers to take that repository from archive.debian.org (`--use-debian-archive` says yes in advance), and CI installs it that way. Each release is installed with Docker 28 (what the CI runner already has) and with the current Docker that get.docker.com gives a machine that has none, on amd64 and arm64. The installer accepts Docker 20 or later and leaves a Docker that is already there as it is. Other versions are not tested on every release.
 
 Running the same command on an existing install upgrades it. Installs made from alvins82's or IceWhale's installers can be migrated the same way; the in-app updater then follows this distribution's releases. Do not use `get.casaos.io/update` afterwards: it installs IceWhale's frozen component bundle.
 
-Every package the installer downloads is verified against a SHA-256 digest before extraction, and every one of them is downloaded from a ReCasaOS release. The digests are written into `install.sh` at release time from the checksums each component publishes, or — for the dashboard and the App Store seed, whose releases publish no checksums — computed from the package as published; none is typed by hand. The uninstall script the installer downloads is verified the same way, against the digest of the copy shipped in the release.
+Every package the installer downloads is verified against a SHA-256 digest before extraction, and every one of them is downloaded from a ReCasaOS release. The digests are written into `install.sh` at release time from the checksums each component publishes, or — for the dashboard and the App Store seed, whose releases publish no checksums — computed from the package as published; none is typed by hand. The uninstall script the installer downloads is verified the same way, against the digest of the copy shipped in the release. Docker is the exception: when the box has none, the installer installs it with get.docker.com, apt verifies its packages against Docker's own key, and ReCasaOS neither pins nor checksums them.
+
+## Updating Docker
+
+ReCasaOS does not update Docker for you, and the installer never changes a Docker that is already there. Updating it restarts the Docker daemon, and that stops every container until it is back: apps with a restart policy of `always` or `unless-stopped` start again on their own, the others stay stopped. Do it when that suits you, and keep the output of `docker ps` first.
+
+If your Docker came from Docker's own repository, which is what the installer sets up on Debian and Ubuntu, this updates it within its major version:
+
+```bash
+sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+A new major version (28 to 29) is a bigger step: read Docker's release notes first. A Docker from your distribution's own packages (`docker.io`) or from snap is updated with the tools of that system.
+
+One thing to know: the dashboard's *System packages* update runs a plain `apt-get upgrade`. When Docker's repository is configured, that includes Docker's packages, and so it can restart Docker and move it to a newer version. Taking Docker out of that update, and showing it on its own, is planned.
 
 ## Anonymous statistics
 
@@ -89,6 +103,10 @@ Any one of these; an upgrade never turns them back on.
 
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
+
+## What is in v0.5.17
+
+**Docker, tested and said plainly.** Every release is installed with Docker 28 and with the current Docker on amd64 and arm64, a Docker that does not answer is reported instead of ending the install in silence, and the README now says how to update Docker yourself and what *System packages* does to it.
 
 ## What is in v0.5.16
 
