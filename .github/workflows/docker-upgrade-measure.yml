@@ -1,0 +1,211 @@
+name: docker-upgrade-measure
+
+# What happens to a running ReCasaOS box when Docker is upgraded: how long the
+# daemon is away, which containers come back and when, whether a database that
+# acknowledges each write after a sync loses one, whether AppManagement keeps
+# answering, what the dashboard's "System packages" update does to Docker, and
+# whether putting the previous version back works. By hand only; it installs and
+# removes Docker on throwaway machines and publishes nothing. The numbers are
+# read by scripts/docker-upgrade-report.py against thresholds fixed beforehand
+# (and it says INVALID, with the reasons, for a run that cannot be trusted), and
+# are the ground for deciding whether ReCasaOS offers an "Update Docker" button.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Ubuntu 22.04 runner, the dashboard's update (amd64)
+            runner: ubuntu-22.04
+            arch: amd64
+            mode: generic
+          - label: Ubuntu 22.04 runner, Docker's packages only (amd64)
+            runner: ubuntu-22.04
+            arch: amd64
+            mode: targeted
+          - label: Ubuntu 22.04 runner, in-place upgrade from the image's Docker (amd64)
+            runner: ubuntu-22.04
+            arch: amd64
+            mode: major
+          - label: Ubuntu 22.04 runner, the dashboard's update (arm64)
+            runner: ubuntu-22.04-arm
+            arch: arm64
+            mode: generic
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      MODE: ${{ matrix.mode }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The report can say no
+        run: python3 scripts/test-docker-upgrade-report.py
+
+      - name: Fetch the latest published installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          echo "installer release: ${tag}"
+          mkdir work
+          gh release download "${tag}" -R "${GITHUB_REPOSITORY}" -D work -p install.sh -p install.sh.sha256
+          (cd work && sha256sum --check install.sh.sha256)
+
+      - name: Measure
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          cd work
+          OUT="${PWD}/out" bash ../scripts/docker-upgrade-measure.sh "${MODE}"
+
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s work/out/timeline.tsv || { echo "the run left no timeline: nothing to report" | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
+          python3 scripts/docker-upgrade-report.py work/out "${ARCH}" "${MODE}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-upgrade-${{ matrix.runner }}-${{ matrix.mode }}
+          path: work/out
+          if-no-files-found: ignore
+
+  vm:
+    name: ${{ matrix.name }}, ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04
+            label: the dashboard's update (needrestart is installed)
+            mode: generic
+            base: https://cloud-images.ubuntu.com/releases/24.04/release
+            image: ubuntu-24.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+          - name: Debian 12
+            label: Docker's packages only
+            mode: targeted
+            base: https://cloud.debian.org/images/cloud/bookworm/latest
+            image: debian-12-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      MODE: ${{ matrix.mode }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The report can say no
+        run: python3 scripts/test-docker-upgrade-report.py
+
+      - name: Fetch the latest published installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          echo "installer release: ${tag}"
+          mkdir published
+          gh release download "${tag}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize disk.img 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      - name: Measure
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          scp -F ssh_config published/install.sh scripts/docker-upgrade-measure.sh vm:
+          ssh -F ssh_config vm "MEASURE_DISPOSABLE=1 OUT=\$HOME/out bash docker-upgrade-measure.sh ${MODE}"
+
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ssh -F ssh_config vm 'tar -C "$HOME/out" -cf - .' | tar -xf - -C out
+          test -s out/timeline.tsv || { echo "the run left no timeline: nothing to report" | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
+          python3 scripts/docker-upgrade-report.py out amd64 "${MODE}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-upgrade-${{ matrix.name }}-${{ matrix.mode }}
+          path: |
+            out
+            serial.log
+          if-no-files-found: ignore
