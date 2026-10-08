@@ -94,6 +94,32 @@ def build(d, down=((10, 22),), blips=(), stay_down=(), return_names=None, ack_mi
         f.write("")
 
 
+def build_excluded(d, ce_after="5:28.0.4-1", pid_after=500, missing_at=None, candidate="5:29.8.2-1", names="libc6\nzlib1g\n", log=""):
+    """a run of the explicit list on a Docker 28 with a 29 on offer: nothing of Docker's should move"""
+    rows = ["#\t%f\tupgrade_start" % T0]
+    running = ",".join(NAMES)
+    for i in range(160):
+        t = T0 + i
+        here = ",".join(n for n in NAMES if n != missing_at) if missing_at and i == 50 else running
+        rows.append("%f\tactive\tup\t200\t200\t200\t%s" % (t, here))
+        if i == 20:
+            rows.append("#\t%f\tupgrade_end" % t)
+    rows.append("#\t%f\tupgrade_settled" % (T0 + 160))
+    with open(os.path.join(d, "timeline.tsv"), "w") as f:
+        f.write("\n".join(rows) + "\n")
+    snap(os.path.join(d, "snapshot-before.txt"), "28.0.4", "5:28.0.4-1", 500)
+    snap(os.path.join(d, "snapshot-after.txt"), "28.0.4", ce_after, pid_after)
+    for name, value in (("prev", "5:28.0.4-1"), ("newest", "5:29.8.2-1"), ("upgrade.rc", "0")):
+        with open(os.path.join(d, name), "w") as f:
+            f.write(value + "\n")
+    with open(os.path.join(d, "simulation.txt"), "w") as f:
+        f.write("Inst docker-ce [5:28.0.4-1] (%s Docker CE:jammy [amd64])\nInst libc6 [1] (2 Ubuntu [amd64])\nInst zlib1g [1] (2 Ubuntu [amd64])\n" % candidate)
+    with open(os.path.join(d, "upgrade-names.txt"), "w") as f:
+        f.write(names)
+    with open(os.path.join(d, "upgrade.log"), "w") as f:
+        f.write(log)
+
+
 def report(d, mode="generic", arch="amd64"):
     p = subprocess.run([sys.executable, REPORT, d, arch, mode], capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
@@ -141,6 +167,30 @@ case("a rollback that left the new version fails", 0, ["**FAIL** the rollback pu
 case("a rollback that failed fails", 0, ["**FAIL** the rollback puts the previous docker-ce back"], ["INVALID"], rollback_rc="100")
 case("AppManagement restarted fails", 0, ["**FAIL** AppManagement not restarted"], ["INVALID"], am_after=99)
 case("a run with no markers is invalid", 1, ["INVALID RUN", "marker upgrade_start is missing"], [], drop_markers=True)
+
+def case_excluded(name, want_code, must_have=(), must_not_have=(), **kw):
+    with tempfile.TemporaryDirectory() as d:
+        build_excluded(d, **kw)
+        code, text = report(d, "excluded")
+        problems = []
+        if code != want_code:
+            problems.append("exit %d, wanted %d" % (code, want_code))
+        problems += ["missing %r" % s for s in must_have if s not in text]
+        problems += ["should not say %r" % s for s in must_not_have if s in text]
+        if problems:
+            failures.append("%s: %s\n%s" % (name, "; ".join(problems), text[-1500:]))
+        else:
+            print("ok:", name)
+
+
+case_excluded("an excluded run that left Docker alone passes everything", 0,
+              ["**PASS** Docker's packages are unchanged", "**PASS** dockerd was not restarted", "**PASS** every container kept running throughout", "**PASS** AppManagement was not restarted", "4 of 4 verdicts pass".replace("4 of 4", "7 of 7")], ["FAIL", "INVALID"])
+case_excluded("an excluded run that upgraded docker-ce fails", 0, ["**FAIL** Docker's packages are unchanged"], ["INVALID"], ce_after="5:29.8.2-1")
+case_excluded("an excluded run that restarted dockerd fails", 0, ["**FAIL** dockerd was not restarted"], ["INVALID"], pid_after=901)
+case_excluded("an excluded run where a container went away fails", 0, ["**FAIL** every container kept running throughout", "m-web"], ["INVALID"], missing_at="m-web")
+case_excluded("an excluded run that installed a Docker package fails", 0, ["**FAIL** apt did not install or upgrade a Docker package"], ["INVALID"], log="Unpacking docker-ce (5:29.8.2-1) over (5:28.0.4-1) ...\n")
+case_excluded("an excluded run with no major to refuse is invalid", 1, ["INVALID RUN", "nothing to exclude"], [], candidate="5:28.0.5-1")
+case_excluded("an excluded run with an empty list is invalid", 1, ["INVALID RUN", "explicit list is empty"], [], names="")
 
 with tempfile.TemporaryDirectory() as d:
     with open(os.path.join(d, "skipped"), "w") as f:
