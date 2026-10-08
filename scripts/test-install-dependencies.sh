@@ -28,7 +28,7 @@ INSTALL_SH="${WORK}/install.sh"
 tr -d '\r' <"${ROOT}/install.sh" >"${INSTALL_SH}"
 bash -n "${INSTALL_SH}" || fail "install.sh does not parse"
 
-for f in Answer_Is_Yes Debian_Archive_Agreed Use_Debian_Archive Package_Install_Failed Check_Docker_Install Check_Docker_Install_Final; do
+for f in Answer_Is_Yes Debian_Archive_Agreed Use_Debian_Archive Package_Install_Failed Check_Docker_Install Check_Docker_Install_Final Update_Package_Resource; do
     eval "$(sed -n "/^${f}() {\$/,/^}\$/p" "${INSTALL_SH}")"
     declare -F "${f}" >/dev/null || fail "install.sh defines no ${f}()"
 done
@@ -285,5 +285,39 @@ final_says 5.0.0 1
 final_says down 1
 grep -q 'does not answer' <<<"${out}" || fail "final check, docker down: said nothing"
 ! grep -q 'installed docker' <<<"${out}" || fail "final check, docker down: Docker was installed again"
+
+# Refreshing apt's lists is bounded: a mirror that says nothing costs the timeout, not
+# the run, and the install goes on with the lists the host has. apt-get is a script on
+# a PATH of its own, answering as the test sets FAKE_APT.
+GreyStart() { :; }
+APT_UPDATE_TIMEOUT=2
+mkdir -p "${WORK}/aptbin"
+cat >"${WORK}/aptbin/apt-get" <<'EOF'
+#!/bin/sh
+case "${FAKE_APT}" in
+stall) sleep 20 ;;
+fail) exit 100 ;;
+esac
+exit 0
+EOF
+chmod +x "${WORK}/aptbin/apt-get"
+refresh_says() { # <stall|fail|ok> <longest it may take, in seconds>
+    local started="${SECONDS}"
+    out="$(
+        exec 2>&1
+        set -e
+        unset -f apt-get # the recorder above would hide the script from command -v
+        export PATH="${WORK}/aptbin:${PATH}" FAKE_APT="$1"
+        Update_Package_Resource
+    )" || fail "refresh '$1': the install ended: ${out}"
+    [[ $((SECONDS - started)) -le "$2" ]] || fail "refresh '$1': took $((SECONDS - started)) s, more than $2"
+}
+refresh_says stall 15
+grep -q 'did not finish refreshing the package lists in 2 seconds' <<<"${out}" || fail "refresh stalled: nothing said about it: ${out}"
+refresh_says fail 15
+grep -q 'Could not refresh the package lists (exit 100)' <<<"${out}" || fail "refresh failing: ${out}"
+refresh_says ok 15
+grep -q 'Update package manager complete' <<<"${out}" || fail "refresh working: ${out}"
+grep -Fq 'timeout "${APT_UPDATE_TIMEOUT}" apt-get update -qq' "${INSTALL_SH}" || fail "install.sh does not bound apt-get update"
 
 echo "ok: what install.sh does when a dependency cannot be installed"

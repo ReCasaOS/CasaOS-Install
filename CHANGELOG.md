@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.18] - 2026-10-08
+
+Components: all unchanged from v0.5.17. Only the installer changes.
+
+### Fixed
+
+- **Refreshing apt's package lists can no longer hold the install for ever.** A mirror that accepts the connection and then says nothing stopped `apt-get update` for as long as anyone waited: the install check's jobs sat on it for forty minutes, twice. The refresh is now given five minutes (`timeout`, where the system has it); past that the installer says apt did not answer and goes on with the lists the host already has, exactly as it does for any refresh that fails. Nothing else about the install changes.
+
 ## [0.5.17] - 2026-10-08
 
 Components: all unchanged from v0.5.16. Only the installer and its documentation change.
