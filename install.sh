@@ -750,11 +750,13 @@ Check_Docker_Running() {
 #Check Docker Installed and version
 Check_Docker_Install() {
     if [[ -x "$(command -v docker)" ]]; then
-        Docker_Version=$(${sudo_cmd} docker version --format '{{.Server.Version}}')
-        if [[ $? -ne 0 ]]; then
-            Install_Docker
-        elif [[ ${Docker_Version:0:2} -lt "${MINIMUM_DOCKER_VERSION}" ]]; then
-            Show 1 "Recommended minimum Docker version is \e[33m${MINIMUM_DOCKER_VERSION}.xx.xx\e[0m,\Current Docker version is \e[33m${Docker_Version}\e[0m,\nPlease uninstall current Docker and rerun the CasaOS installation script."
+        # Under set -e a failing command substitution ends the script on its own line,
+        # so the question is asked in an if: a docker on the PATH whose daemon does not
+        # answer is said plainly, and nothing is reinstalled over it.
+        if ! Docker_Version=$(${sudo_cmd} docker version --format '{{.Server.Version}}' 2>/dev/null); then
+            Show 1 "Docker is installed but does not answer. Start it (sudo systemctl start docker) and run this installer again."
+        elif [[ ${Docker_Version%%.*} -lt "${MINIMUM_DOCKER_VERSION}" ]]; then
+            Show 1 "Recommended minimum Docker version is \e[33m${MINIMUM_DOCKER_VERSION}.xx.xx\e[0m,\nCurrent Docker version is \e[33m${Docker_Version}\e[0m,\nPlease uninstall current Docker and rerun the CasaOS installation script."
             exit 1
         else
             Show 0 "Current Docker version is ${Docker_Version}."
@@ -767,11 +769,13 @@ Check_Docker_Install() {
 # Check Docker installed
 Check_Docker_Install_Final() {
     if [[ -x "$(command -v docker)" ]]; then
-        Docker_Version=$(${sudo_cmd} docker version --format '{{.Server.Version}}')
-        if [[ $? -ne 0 ]]; then
-            Install_Docker
-        elif [[ ${Docker_Version:0:2} -lt "${MINIMUM_DOCKER_VERSION}" ]]; then
-            Show 1 "Recommended minimum Docker version is \e[33m${MINIMUM_DOCKER_VERSION}.xx.xx\e[0m,\Current Docker version is \e[33m${Docker_Version}\e[0m,\nPlease uninstall current Docker and rerun the CasaOS installation script."
+        # asked in an if for the reason given at Check_Docker_Install; and a Docker
+        # that does not answer straight after it was installed is said, not installed
+        # again by the function that installs it
+        if ! Docker_Version=$(${sudo_cmd} docker version --format '{{.Server.Version}}' 2>/dev/null); then
+            Show 1 "Docker was installed but does not answer. See 'sudo systemctl status docker', then run this installer again."
+        elif [[ ${Docker_Version%%.*} -lt "${MINIMUM_DOCKER_VERSION}" ]]; then
+            Show 1 "Recommended minimum Docker version is \e[33m${MINIMUM_DOCKER_VERSION}.xx.xx\e[0m,\nCurrent Docker version is \e[33m${Docker_Version}\e[0m,\nPlease uninstall current Docker and rerun the CasaOS installation script."
             exit 1
         else
             Show 0 "Current Docker version is ${Docker_Version}."
