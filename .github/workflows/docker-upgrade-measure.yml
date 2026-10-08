@@ -12,8 +12,6 @@ name: docker-upgrade-measure
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ci/docker-measure]  # while the harness is being proven; removed before it is merged
 
 permissions:
   contents: read

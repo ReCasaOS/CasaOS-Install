@@ -22,7 +22,7 @@ POLICY = {"m-always": "always", "m-db": "unless-stopped", "m-host": "unless-stop
 T0 = 1000.0
 
 
-def snap(path, docker, ce, pid, am=77):
+def snap(path, docker, ce, pid, am=77, stopped=()):
     lines = [
         "docker %s" % docker, "driver overlay2", "live_restore false", "images 4", "all_containers 9",
         "packages docker-ce=%s containerd.io=1.7.28-1 " % ce, "needrestart absent",
@@ -33,13 +33,13 @@ def snap(path, docker, ce, pid, am=77):
         "containers",
     ]
     for n in NAMES:
-        lines.append("/%s policy=%s state=running started=x restarts=0" % (n, POLICY[n]))
+        lines.append("/%s policy=%s state=%s started=x restarts=0" % (n, POLICY[n], "exited" if n in stopped else "running"))
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
 
 def build(d, down=((10, 22),), blips=(), stay_down=(), return_names=None, ack_missing=0, same_version=False, rc="0",
-          rollback=True, rollback_ce="5:29.8.1-1", rollback_rc="0", am_after=77, web_down=None, drop_markers=False):
+          rollback=True, rollback_ce="5:29.8.1-1", rollback_rc="0", am_after=77, web_down=None, drop_markers=False, stopped_after=()):
     """a timeline of 200 samples a second, upgrade from 0 to 100, settled at 199; dockerd down in each of `down`"""
     prev, newest = "5:29.8.1-1", "5:29.8.2-1"
     rows = ["#\t%f\tupgrade_start" % T0]
@@ -77,7 +77,7 @@ def build(d, down=((10, 22),), blips=(), stay_down=(), return_names=None, ack_mi
     with open(os.path.join(d, "timeline.tsv"), "w") as f:
         f.write("\n".join(rows) + "\n")
     snap(os.path.join(d, "snapshot-before.txt"), "29.8.1", prev, 500)
-    snap(os.path.join(d, "snapshot-after.txt"), "29.8.1" if same_version else "29.8.2", prev if same_version else newest, 900, am_after)
+    snap(os.path.join(d, "snapshot-after.txt"), "29.8.1" if same_version else "29.8.2", prev if same_version else newest, 900, am_after, stopped_after)
     snap(os.path.join(d, "snapshot-rollback.txt"), "29.8.1", rollback_ce, 950)
     for name, value in (("prev", prev), ("newest", newest), ("upgrade.rc", rc), ("rollback.rc", rollback_rc)):
         with open(os.path.join(d, name), "w") as f:
@@ -129,7 +129,9 @@ case("a healthy run is measured and passes", 0,
      ["INVALID", "FAIL"])
 case("a 90 s outage fails the 60 s threshold", 0, ["**FAIL** upgrade: dockerd back within 60 s"], ["INVALID"], down=((10, 100),))
 case("one failed sample before a real outage does not hide it", 0, ["**FAIL** upgrade: dockerd back within 60 s"], ["INVALID"], down=((20, 95),), blips=(2,))
-case("a single blip alone is no outage", 0, ["dockerd never failed two samples in a row"], ["INVALID"], down=(), blips=(30,))
+case("a single blip alone is no outage", 0, ["dockerd never failed two samples in a row", "not fully healthy"], ["INVALID"], down=(), blips=(30,))
+case("a daemon restart shorter than the poller sees is still a pass, and said", 0, ["**PASS** upgrade: dockerd back within 60 s: away for about", "not fully healthy"], ["INVALID", "never stopped"], down=(), blips=(30,))
+case("containers without a restart policy that stayed stopped are a finding", 0, ["**FINDING** upgrade: containers without a restart policy are not started again", "m-no (policy `no`)", "smoke (policy `no`)"], ["INVALID"], stopped_after=("m-no", "smoke"))
 case("an upgrade that changed nothing is invalid, not a pass", 1, ["INVALID RUN", "docker-ce was not upgraded"], ["pass"], same_version=True, down=())
 case("an upgrade command that failed is invalid", 1, ["INVALID RUN", "exited with status '100'"], [], rc="100")
 case("an empty run is invalid and does not crash", 1, ["INVALID RUN", "no samples"], ["Traceback"], _empty=True)

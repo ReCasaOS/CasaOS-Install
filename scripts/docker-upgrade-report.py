@@ -252,7 +252,13 @@ def judge(label, start, end, base, strict_label):
         dockerd_moved = pid(base, "docker") is not None and pid(rolled if label == "rollback" else after, "docker") != pid(base, "docker")
         P("dockerd never failed two samples in a row (%d samples)%s." % (len(win), "; its pid did change, so it was away for less than the poller can see" if dockerd_moved else "; its pid did not change either: it was not restarted"))
         longest, d_end = 0.0, win[0]["t"] if win else markers[start]
-        if not dockerd_moved and label == "upgrade":
+        soft = [r for r in win if docker_down(r) or web_down(r)]
+        if soft:
+            span = soft[-1]["t"] - soft[0]["t"] + 1.0
+            P("It was not fully healthy (dockerd not active, or the published port silent) in %d sample(s), about %.1f s from the first to the last: shorter than the two-sample rule calls an episode." % (len(soft), span))
+        if dockerd_moved:
+            verdict("%s: dockerd back within %d s" % (label, DOCKER_BACK), "PASS", "away for about %.0f s at most (below the poller's resolution)" % (max(1.0, (soft[-1]["t"] - soft[0]["t"] + 1.0) if soft else 1.0)))
+        elif label == "upgrade":
             verdict("the upgrade restarts dockerd", "FINDING", "it did not: the new package is installed and the old daemon still runs")
     else:
         durs = [(e - s) if e is not None else None for s, e in eps]
@@ -270,7 +276,8 @@ def judge(label, start, end, base, strict_label):
         wdurs = [(e - s) if e is not None else None for s, e in web_eps]
         P("The published port (nginx, 18081) did not answer for %s in %d episode(s)." % ("the rest of the window" if None in wdurs else "%.1f s in total, longest %.1f s" % (sum(wdurs), max(wdurs)), len(web_eps)))
     else:
-        P("The published port answered throughout.")
+        failed_web = sum(1 for r in win if web_down(r))
+        P("The published port answered throughout." if not failed_web else "The published port failed %d sample(s), never two in a row." % failed_web)
     P("")
     P("| container | restart policy | running again after dockerd |")
     P("|---|---|---|")
@@ -290,6 +297,11 @@ def judge(label, start, end, base, strict_label):
         if pol in ("always", "unless-stopped") and (back is None or back > CONTAINERS_BACK):
             ok_all = False
     verdict("%s: always/unless-stopped containers back within %d s" % (label, CONTAINERS_BACK), "PASS" if ok_all else "FAIL", "see the table")
+    final = rolled if label == "rollback" else after
+    gone = [n for n in EXPECTED if base["containers"].get(n, {}).get("state") == "running" and final["containers"].get(n, {}).get("state") != "running"]
+    if gone:
+        verdict("%s: containers without a restart policy are not started again" % label, "FINDING",
+                ", ".join("%s (policy `%s`)" % (n, base["containers"][n]["policy"]) for n in gone) + " stayed stopped")
     P("")
     bad = [r for r in win if r["amfree"] != "200"]
     badruns = episodes(win, lambda r: r["amfree"] != "200", need_down=3, need_up=2)
