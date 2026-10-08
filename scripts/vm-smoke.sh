@@ -16,7 +16,9 @@ set -a
 . ./expected.env
 set +a
 
-sudo -E bash install.sh --no-telemetry 2>&1 | tee install.log
+# INSTALLER_ARGS is unquoted on purpose: a list of options, empty for most systems
+# shellcheck disable=SC2086
+sudo -E bash install.sh --no-telemetry ${INSTALLER_ARGS:-} 2>&1 | tee install.log
 test "${PIPESTATUS[0]}" -eq 0
 
 # only for the questions below; the installer ran without them
