@@ -1694,13 +1694,6 @@ jobs:
             image: debian-12-genericcloud-amd64.qcow2
             sums: SHA512SUMS
             algo: sha512sum
-          - name: Debian 11
-            id: debian
-            version: '11'
-            base: https://cloud.debian.org/images/cloud/bullseye/latest
-            image: debian-11-genericcloud-amd64.qcow2
-            sums: SHA512SUMS
-            algo: sha512sum
           - name: Ubuntu 24.04
             id: ubuntu
             version: '24.04'
