@@ -104,6 +104,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.18
+
+**A stalled mirror no longer holds the install.** Refreshing apt's package lists is limited to five minutes; after that the installer goes on with the lists the host has.
+
 ## What is in v0.5.17
 
 **Docker, tested and said plainly.** Every release is installed with Docker 28 and with the current Docker on amd64 and arm64, a Docker that does not answer is reported instead of ending the install in silence, and the README now says how to update Docker yourself and what *System packages* does to it.

@@ -184,6 +184,10 @@ if [[ "${RECASAOS_DEBIAN_ARCHIVE:-}" == "1" ]]; then
     DEBIAN_ARCHIVE=1
 fi
 APT_SOURCES_LIST=/etc/apt/sources.list
+# How long refreshing apt's package lists may take. A mirror that accepts the
+# connection and then says nothing used to hold the whole install for as long as
+# whoever ran it was willing to wait (a CI job's limit was forty minutes, twice).
+APT_UPDATE_TIMEOUT=300
 STOPPED_CASA_SERVICES=()
 INSTALL_COMPLETED=0
 # fork-release as it was before the copy onto / replaced it (see onExit)
@@ -543,7 +547,13 @@ Update_Package_Resource() {
     if [ -x "$(command -v apk)" ]; then
         ${sudo_cmd} apk update || refreshed=$?
     elif [ -x "$(command -v apt-get)" ]; then
-        ${sudo_cmd} apt-get update -qq || refreshed=$?
+        # bounded where timeout exists; apt-get answers its TERM and leaves its lists
+        # as they were, and what follows is the same as for any refresh that failed
+        if [ -x "$(command -v timeout)" ]; then
+            ${sudo_cmd} timeout "${APT_UPDATE_TIMEOUT}" apt-get update -qq || refreshed=$?
+        else
+            ${sudo_cmd} apt-get update -qq || refreshed=$?
+        fi
     elif [ -x "$(command -v dnf)" ]; then
         ${sudo_cmd} dnf check-update || refreshed=$?
     elif [ -x "$(command -v zypper)" ]; then
@@ -553,6 +563,10 @@ Update_Package_Resource() {
     fi
     ColorReset
 
+    if ((refreshed == 124)); then
+        Show 3 "apt did not finish refreshing the package lists in ${APT_UPDATE_TIMEOUT} seconds (a mirror that does not answer). Continuing with the lists this host already has."
+        return 0
+    fi
     if ((refreshed != 0)); then
         Show 3 "Could not refresh the package lists (exit ${refreshed}). Continuing with the lists this host already has; a repository of its own being stale is not a reason to stop upgrading CasaOS."
         return 0
