@@ -2,6 +2,25 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.19] - 2026-10-08
+
+Components: CasaOS `v0.4.65`, CasaOS-UI `v0.4.79`. Unchanged from v0.5.18: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Changed
+
+- **The System packages update leaves Docker alone, and shows it on a line of its own.** Updating docker-ce or containerd.io restarts the Docker daemon, and every container stops until it is back (measured on six machines: from under a second to a few seconds on a quiet box; apps with a restart policy start again by themselves, the others stay stopped, an app made from a compose file with no `restart:` key among them). The update used to run one `apt-get upgrade` of everything, Docker's packages included, without saying so. It now installs the list its check shows, minus Docker's, after a simulation of exactly that list has been found to change nothing of Docker's and to remove nothing, and the update's unit simulates it once more just before it installs and installs nothing if the answer changed. The check lists Docker apart: its version, where it came from (Docker's own repository, the distribution's `docker.io`, a snap), what is on offer, whether installing it restarts Docker, and the command to type to update it yourself, which names every package the line lists. A box with no Docker engine is not affected.
+- **Nothing starts an update while another change is running.** A ReCasaOS update, a package update and a package manager holding dpkg's lock now hold each other off; the automatic updater waits for the box to be free instead of counting a failed attempt.
+
+### Fixed
+
+- **The ReCasaOS update dialog no longer spins for ever when the update is refused.** It gives its button back and says why.
+- **The Docker line does not say "up to date" of what apt cannot see**: a snap, or a Docker whose source is not known. It says so, and gives the snap's command.
+
+### Added
+
+- **Every release's install check asks System packages for its list** and requires that Docker has its line and that none of its packages is in the list the update installs, on every system it installs on.
+- **A measurement of what a Docker upgrade does to a running box** can be run by hand against the latest release (workflow `docker-upgrade-measure`): how long the daemon is away, which containers come back, whether a database that acknowledges each write loses one, whether AppManagement keeps answering, and, for this release's update, that Docker comes out of it untouched, not restarted, with every container running throughout.
+
 ## [0.5.18] - 2026-10-08
 
 Components: all unchanged from v0.5.17. Only the installer changes.

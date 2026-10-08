@@ -85,4 +85,14 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "${url}/v1/users/current" -H "Aut
 echo "/v1/users/current with the token: ${code}"
 test "${code}" = 200
 
+curl -fsS --max-time 300 "${url}/v1/sys/packages" -H "Authorization: ${token}" >packages.json
+jq '.data | {supported, count, docker}' packages.json
+jq -e '.data.supported == true' packages.json
+jq -e '.data.docker.installed == true and (.data.docker.version | test("^[0-9]"))' packages.json
+if jq -r '.data.updates[].name' packages.json | grep -E '^(docker-ce|docker-ce-cli|docker-ce-rootless-extras|containerd\.io|docker-buildx-plugin|docker-compose-plugin|docker-model-plugin|docker\.io|containerd)$'; then
+  echo "a package of Docker's is in the list the System packages update installs"
+  exit 1
+fi
+echo 'System packages shows Docker on a line of its own'
+
 echo "${PRETTY_NAME}: all questions answered"

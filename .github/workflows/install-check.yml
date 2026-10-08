@@ -280,6 +280,23 @@ jobs:
           echo "::add-mask::${token}"
           echo "CASA_TOKEN=${token}" >> "$GITHUB_ENV"
 
+      # Docker is not part of the System packages update (v0.5.19): upgrading docker-ce or
+      # containerd.io restarts the daemon and stops every container, and the dashboard's
+      # update used to do that unannounced. On a box that has a Docker engine, the check
+      # lists Docker on a line of its own, with its version, and none of its packages is in
+      # the list the update installs. (Run against an older tag, this step fails: they did.)
+      - name: System packages shows Docker on a line of its own
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 300 "${CASA_URL}/v1/sys/packages" -H "Authorization: ${CASA_TOKEN}" > packages.json
+          jq '.data | {supported, manager, count, docker}' packages.json
+          jq -e '.data.supported == true' packages.json
+          jq -e '.data.docker.installed == true and (.data.docker.version | test("^[0-9]"))' packages.json
+          if jq -r '.data.updates[].name' packages.json | grep -E '^(docker-ce|docker-ce-cli|docker-ce-rootless-extras|containerd\.io|docker-buildx-plugin|docker-compose-plugin|docker-model-plugin|docker\.io|containerd)$'; then
+            echo "a package of Docker's is in the list the System packages update installs"
+            exit 1
+          fi
+
       # The install above ran with --no-telemetry on a machine that never had
       # CasaOS: the installer named what it replaced, closed on the statistics
       # being off, and the core came up with them off. Its preview is what it

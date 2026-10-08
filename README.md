@@ -55,7 +55,7 @@ sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-c
 
 A new major version (28 to 29) is a bigger step: read Docker's release notes first. A Docker from your distribution's own packages (`docker.io`) or from snap is updated with the tools of that system.
 
-One thing to know: the dashboard's *System packages* update runs a plain `apt-get upgrade`. When Docker's repository is configured, that includes Docker's packages, and so it can restart Docker and move it to a newer version. Taking Docker out of that update, and showing it on its own, is planned.
+Since v0.5.19 the dashboard's *System packages* update leaves Docker out and shows it on a line of its own, with the command above for the packages it lists. Before, it ran a plain `apt-get upgrade`, which included Docker's packages when Docker's repository was configured, and so could restart Docker and move it to a newer version.
 
 ## Anonymous statistics
 
@@ -103,6 +103,10 @@ Any one of these; an upgrade never turns them back on.
 
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
+
+## What is in v0.5.19
+
+**System packages leaves Docker alone** and shows it on a line of its own, with the command to update it yourself: updating Docker restarts it and stops every container until it is back, and that update used to do it without saying so.
 
 ## What is in v0.5.18
 
