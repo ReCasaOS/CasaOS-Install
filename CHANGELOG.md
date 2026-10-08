@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.16] - 2026-10-08
+
+Components: all unchanged from v0.5.15 (CasaOS `v0.4.64`, CasaOS-UI `v0.4.78`, CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`). Only the installer changes.
+
+### Fixed
+
+- **A fresh install on Debian 11 says what is wrong, and offers to mend it.** Debian 11 is out of support, and its security repository still lists packages it has deleted: apt refreshed its lists without a complaint, then could not download `ntfs-3g`, and the install ended on apt's raw `404 Not Found`. When apt answers 404 for a package on Debian 11, the installer now names the package and the cause, and asks, when it has a terminal, whether to take that repository from `archive.debian.org`: it keeps the first copy of `/etc/apt/sources.list` as `sources.list.recasaos.bak`, refreshes apt, tries the package again and goes on. `--use-debian-archive`, or `RECASAOS_DEBIAN_ARCHIVE=1` on the install line (`curl ... | sudo bash -s -- --use-debian-archive`), says yes in advance. With neither, and without a terminal, as in the in-app update, it changes nothing and prints the commands to run. A failure that is not a 404 (a lock, a full disk, no network) never touches the sources, and any other system gets the explanation and no change. An upgrade of a box that already has what the installer needs is not affected.
+
+### Added
+
+- **The install check runs on more systems.** Every release is now installed from scratch on Debian 11 (with `--use-debian-archive`), Debian 12, Debian 13, Ubuntu 24.04 and Ubuntu 26.04, as QEMU machines started from each distribution's own cloud image, beside the Ubuntu 22.04 runners on amd64 and arm64. Those are the systems the anonymous statistics show boxes running.
+
 ## [0.5.15] - 2026-10-07
 
 Components: CasaOS-UserService `v0.4.31`. Unchanged from v0.5.14: CasaOS `v0.4.64`, CasaOS-UI `v0.4.78`, CasaOS-AppManagement `v0.4.68`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

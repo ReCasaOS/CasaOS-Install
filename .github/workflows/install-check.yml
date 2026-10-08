@@ -16,6 +16,9 @@ name: install-check
 # released before the anonymous statistics refuse: to check one of those tags
 # by hand, dispatch with "Use workflow from" set to that same tag, whose own
 # install-check.yml installs without the flag.
+# Likewise the Debian 11 leg passes --use-debian-archive, which an installer older
+# than v0.5.16 does not know: dispatched against one of those tags, that leg
+# ends on the usage text, and the others are unaffected.
 
 on:
   workflow_call:
@@ -1694,6 +1697,18 @@ jobs:
             image: debian-12-genericcloud-amd64.qcow2
             sums: SHA512SUMS
             algo: sha512sum
+          # Out of support: its security repository lists packages it no longer
+          # serves, and a fresh install stops at ntfs-3g unless the installer is
+          # told to take that repository from archive.debian.org. The leg proves
+          # the installer does it and the box then works.
+          - name: Debian 11
+            id: debian
+            version: '11'
+            base: https://cloud.debian.org/images/cloud/bullseye/latest
+            image: debian-11-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+            args: --use-debian-archive
           - name: Ubuntu 24.04
             id: ubuntu
             version: '24.04'
@@ -1718,6 +1733,7 @@ jobs:
       ALGO: ${{ matrix.algo }}
       EXPECT_ID: ${{ matrix.id }}
       EXPECT_VERSION_ID: ${{ matrix.version }}
+      INSTALLER_ARGS: ${{ matrix.args }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1783,7 +1799,7 @@ jobs:
         run: |
           set -euo pipefail
           scp -F ssh_config published/install.sh published/expected.env scripts/vm-smoke.sh vm:
-          ssh -F ssh_config vm "EXPECT_ID=${EXPECT_ID} EXPECT_VERSION_ID=${EXPECT_VERSION_ID} bash vm-smoke.sh"
+          ssh -F ssh_config vm "EXPECT_ID=${EXPECT_ID} EXPECT_VERSION_ID=${EXPECT_VERSION_ID} INSTALLER_ARGS='${INSTALLER_ARGS}' bash vm-smoke.sh"
 
       - name: What the machine says when it is not well
         if: always()

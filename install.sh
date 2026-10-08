@@ -174,6 +174,16 @@ NO_TELEMETRY=0
 if [[ "${RECASAOS_TELEMETRY:-}" == "0" ]]; then
     NO_TELEMETRY=1
 fi
+# Debian 11 is out of support and its security repository lists packages it no
+# longer serves. --use-debian-archive, or RECASAOS_DEBIAN_ARCHIVE=1 on the install
+# line, lets the installer point apt at archive.debian.org for that repository
+# without asking; without either it asks, when it has a terminal to ask on, and
+# otherwise only says what to run (see Package_Install_Failed).
+DEBIAN_ARCHIVE=0
+if [[ "${RECASAOS_DEBIAN_ARCHIVE:-}" == "1" ]]; then
+    DEBIAN_ARCHIVE=1
+fi
+APT_SOURCES_LIST=/etc/apt/sources.list
 STOPPED_CASA_SERVICES=()
 INSTALL_COMPLETED=0
 # fork-release as it was before the copy onto / replaced it (see onExit)
@@ -551,6 +561,82 @@ Update_Package_Resource() {
     Show 0 "Update package manager complete."
 }
 
+# A dependency apt could not install. One cause is not the host's to mend by
+# retrying: a repository that still publishes its index but no longer serves the
+# files it lists, which apt reports as "404 Not Found" and which is what a release
+# out of support looks like. Debian 11 is that today (its security repository
+# lists ntfs-3g 2017.3.23AR.3-4+deb11u5 and has deleted it), and the fix is known:
+# take that repository from archive.debian.org. It is the owner's sources, so the
+# installer changes them only for that cause, seen in apt's own words, and only
+# when told to or when the owner says yes on the terminal. Any other failure, on
+# any system, gets the explanation and no change.
+
+# Whether an answer typed at the prompt is a yes.
+Answer_Is_Yes() {
+    [[ "$1" == [yY] || "$1" == [yY][eE][sS] ]]
+}
+
+# Whether the owner agrees to that change: the option or the variable said so in
+# advance, or they answer yes. A run with no terminal to ask on (the in-app update,
+# output going to a log) never asks, and so never changes the sources.
+Debian_Archive_Agreed() {
+    local package="$1" answer=""
+    if ((DEBIAN_ARCHIVE)); then return 0; fi
+    # a terminal that can be written to and read from, not only a stdout that is one
+    [[ -t 1 ]] && { : </dev/tty; } 2>/dev/null || return 1
+    {
+        echo -e "Debian 11 is out of support: its security repository lists packages it no longer serves, so \e[33m$package \e[0mcannot be downloaded (apt said 404 Not Found)."
+        echo "Point apt at Debian's archive for that repository now? The first copy of ${APT_SOURCES_LIST} is kept as ${APT_SOURCES_LIST}.recasaos.bak."
+        printf 'Change it? [y/N] '
+    } >/dev/tty
+    read -r -t 120 answer </dev/tty || return 1
+    Answer_Is_Yes "${answer}"
+}
+
+# Take the security repository from the archive, keeping the first copy of the
+# file. False when the file has no such repository line to move, or a step fails;
+# true when the sources were moved, whether or not every repository then refreshed:
+# the retry of the install is what decides.
+Use_Debian_Archive() {
+    grep -Eq '^[[:space:]]*deb(-src)?[[:space:]].*//(deb|security)\.debian\.org/debian-security' "${APT_SOURCES_LIST}" 2>/dev/null || return 1
+    [[ -e "${APT_SOURCES_LIST}.recasaos.bak" ]] || ${sudo_cmd} cp -p "${APT_SOURCES_LIST}" "${APT_SOURCES_LIST}.recasaos.bak" || return 1
+    ${sudo_cmd} sed -i -E 's#//(deb|security)\.debian\.org/debian-security#//archive.debian.org/debian-security#' "${APT_SOURCES_LIST}" || return 1
+    Show 2 "apt now takes Debian's security updates from archive.debian.org; the first copy of the file is ${APT_SOURCES_LIST}.recasaos.bak."
+    ${sudo_cmd} apt-get update -qq || Show 3 "Some repositories could not be refreshed; trying the install anyway."
+    return 0
+}
+
+Package_Install_Failed() {
+    local package="$1" why="" cause_is_404=0 tried=0
+    ColorReset
+    if [[ "${ID:-}" == debian && "${VERSION_ID:-}" == 11 ]]; then
+        # look at what apt says for this package, not at the system's age: a lock,
+        # a full disk or a network failure is not this and must not move the sources
+        why="$(${sudo_cmd} apt-get -y -qq --download-only install "$package" --no-upgrade 2>&1)" || true
+        if grep -Eq '404 +Not Found' <<<"${why}"; then cause_is_404=1; fi
+    fi
+    if ((cause_is_404)); then
+        if Debian_Archive_Agreed "$package" && Use_Debian_Archive; then
+            if ${sudo_cmd} apt-get -y -qq install "$package" --no-upgrade; then
+                return 0
+            fi
+            tried=1
+        fi
+        if ((tried)); then
+            Show 3 "apt now takes Debian's security updates from archive.debian.org, but \e[33m$package \e[0mstill could not be installed: its message is above."
+        else
+            Show 3 "Debian 11 is out of support. Its security repository still lists packages it no longer serves, so apt cannot download \e[33m$package \e[0m(the 404 Not Found above)."
+            Show 3 "Point apt at Debian's archive for that repository, keeping a copy of the file, then run this installer again:"
+            echo "           sudo sed -i.recasaos.bak -E 's#//(deb|security)\.debian\.org/debian-security#//archive.debian.org/debian-security#' /etc/apt/sources.list${LINE_BREAK}"
+            echo "           sudo apt-get update${LINE_BREAK}"
+            Show 3 "Or run it again with the option and it does that for you: curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash -s -- --use-debian-archive. Or move this machine to Debian 12 or newer, which is still supported."
+        fi
+    else
+        Show 3 "apt could not install \e[33m$package \e[0m: its message is above. If it says 404 Not Found, a repository of this system lists packages it no longer serves, which is what a release out of support looks like. Move to a supported release, or point apt at the distribution's archive, then run this installer again."
+    fi
+    Show 1 "Dependency \e[33m$package \e[0mcould not be installed."
+}
+
 # Install depends package
 Install_Depends() {
     for ((i = 0; i < ${#CASA_DEPANDS_COMMAND[@]}; i++)); do
@@ -562,7 +648,7 @@ Install_Depends() {
             if [ -x "$(command -v apk)" ]; then
                 ${sudo_cmd} apk add --no-cache "$packagesNeeded"
             elif [ -x "$(command -v apt-get)" ]; then
-                ${sudo_cmd} apt-get -y -qq install "$packagesNeeded" --no-upgrade
+                ${sudo_cmd} apt-get -y -qq install "$packagesNeeded" --no-upgrade || Package_Install_Failed "$packagesNeeded"
             elif [ -x "$(command -v dnf)" ]; then
                 ${sudo_cmd} dnf install "$packagesNeeded"
             elif [ -x "$(command -v zypper)" ]; then
@@ -1103,6 +1189,9 @@ Usage: install.sh [options]
 Valid options are:
     -p <build_dir>          Specify build directory (Local install)
     --no-telemetry          Turn anonymous statistics off (same as RECASAOS_TELEMETRY=0)
+    --use-debian-archive    On Debian 11, when apt answers 404 Not Found for a package, take the
+                            security repository from archive.debian.org and go on (same as
+                            RECASAOS_DEBIAN_ARCHIVE=1); the first copy of sources.list is kept
     -h                      Show this help message and exit
 
 Anonymous statistics: https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics
@@ -1124,6 +1213,9 @@ while getopts ":p:h-:" arg; do
         case "$OPTARG" in
         no-telemetry)
             NO_TELEMETRY=1
+            ;;
+        use-debian-archive)
+            DEBIAN_ARCHIVE=1
             ;;
         *)
             usage 1

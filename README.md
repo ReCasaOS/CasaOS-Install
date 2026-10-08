@@ -37,7 +37,7 @@ On top of what CasaOS did:
 curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash
 ```
 
-Supported architectures: amd64, arm64 and arm/v7. The installer detects the distribution and architecture at run time. Ubuntu 26 is supported but not required. Every release is installed from scratch by CI right after it is published, on Ubuntu 22.04 (amd64 and arm64), Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (amd64). Debian 11 is not among them: it is out of support, and its security repository still lists packages it no longer serves, so a fresh install stops at the first one it needs from there (an upgrade of a box that already has them is not affected).
+Supported architectures: amd64, arm64 and arm/v7. The installer detects the distribution and architecture at run time. Ubuntu 26 is supported but not required. Every release is installed from scratch by CI right after it is published, on Ubuntu 22.04 (amd64 and arm64), Ubuntu 24.04, Ubuntu 26.04, Debian 12 and Debian 13 (amd64). Debian 11 (amd64) is out of support and its security repository still lists packages it no longer serves, so a fresh install would stop at the first one it needs from there: the installer says so and offers to take that repository from archive.debian.org (`--use-debian-archive` says yes in advance), and CI installs it that way.
 
 Running the same command on an existing install upgrades it. Installs made from alvins82's or IceWhale's installers can be migrated the same way; the in-app updater then follows this distribution's releases. Do not use `get.casaos.io/update` afterwards: it installs IceWhale's frozen component bundle.
 
@@ -89,6 +89,10 @@ Any one of these; an upgrade never turns them back on.
 
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
+
+## What is in v0.5.16
+
+**A fresh install on Debian 11 explains itself and offers to mend it** (its security repository no longer serves what it lists), and the install check now covers Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04.
 
 ## What is in v0.5.15
 

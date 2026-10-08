@@ -36,6 +36,9 @@ jobs:
       - name: Check the installer's statistics functions
         run: bash scripts/test-install-telemetry.sh
 
+      - name: Check what the installer says when a dependency cannot be installed
+        run: bash scripts/test-install-dependencies.sh
+
       - name: Load component pins
         run: |
           set -euo pipefail
