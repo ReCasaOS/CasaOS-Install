@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn what docker-upgrade-measure.sh wrote into numbers, or say the run is invalid.
 
-    docker-upgrade-report.py <out dir> <amd64|arm64> <generic|targeted|major>
+    docker-upgrade-report.py <out dir> <amd64|arm64> <generic|targeted|major|excluded>
 
 Prints a markdown report (and writes it to <out dir>/report.md).
 
@@ -113,7 +113,7 @@ rc = read("upgrade.rc").strip()
 # ---- is this run to be trusted -------------------------------------------------------
 
 problems = []
-need = ["upgrade_start", "upgrade_end", "upgrade_settled"] + ([] if mode == "major" else ["rollback_start", "rollback_end", "rollback_settled"])
+need = ["upgrade_start", "upgrade_end", "upgrade_settled"] + ([] if mode in ("major", "excluded") else ["rollback_start", "rollback_end", "rollback_settled"])
 for m in need:
     if m not in markers:
         problems.append("marker %s is missing: the run did not get that far" % m)
@@ -135,7 +135,19 @@ elif "upgrade_start" in markers:
         problems.append("docker was not answering when the upgrade started")
 # the packages really changed
 dc_before, dc_after = package_version(before, "docker-ce"), package_version(after, "docker-ce")
-if before["present"] and after["present"]:
+if before["present"] and after["present"] and mode == "excluded":
+    # the box must start a major behind, with the new one on offer, and have something besides Docker to upgrade
+    if dc_before is None or dc_after is None:
+        problems.append("docker-ce is not in the package list of a snapshot")
+    elif major(upstream(dc_before)) != 28:
+        problems.append("the box did not start on a Docker 28 (docker-ce %s)" % dc_before)
+    sim_text = read("simulation.txt")
+    candidate = re.search(r"^Inst docker-ce \[[^\]]*\] \((\S+)", sim_text, re.M)
+    if not candidate or (major(upstream(candidate.group(1))) or 0) <= 28:
+        problems.append("the simulation offers no newer major of docker-ce: there was nothing to exclude")
+    if not read("upgrade-names.txt").split():
+        problems.append("the explicit list is empty")
+elif before["present"] and after["present"]:
     if dc_before is None or dc_after is None:
         problems.append("docker-ce is not in the package list of a snapshot")
     elif dc_before == dc_after:
@@ -149,12 +161,44 @@ if mode == "generic":
     sim = read("simulation.txt")
     if not re.search(r"^Inst (docker|containerd)", sim, re.M):
         problems.append("the dashboard's upgrade simulation lists no Docker package: the box was not behind")
-if mode != "major" and "rollback_start" in markers:
+if mode not in ("major", "excluded") and "rollback_start" in markers:
     if read("rollback.rc").strip() == "":
         problems.append("the rollback did not report an exit status")
 
 if problems:
     finish("# Docker upgrade, %s, %s: INVALID RUN\n\nNo verdict: nothing below can be trusted.\n\n%s\n" % (mode, arch, "\n".join("- " + p for p in problems)), 1)
+
+# ---- an excluded run: what the core installs now leaves Docker alone -----------------
+
+if mode == "excluded":
+    names = read("upgrade-names.txt").split()
+    sim_text = read("simulation.txt")
+    held = [l.split()[1] for l in sim_text.splitlines() if re.match(r"Inst (docker|containerd)", l)]
+    win = [r for r in rows if markers["upgrade_start"] <= r["t"] <= markers["upgrade_settled"]]
+    out_lines = ["# Docker left alone by the System packages update: %s" % arch, ""]
+    results = []
+
+    def check(name, ok, detail):
+        results.append((name, ok))
+        out_lines.append("- **%s** %s: %s" % ("PASS" if ok else "FAIL", name, detail))
+
+    out_lines.append("The box started on docker-ce %s with %s on offer (the 29 or later it would have jumped to), %d other package(s) to upgrade, which the update installed as an explicit list." % (dc_before, ", ".join(held) or "nothing", len(names)))
+    out_lines.append("")
+    still = [n for n in ("docker-ce", "docker-ce-cli", "containerd.io") if package_version(before, n) != package_version(after, n)]
+    check("Docker's packages are unchanged", not still, "docker-ce %s -> %s; containerd.io %s -> %s" % (dc_before, dc_after, package_version(before, "containerd.io"), package_version(after, "containerd.io")))
+    check("dockerd was not restarted", pid(before, "docker") is not None and pid(before, "docker") == pid(after, "docker"), "pid %s -> %s" % (pid(before, "docker"), pid(after, "docker")))
+    check("the engine is the same", before.get("docker") == after.get("docker"), "%s -> %s" % (before.get("docker"), after.get("docker")))
+    gaps = [r for r in win if (not r["answers"]) or r["unit"] != "active"]
+    check("dockerd answered in every sample", not gaps, "%d of %d samples not answering or not active" % (len(gaps), len(win)))
+    missing_somewhere = sorted(n for n in EXPECTED if any(n not in r["names"] for r in win if r["answers"]))
+    check("every container kept running throughout", not missing_somewhere, "missing at some point: %s" % (", ".join(missing_somewhere) or "none"))
+    pb, pa = pid(before, "casaos-app-management"), pid(after, "casaos-app-management")
+    check("AppManagement was not restarted", pb is not None and pb == pa, "pid %s -> %s" % (pb, pa))
+    log = read("upgrade.log")
+    check("apt did not install or upgrade a Docker package", not re.search(r"^(Unpacking|Setting up) (docker|containerd)", log, re.M), "the unit's log has no Unpacking or Setting up of a Docker package")
+    out_lines.append("")
+    out_lines.append("%d of %d verdicts pass." % (sum(1 for _, ok in results if ok), len(results)))
+    finish("\n".join(out_lines) + "\n", 0)
 
 # ---- episodes ----------------------------------------------------------------------
 

@@ -4,7 +4,8 @@ name: docker-upgrade-measure
 # daemon is away, which containers come back and when, whether a database that
 # acknowledges each write after a sync loses one, whether AppManagement keeps
 # answering, what the dashboard's "System packages" update does to Docker, and
-# whether putting the previous version back works. By hand only; it installs and
+# whether putting the previous version back works, and that the update as the core runs
+# it now leaves Docker alone. By hand only; it installs and
 # removes Docker on throwaway machines and publishes nothing. The numbers are
 # read by scripts/docker-upgrade-report.py against thresholds fixed beforehand
 # (and it says INVALID, with the reasons, for a run that cannot be trusted), and
@@ -41,6 +42,14 @@ jobs:
             runner: ubuntu-22.04-arm
             arch: arm64
             mode: generic
+          - label: Ubuntu 22.04 runner, the update as the core runs it now, Docker 28 with 29 on offer (amd64)
+            runner: ubuntu-22.04
+            arch: amd64
+            mode: excluded
+          - label: Ubuntu 22.04 runner, the update as the core runs it now, Docker 28 with 29 on offer (arm64)
+            runner: ubuntu-22.04-arm
+            arch: arm64
+            mode: excluded
     env:
       DEBIAN_FRONTEND: noninteractive
       MODE: ${{ matrix.mode }}
@@ -96,6 +105,13 @@ jobs:
           - name: Ubuntu 24.04
             label: the dashboard's update (needrestart is installed)
             mode: generic
+            base: https://cloud-images.ubuntu.com/releases/24.04/release
+            image: ubuntu-24.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+          - name: Ubuntu 24.04
+            label: the update as the core runs it now, Docker 28 with 29 on offer (needrestart is installed)
+            mode: excluded
             base: https://cloud-images.ubuntu.com/releases/24.04/release
             image: ubuntu-24.04-server-cloudimg-amd64.img
             sums: SHA256SUMS

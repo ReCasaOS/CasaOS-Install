@@ -10,6 +10,9 @@
 #   docker-upgrade-measure.sh generic    the dashboard's "System packages" update, run the way the core runs it
 #   docker-upgrade-measure.sh targeted   only Docker's own packages, --only-upgrade
 #   docker-upgrade-measure.sh major      the Docker of the machine's image, upgraded in place to the current one
+#   docker-upgrade-measure.sh excluded   the explicit list the core installs now: everything pending minus
+#                                        Docker's packages, on a box on Docker 28 with 29 on offer; Docker
+#                                        must come out of it untouched, and still running
 #
 # For generic and targeted the box starts on the previous version of Docker in the
 # same major as the newest one, with the newest on offer (containerd.io one version
@@ -37,8 +40,8 @@ fi
 
 MODE="${1:-}"
 case "${MODE}" in
-generic | targeted | major) ;;
-*) echo "usage: $0 generic|targeted|major" >&2; exit 2 ;;
+generic | targeted | major | excluded) ;;
+*) echo "usage: $0 generic|targeted|major|excluded" >&2; exit 2 ;;
 esac
 
 OUT="${OUT:-${PWD}/measure-${MODE}}"
@@ -96,10 +99,16 @@ prepare_docker() {
     [ "${#versions[@]}" -ge 2 ] || not_measured "apt offers fewer than two docker-ce versions"
     newest="${versions[0]}"
     for v in "${versions[@]:1}"; do
-        if [ "$(major_of "${v}")" = "$(major_of "${newest}")" ]; then prev="${v}"; break; fi
+        if [ "${MODE}" = excluded ]; then
+            # a box one major behind: the newest 28 with the 29 on offer
+            if [ "$(major_of "${v}")" = 28 ]; then prev="${v}"; break; fi
+        elif [ "$(major_of "${v}")" = "$(major_of "${newest}")" ]; then prev="${v}"; break; fi
     done
     [ -n "${prev}" ] && [ "${prev}" != "${newest}" ] ||
-        not_measured "no docker-ce older than ${newest} in the same major (a new major's first release?)"
+        not_measured "no docker-ce older than ${newest} to start from (a new major's first release?)"
+    if [ "${MODE}" = excluded ] && [ "$(major_of "${newest}")" = 28 ]; then
+        not_measured "the newest docker-ce is still a 28: there is no major jump to refuse"
+    fi
     echo "${newest}" >"${OUT}/newest"
     echo "${prev}" >"${OUT}/prev"
 
@@ -287,6 +296,24 @@ major)
     sed -i 's/sleep 20/sleep 0/' get-docker.sh
     UPGRADE=(sudo env DEBIAN_FRONTEND=noninteractive sh get-docker.sh)
     ;;
+excluded)
+    "${APT[@]}" update -qq
+    # what the core does: the simulation of a plain upgrade, minus Docker's family, as an explicit list
+    "${APT[@]}" -s --no-remove -o Debug::NoLocking=true -o Dpkg::Use-Pty=0 upgrade >"${OUT}/simulation.txt" 2>&1 || true
+    awk '$1 == "Inst" && $3 ~ /^\[/ && $2 !~ /^(docker-ce|docker-ce-cli|docker-ce-rootless-extras|containerd\.io|docker-buildx-plugin|docker-compose-plugin|docker-model-plugin|docker\.io|docker-compose-v2|docker-buildx|containerd)$/ && $2 ~ /^[a-z0-9][a-z0-9+.:-]*$/ {print $2}' "${OUT}/simulation.txt" >"${OUT}/upgrade-names.txt"
+    mapfile -t names <"${OUT}/upgrade-names.txt"
+    [ "${#names[@]}" -gt 0 ] || not_measured "nothing but Docker is pending on this machine"
+    # and the contract: that exact list, simulated, changes nothing of Docker's and removes nothing
+    "${APT[@]}" -s --no-remove -o Debug::NoLocking=true -o Dpkg::Use-Pty=0 install --only-upgrade --no-install-recommends "${names[@]}" >"${OUT}/simulation-list.txt" 2>&1 || true
+    if grep -Eq '^(Inst (docker|containerd)|Remv )' "${OUT}/simulation-list.txt"; then
+        log "the explicit list would change Docker or remove something: the core refuses it, and so does this"
+        echo "the explicit list would change Docker's packages or remove one" >"${OUT}/refused"
+        names=()
+    fi
+    [ "${#names[@]}" -gt 0 ] || not_measured "the explicit list was refused by its own simulation"
+    UPGRADE=(sudo systemd-run --quiet --wait --pipe --collect --property=Type=exec --setenv=DEBIAN_FRONTEND=noninteractive
+        /bin/bash -o pipefail -c "/usr/bin/apt-get -y --no-remove -o Dpkg::Use-Pty=0 -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=120 install --only-upgrade --no-install-recommends ${names[*]}")
+    ;;
 esac
 
 marker upgrade_start
@@ -307,7 +334,7 @@ sudo journalctl --no-pager --since "@${start_epoch:-0}" -u casaos-message-bus -u
     grep -iE 'container-(died|exit|oom|stop|unhealth)|app:container|alerts?[: ]' >"${OUT}/alerts.txt" || true
 sudo journalctl --no-pager --since "@${start_epoch:-0}" 2>/dev/null | grep -i needrestart >"${OUT}/needrestart.txt" || true
 
-if [ "${MODE}" != major ]; then
+if [ "${MODE}" != major ] && [ "${MODE}" != excluded ]; then
     # the way back an owner would be given: the engine and its client only
     marker rollback_start
     prev="$(cat "${OUT}/prev")"
