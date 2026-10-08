@@ -27,19 +27,67 @@ on:
         description: The installer release to install (a tag of this repository)
         required: true
         type: string
+      docker_version:
+        description: Run one leg on this Docker engine (24.0.5, 20.10.24) instead of the usual legs
+        required: false
+        default: ''
+        type: string
+      engine_arch:
+        description: amd64 or arm64, for a docker_version run
+        required: false
+        default: amd64
+        type: string
   workflow_dispatch:
     inputs:
       tag:
         description: The installer release to install (a tag of this repository)
         required: true
         type: string
+      docker_version:
+        description: Run one leg on this Docker engine (24.0.5, 20.10.24) instead of the usual legs
+        required: false
+        default: ''
+        type: string
+      engine_arch:
+        description: amd64 or arm64, for a docker_version run
+        required: false
+        default: amd64
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  # Which legs this run has: the usual four, or the one engine somebody asked for.
+  plan:
+    name: Which legs
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.legs.outputs.matrix }}
+    steps:
+      - id: legs
+        env:
+          DOCKER_VERSION: ${{ inputs.docker_version }}
+          ENGINE_ARCH: ${{ inputs.engine_arch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DOCKER_VERSION}" ]; then
+            matrix='{"include":[{"arch":"amd64","runner":"ubuntu-22.04","docker":"preinstalled"},{"arch":"arm64","runner":"ubuntu-22.04-arm","docker":"preinstalled"},{"arch":"amd64","runner":"ubuntu-22.04","docker":"current"},{"arch":"arm64","runner":"ubuntu-22.04-arm","docker":"current","engine_only":true}]}'
+          else
+            [[ "${DOCKER_VERSION}" =~ ^[0-9]{2}\.[0-9]+\.[0-9]+$ ]] || { echo "docker_version looks like 24.0.5, not '${DOCKER_VERSION}'"; exit 1; }
+            case "${ENGINE_ARCH:-amd64}" in
+              amd64) runner=ubuntu-22.04 ;;
+              arm64) runner=ubuntu-22.04-arm ;;
+              *) echo "engine_arch is amd64 or arm64"; exit 1 ;;
+            esac
+            matrix="$(jq -cn --arg arch "${ENGINE_ARCH:-amd64}" --arg runner "${runner}" --arg v "${DOCKER_VERSION}" '{include:[{arch:$arch,runner:$runner,docker:"pinned",docker_version:$v,engine_only:true}]}')"
+          fi
+          echo "${matrix}" | jq .
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
   install-check:
-    name: Install the published bundle and use it (${{ matrix.arch }}, Docker ${{ matrix.docker }})
+    name: Install the published bundle and use it (${{ matrix.arch }}, Docker ${{ matrix.docker }}${{ matrix.docker_version && format(' {0}', matrix.docker_version) || '' }})
+    needs: plan
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     # The Raspberry Pi is the machine CasaOS is most often installed on, and
@@ -48,19 +96,15 @@ jobs:
     # install Docker on either leg; the third leg removes it first, so the box
     # gets what a new machine gets from get.docker.com that day. The legs are
     # independent: one red leg does not stop the evidence of the others.
+    #
+    # The Raspberry Pi leg on the current Docker is "engine only": it installs, brings
+    # the box up and runs the steps that touch the engine (a compose app, a stack built
+    # from a Dockerfile, an app deployed from git), and leaves out what the other legs
+    # already prove about CasaOS itself (backups, the bus, statistics, RAID...).
+    # A run with docker_version set is one more such leg, on the engine asked for.
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-22.04
-            docker: preinstalled
-          - arch: arm64
-            runner: ubuntu-22.04-arm
-            docker: preinstalled
-          - arch: amd64
-            runner: ubuntu-22.04
-            docker: current
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
@@ -78,7 +122,7 @@ jobs:
       # containerd image store the default on a new installation, and until
       # v0.4.88 nothing had run CasaOS on it.
       - name: No Docker on this box before the installer
-        if: matrix.docker == 'current'
+        if: matrix.docker != 'preinstalled'
         run: |
           set -euo pipefail
           sudo systemctl stop docker.socket docker.service containerd.service 2>/dev/null || true
@@ -93,6 +137,44 @@ jobs:
             echo "docker is still on this box"
             exit 1
           fi
+
+      # What the runner image brings is a property of the image, and the installer must
+      # leave it as it finds it: its version is written down here and compared after.
+      - name: The Docker this box starts with
+        if: matrix.docker == 'preinstalled'
+        run: |
+          set -euo pipefail
+          before="$(sudo docker version --format '{{.Server.Version}}')"
+          echo "docker ${before}"
+          test "${before%%.*}" -eq 28
+          echo "DOCKER_BEFORE=${before}" >> "$GITHUB_ENV"
+
+      # A box that already has an older Docker: the installer must leave it alone too.
+      # Pinned here before the installer, never as VERSION=... on its command line
+      # (install.sh sources /etc/os-release, which overwrites VERSION). The version
+      # reaches the shell through the environment and is checked against a pattern.
+      # containerd.io is taken from the 1.7 line for the engines that predate 2.x.
+      - name: Docker, pinned to ${{ matrix.docker_version }}
+        if: matrix.docker == 'pinned'
+        env:
+          DOCKER_VERSION: ${{ matrix.docker_version }}
+        run: |
+          set -euo pipefail
+          [[ "${DOCKER_VERSION}" =~ ^[0-9]{2}\.[0-9]+\.[0-9]+$ ]]
+          curl -fsSL https://get.docker.com -o get-docker.sh
+          for attempt in 1 2 3; do
+            sudo sh get-docker.sh --version "${DOCKER_VERSION}" && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            sleep 20
+          done
+          if [ "${DOCKER_VERSION%%.*}" -lt 27 ]; then
+            sudo apt-get install -y -q --allow-downgrades 'containerd.io=1.7.*' || echo "containerd.io 1.7 is not offered for this system; keeping $(containerd --version)"
+          fi
+          sudo systemctl restart docker
+          version="$(sudo docker version --format '{{.Server.Version}}')"
+          echo "docker ${version}, $(containerd --version)"
+          test "${version}" = "${DOCKER_VERSION}"
+          echo "DOCKER_BEFORE=${version}" >> "$GITHUB_ENV"
 
       # With --no-telemetry, as the README gives it: no step may run the core
       # with anonymous statistics on and the default endpoint, PostHog. They are
@@ -111,6 +193,10 @@ jobs:
           echo "docker ${version}, storage driver $(sudo docker info --format '{{.Driver}}')"
           if [ "${{ matrix.docker }}" = current ]; then
             test "${version%%.*}" -ge 29
+          fi
+          # The README says the installer leaves a Docker that is already there as it is.
+          if [ -n "${DOCKER_BEFORE:-}" ]; then
+            test "${version}" = "${DOCKER_BEFORE}"
           fi
 
       - name: Every service is up, and it is this release
@@ -166,6 +252,7 @@ jobs:
       # is verified is that the dashboard and the API answer there, that the
       # certificate is the gateway's own, and that its key is root's alone.
       - name: HTTPS on 443 with the gateway's own certificate
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           for _ in $(seq 1 20); do
@@ -198,6 +285,7 @@ jobs:
       # being off, and the core came up with them off. Its preview is what it
       # would send, built by the code that sends.
       - name: Statistics are off after an install with --no-telemetry
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           grep -E '\] Previous release: new *$' install.log
@@ -218,6 +306,7 @@ jobs:
       # call with the secret goes through, and the management API on its own
       # port wants the same.
       - name: Loopback alone is not a service
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           for path in /v2/app_management/compose '/v1/file?path=/etc/shadow' /v1/users/current /v1/storage /v1/sys/debug /v1/gateway/port; do
@@ -243,6 +332,7 @@ jobs:
       # events and nothing else fails, so the bus has to list all five, refuse a
       # local call with no credential, and take one with the secret.
       - name: The message bus knows every service, and asks local callers for the secret
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           types="$(curl -fsS "${CASA_URL}/v2/message_bus/event_type" -H "Authorization: ${CASA_TOKEN}" \
@@ -271,6 +361,7 @@ jobs:
       # The bus's own socket left /tmp, where any local user could squat the path,
       # and the start scripts run with their shebang and leave a trace in the journal.
       - name: Subscribing to the bus needs a token, its socket is root's, start scripts are logged
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           ws() {
@@ -304,6 +395,7 @@ jobs:
       # test on this machine while going through exactly the same daemon, the
       # same socket and the same rc calls an S3 bucket would.
       - name: A backup destination, and the daemon answers for it
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           sudo mkdir -p /var/tmp/casaos-backup-smoke
@@ -341,6 +433,7 @@ jobs:
           docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
 
       - name: A backup of it, through rclone, found on disk
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           # One operation at a time per app: the install keeps its hold for a moment
@@ -378,6 +471,7 @@ jobs:
       # restore is asked for, and the original content has to be back -- through
       # the same daemon, with the app held still and started again.
       - name: A restore of it, from that backup
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           stamp="$(curl -fsS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
@@ -408,6 +502,7 @@ jobs:
       # and a restore has to install it from the compose file the backup kept
       # and put its data back -- through the same door a fresh box would use.
       - name: A restore of it when it is not installed any more
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           stamp="$(curl -fsS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
@@ -452,6 +547,7 @@ jobs:
       # restore does not know the difference. Then one backup is deleted and
       # the destination stops listing it.
       - name: An encrypted destination, and deleting a backup
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           sudo mkdir -p /var/tmp/casaos-backup-vault
@@ -499,6 +595,7 @@ jobs:
       # deleted, and comes back with the restore -- with the services that hold
       # those files stopped for the copy in both directions and active again.
       - name: The box itself, out and back
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           # The polls below run while user-service is stopped for the copy. A token
@@ -559,6 +656,7 @@ jobs:
       # deleted, by the arithmetic a schedule already used. Two backups with
       # keep=1, and one is left on disk.
       - name: A retention on demand
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           for i in 1 2; do
@@ -588,6 +686,7 @@ jobs:
       # compose file naming nginx:alpine: the run leaves it current, or re-pulls
       # it if the registry moved that tag since the install; neither is a failure.
       - name: Every app at once
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           plan="$(curl -fsS --max-time 300 "${CASA_URL}/v2/app_management/compose/updates?check=true" -H "Authorization: ${CASA_TOKEN}")"
@@ -611,6 +710,7 @@ jobs:
       # AppManagement fetches when IceWhale's URL stops answering. It has to be a
       # store: a zip with the apps in it.
       - name: The catalogue's copy is a store
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           curl -fsSL -o mirror.zip https://raw.githubusercontent.com/ReCasaOS/_appstore/main/store/main.zip
@@ -626,6 +726,7 @@ jobs:
       # is switched to big-bear alone, restarted, and asked for its categories
       # and its apps, then switched back.
       - name: The store, with the apps that quote their numbers, and on a v2 catalogue alone
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           for _ in $(seq 1 60); do
@@ -862,6 +963,7 @@ jobs:
       # exactly like an app that does not exist; and AppManagement's log holds neither
       # the secret nor any signature it was sent.
       - name: A push reaches a git app through its webhook
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
@@ -978,6 +1080,7 @@ jobs:
       # the check reports as moved. v1.0.0 and the second v1.1.0 are annotated tags, so the
       # commit the box reads for them must be the peeled one, not the tag object.
       - name: An app that follows tags
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           app_view() { curl -fsS "${CASA_URL}/v2/app_management/git/gittags" -H "Authorization: ${CASA_TOKEN}"; }
@@ -1192,6 +1295,7 @@ jobs:
       # core's first check, with statistics off, deleted the installer's), and a
       # second restart sends at once (CASAOS_TELEMETRY_START_DELAY=0s).
       - name: Statistics reach a local capture server, never PostHog
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           endpoint=http://127.0.0.1:18099/i/v0/e/
@@ -1292,6 +1396,7 @@ jobs:
       # before the unit is done calls it succeeded. fork-release, the feature
       # and the core's environment are put back as they were.
       - name: Automatic update
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
@@ -1424,6 +1529,7 @@ jobs:
       # Each has to arrive as an alert of its category within a bounded wait. The
       # channels, the app, the destination and the servers are removed afterwards.
       - name: Alerts
+        if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
           since="$(date +%s)"
@@ -1661,7 +1767,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: install-check-${{ inputs.tag }}-${{ matrix.arch }}-${{ matrix.docker }}
+          name: install-check-${{ inputs.tag }}-${{ matrix.arch }}-${{ matrix.docker }}${{ matrix.docker_version }}
           path: |
             install.log
             backup-files.txt
@@ -1676,6 +1782,7 @@ jobs:
   # scripts/vm-smoke.sh. The systems are the ones the anonymous statistics say
   # boxes run. Independent of the legs above, like they are of each other.
   vm:
+    if: ${{ inputs.docker_version == '' }}
     name: Install on ${{ matrix.name }} (amd64, QEMU)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1756,8 +1863,14 @@ jobs:
       - name: Boot it
         run: |
           set -euo pipefail
-          sudo timeout 300 apt-get update -qq
-          sudo timeout 600 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+          # The runner's apt sometimes stalls without a word (it has taken a whole job
+          # before): a few bounded tries, for that and for nothing else.
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm

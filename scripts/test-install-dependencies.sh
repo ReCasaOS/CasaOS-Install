@@ -28,7 +28,7 @@ INSTALL_SH="${WORK}/install.sh"
 tr -d '\r' <"${ROOT}/install.sh" >"${INSTALL_SH}"
 bash -n "${INSTALL_SH}" || fail "install.sh does not parse"
 
-for f in Answer_Is_Yes Debian_Archive_Agreed Use_Debian_Archive Package_Install_Failed; do
+for f in Answer_Is_Yes Debian_Archive_Agreed Use_Debian_Archive Package_Install_Failed Check_Docker_Install Check_Docker_Install_Final; do
     eval "$(sed -n "/^${f}() {\$/,/^}\$/p" "${INSTALL_SH}")"
     declare -F "${f}" >/dev/null || fail "install.sh defines no ${f}()"
 done
@@ -223,5 +223,67 @@ grep -q -- '--use-debian-archive  ' "${INSTALL_SH}" || fail "--use-debian-archiv
     fail "install.sh does not have exactly one apt-get install of \$packagesNeeded"
 grep -q 'apt-get -y -qq install "\$packagesNeeded" --no-upgrade || Package_Install_Failed "\$packagesNeeded"' "${INSTALL_SH}" ||
     fail "the apt-get install of \$packagesNeeded does not call Package_Install_Failed on failure"
+
+# Docker already on the box: said plainly when it is too old or does not answer, left
+# alone when it is fine, installed only when there is none. A docker is a script on a
+# PATH of its own here, answering as the test sets DOCKER_SAYS.
+MINIMUM_DOCKER_VERSION=20
+Install_Docker() { echo "[installed docker]"; }
+mkdir -p "${WORK}/bin" "${WORK}/nobin"
+cat >"${WORK}/bin/docker" <<'EOF'
+#!/bin/sh
+[ "${DOCKER_SAYS}" != down ] || exit 1
+echo "${DOCKER_SAYS}"
+EOF
+chmod +x "${WORK}/bin/docker"
+docker_says() { # <what docker answers, or "down"; "none" for no docker> <expected status>
+    local status=0 path="${WORK}/bin"
+    [[ "$1" != none ]] || path="${WORK}/nobin"
+    out="$(
+        exec 2>&1
+        set -e
+        export PATH="${path}" DOCKER_SAYS="$1"
+        Check_Docker_Install
+    )" || status=$?
+    [[ "${status}" -eq "$2" ]] || fail "docker '$1': status ${status}, wanted $2: ${out}"
+}
+docker_says 28.0.4 0
+grep -q 'Current Docker version is 28.0.4' <<<"${out}" || fail "docker 28.0.4: not said to be fine"
+docker_says "26.1.5+dfsg1" 0
+docker_says 20.10.24 0
+docker_says 19.03.15 1
+grep -q 'Recommended minimum Docker version' <<<"${out}" || fail "docker 19: no explanation of the minimum"
+docker_says 5.0.0 1
+grep -q 'Recommended minimum Docker version' <<<"${out}" || fail "docker 5.0.0: a one-digit major is not compared"
+! grep -qi 'syntax error\|invalid arithmetic' <<<"${out}" || fail "docker 5.0.0: the comparison broke: ${out}"
+docker_says down 1
+grep -q 'does not answer' <<<"${out}" || fail "docker down: said nothing"
+! grep -q 'installed docker' <<<"${out}" || fail "docker down: a Docker was installed over one that is only stopped"
+docker_says none 0
+grep -q 'installed docker' <<<"${out}" || fail "no docker: none was installed"
+grep -Fq ',\nCurrent Docker version is' "${INSTALL_SH}" || fail "the minimum-version message lost the line break before 'Current'"
+! grep -Fq ',\Current' "${INSTALL_SH}" || fail "install.sh still has the backslash-Current typo"
+! grep -Fq 'Docker_Version:0:2' "${INSTALL_SH}" || fail "install.sh still compares the first two characters of the Docker version"
+
+# The check after Docker was installed: the same, and it never installs Docker again.
+Check_Docker_Running() { echo "[docker running]"; }
+final_says() { # <what docker answers, or "down"> <expected status>
+    local status=0
+    out="$(
+        exec 2>&1
+        set -e
+        export PATH="${WORK}/bin" DOCKER_SAYS="$1"
+        Check_Docker_Install_Final
+    )" || status=$?
+    [[ "${status}" -eq "$2" ]] || fail "final check, docker '$1': status ${status}, wanted $2: ${out}"
+}
+final_says 29.8.2 0
+grep -q 'docker running' <<<"${out}" || fail "final check: Docker is not checked to be running"
+final_says 19.03.15 1
+grep -q 'Recommended minimum Docker version' <<<"${out}" || fail "final check, docker 19: no explanation of the minimum"
+final_says 5.0.0 1
+final_says down 1
+grep -q 'does not answer' <<<"${out}" || fail "final check, docker down: said nothing"
+! grep -q 'installed docker' <<<"${out}" || fail "final check, docker down: Docker was installed again"
 
 echo "ok: what install.sh does when a dependency cannot be installed"
