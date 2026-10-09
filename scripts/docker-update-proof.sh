@@ -10,7 +10,12 @@
 # among themselves, and the dashboard's own token where the route has to take that too.
 #
 #   docker-update-proof.sh major   Docker pinned to DOCKER_FROM (28.0.4) from Docker's repo, containerd.io
-#                                  on the 1.7 line when the repo has one, a 29 on offer: the owner's box.
+#                                  on the 1.7 line when the repo has one, a 29 on offer: the owner's box. Docker 29
+#                                  needs nftables and Docker 28 did not, and Docker's installer brings nftables in
+#                                  (iptables recommends it): when apt can take it out and nothing but libraries with it,
+#                                  the leg does, before the first check, so that the update has a package to bring that
+#                                  the box did not have, as on the owner's box. What it did, or why not, is in
+#                                  $OUT/dependency-path.
 #   docker-update-proof.sh minor   the previous patch of the current Docker minor (found with apt-cache
 #                                  madison, never written down), the current one on offer; and last, once
 #                                  the box is put back there, a second update with dockerd made unable to
@@ -24,7 +29,9 @@
 #
 # Nothing here judges: it writes what it saw into $OUT and docker-update-proof-report.py turns
 # that into verdicts, or says the run is invalid. It stops early (and says why, in $OUT/aborted)
-# only when it cannot go on: no plan to confirm, a start version apt does not have.
+# only when it cannot go on: no plan to confirm, a start version apt does not have. What dpkg had
+# installed just before the update was asked for and just after it ended goes to dpkg-before.tsv
+# and dpkg-after.tsv: the report sets them against the plan.
 #
 # Needs: PROOF_DISPOSABLE=1, EXPECT_ID and EXPECT_VERSION_ID (the system it must be, as
 # /etc/os-release names it), DOCKER_FROM for the major leg, INSTALLER_ARGS (options for install.sh,
@@ -59,6 +66,19 @@ pick_previous() {
     done
     if [ -z "${same_major}" ]; then return 1; fi
     echo "${same_major}"
+}
+
+# removal_ok: reads what `apt-get -s remove nftables` prints and says, on stdout, what apt would remove. Status 0
+# only when nftables is one of it and the rest are libraries: a box where something else needs nftables is not
+# ours to take it from, and an Inst line would mean that the removal installs something too.
+removal_ok() {
+    awk '
+        $1 == "Inst" { bad = 1 }
+        $1 == "Remv" || $1 == "Purg" {
+            names = names " " $2
+            if ($2 ~ /^nftables(:[a-z0-9-]+)?$/) { found = 1 } else if ($2 !~ /^lib[a-z0-9+.-]*(:[a-z0-9-]+)?$/) { bad = 1 }
+        }
+        END { sub(/^ /, "", names); print names; if (found && !bad) exit 0; exit 1 }'
 }
 
 # ---- the machine --------------------------------------------------------------------------------
@@ -167,6 +187,40 @@ install_casaos() {
     log "ReCasaOS is up at ${CASA_URL}"
 }
 
+# Docker 29 needs nftables and Docker 28 did not, so a box that is updated from 28 has packages to be brought that it
+# did not have. Docker's installer puts nftables on the box (iptables recommends it): on the major leg it is taken
+# out here, after Docker and ReCasaOS are installed and before the first check reads the plan, when apt says that it
+# takes nothing but libraries with it (first with the libraries nothing else needs, then nftables alone). Docker is
+# restarted after: nftables.service flushes the whole ruleset when it stops, Docker's rules included, and dockerd
+# makes them again when it starts. What was done, or why not, goes to $OUT/dependency-path, for the report to say
+# whether the update's way of bringing a new package was tried. The minor leg leaves nftables alone: Docker 29
+# depends on it, and removing it would remove Docker.
+prepare_dependency_path() {
+    local rec="${OUT}/dependency-path" sim="" names="" seen="" how flags
+    if [ "${LEG}" != major ]; then
+        printf 'action not-attempted\nreason only the major leg takes nftables out: Docker 29 already needs it\n' >"${rec}"
+        return 0
+    fi
+    if ! installed nftables; then
+        printf 'action skipped\nreason nftables is not installed\n' >"${rec}"
+        return 0
+    fi
+    for how in autoremove plain; do
+        flags=()
+        if [ "${how}" = autoremove ]; then flags=(--autoremove); fi
+        if sim="$("${APT[@]}" -s "${flags[@]}" remove nftables 2>&1)" && names="$(removal_ok <<<"${sim}")"; then
+            "${APT[@]}" -y -q "${flags[@]}" remove nftables >"${OUT}/dependency-path.log" 2>&1 || abort "could not take nftables out to try the dependency path"
+            ! installed nftables || abort "nftables is still installed after apt removed it"
+            systemctl restart docker || abort "docker could not be restarted after nftables was taken out"
+            wait_docker || abort "docker did not start again after nftables was taken out"
+            printf 'action removed\npackages %s\n' "${names}" >"${rec}"
+            return 0
+        fi
+        seen="$(removal_ok <<<"${sim}" || true)"
+    done
+    printf 'action skipped\nreason taking nftables out would take more than libraries with it: %s\n' "${seen:-apt listed no removal}" >"${rec}"
+}
+
 start_things() {
     local policy
     retry docker pull -q busybox >/dev/null
@@ -183,6 +237,16 @@ start_things() {
     docker run -d --init --name p-web --restart unless-stopped -p 18081:80 nginx:alpine >/dev/null
     docker run -d --init --name p-host --restart unless-stopped --network host busybox httpd -f -p 18082 -h /tmp >/dev/null
     sleep 5
+}
+
+# dpkg_dump <name>: every package dpkg knows, with its version and its state (`ii` is installed, `rc` removed with
+# its configuration kept), for the report to set before and after against the plan
+dpkg_dump() { dpkg-query -W -f='${Package}\t${Version}\t${db:Status-Abbrev}\n' >"${OUT}/dpkg-$1.tsv" || abort "dpkg-query could not list the packages"; }
+
+installed() { # <package>
+    local st
+    st="$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null || true)"
+    [[ "${st}" == ?i* ]]
 }
 
 snapshot() { # <name>
@@ -364,6 +428,7 @@ PY
 # ---- the update ------------------------------------------------------------------------------------------------
 
 update_run() {
+    dpkg_dump before
     marker post_start
     post_plan update-post "${PLAN_ID}"
     marker post_done
@@ -377,6 +442,7 @@ update_run() {
     log "the update ended: $(jq -c '.data | {state, outcome, error_code, from, to}' "${OUT}/status-final.json" 2>/dev/null || echo unreadable)"
 
     snapshot after
+    dpkg_dump after
     cp "$(runtime_log)" "${OUT}/docker-update.log" 2>/dev/null || true
     journalctl -u casaos-docker-update.service --no-pager >"${OUT}/unit-journal.txt" 2>&1 || true
     timeout -s KILL 20 docker logs --timestamps p-db >"${OUT}/db-logs.txt" 2>&1 || true
@@ -413,7 +479,8 @@ mend_daemon_json() {
 failure_run() {
     local pins=() fail_id start
     # the box is put back where the first run found it: the packages the plan moved, at the versions they had
-    mapfile -t pins < <(jq -r '.data.docker.update.packages[] | "\(.name)=\(.current_version)"' "${OUT}/packages-2.json")
+    # (a package the update brought has no version to go back to: it stays)
+    mapfile -t pins < <(jq -r '.data.docker.update.packages[] | select((.new // false) | not) | "\(.name)=\(.current_version)"' "${OUT}/packages-2.json")
     [ "${#pins[@]}" -gt 0 ] || abort "no packages to put back"
     "${APT[@]}" install -y -q --allow-downgrades "${pins[@]}" >"${OUT}/downgrade.log" 2>&1 || abort "could not put the box back on ${START_VERSION}"
     wait_docker || abort "docker does not answer after the box was put back"
@@ -498,6 +565,7 @@ main() {
     install_docker
     echo "${START_VERSION}" >"${OUT}/start-version"
     install_casaos
+    prepare_dependency_path
     start_things
     "${APT[@]}" update -qq
     {

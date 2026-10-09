@@ -640,9 +640,9 @@ case("a feature that is missing and a run that stopped says FAIL and INVALID", 1
 BASH = os.environ.get("TEST_BASH") or "bash"   # on Windows, plain `bash` may be WSL's launcher: TEST_BASH names Git's
 
 
-def bash_run(snippet, *args):
+def bash_run(snippet, *args, input=None):
     """the guest script sourced into a bash that then runs the snippet"""
-    return subprocess.run([BASH, "-c", 'source "$1"; shift; ' + snippet, "_", SCRIPT.replace("\\", "/")] + list(args), capture_output=True, text=True)
+    return subprocess.run([BASH, "-c", 'source "$1"; shift; ' + snippet, "_", SCRIPT.replace("\\", "/")] + list(args), capture_output=True, text=True, input=input)
 
 
 def have_bash():
@@ -710,6 +710,97 @@ else:
         failures.append("the guest script took a DOCKER_FROM that is not a version: %d %r" % (p.returncode, p.stderr[-300:]))
     else:
         print("ok: the guest script refuses a DOCKER_FROM that is not a version")
+
+    # removal_ok: the answer of `apt-get -s remove nftables` to "may the harness take it out"
+    removals = [
+        ("nftables alone", "Remv nftables [0.9.8-3.1+deb11u1]\n", "nftables", True),
+        ("nftables and the libraries that go with it", "Remv nftables [1]\nRemv libnftables1 [1]\nRemv libjansson4 [2]\nRemv libedit2 [3]\n",
+         "nftables libnftables1 libjansson4 libedit2", True),
+        ("names with an architecture", "Remv nftables:amd64 [1]\nRemv libedit2:amd64 [3]\n", "nftables:amd64 libedit2:amd64", True),
+        ("what apt says besides the packages is not a package", "Reading package lists...\nConf nftables (1 Debian)\nRemv nftables [1]\n", "nftables", True),
+        ("a package that needs nftables would go with it", "Remv firewalld [1]\nRemv nftables [1]\n", "firewalld nftables", False),
+        ("Docker would go with it", "Remv docker-ce [1]\nRemv nftables [1]\n", "docker-ce nftables", False),
+        ("an old kernel apt would also clear away", "Remv linux-image-5.10.0-30-amd64 [1]\nRemv nftables [1]\n", "linux-image-5.10.0-30-amd64 nftables", False),
+        ("a purge of something else", "Purg nftables [1]\nPurg firewalld [1]\n", "nftables firewalld", False),
+        ("something would be installed", "Inst foo (1 Debian)\nRemv nftables [1]\n", "nftables", False),
+        ("nftables is not in it", "Remv libedit2 [3]\n", "libedit2", False),
+        ("nothing is removed", "Reading package lists...\n", "", False),
+    ]
+    for label, sim, want_names, want_ok in removals:
+        count[0] += 1
+        p = bash_run("removal_ok", input=sim)
+        if p.stdout.strip() != want_names or (p.returncode == 0) != want_ok:
+            failures.append("removal_ok, %s: got %r (status %d), wanted %r (%s)\n%s" % (label, p.stdout.strip(), p.returncode, want_names, want_ok, p.stderr[-400:]))
+        else:
+            print("ok: removal_ok, " + label)
+
+    # prepare_dependency_path, with stand-ins for the tools it calls
+    fakes = {
+        "dpkg-query": "#!/bin/sh\nif [ -e \"$FAKE/removed\" ]; then echo 'rc '; exit 0; fi\nif [ \"$FAKE_NFT\" = installed ]; then echo 'ii '; exit 0; fi\nexit 1\n",
+        "apt-get": ("#!/bin/sh\necho \"apt-get $*\" >>\"$FAKE/calls\"\nsim=\"\"; auto=\"\"\n"
+                    "for a in \"$@\"; do case \"$a\" in -s) sim=1 ;; --autoremove) auto=1 ;; esac; done\n"
+                    "if [ -n \"$sim\" ]; then\n  if [ -n \"$auto\" ]; then printf '%s\\n' \"$FAKE_SIM_AUTO\"; else printf '%s\\n' \"$FAKE_SIM_PLAIN\"; fi\n  exit 0\nfi\n"
+                    "if [ \"${FAKE_APT_RC:-0}\" != 0 ]; then exit \"$FAKE_APT_RC\"; fi\nif [ -z \"$FAKE_APT_KEEP\" ]; then : >\"$FAKE/removed\"; fi\n"),
+        "systemctl": "#!/bin/sh\necho \"systemctl $*\" >>\"$FAKE/calls\"\n",
+        "docker": "#!/bin/sh\nexit 0\n",
+    }
+    prep = ('source "$1"; OUT="$2"; LEG="$3"; APT=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3); '
+            "set -euo pipefail; prepare_dependency_path; echo returned")
+    auto_ok = "Remv nftables [1]\nRemv libnftables1 [1]\nRemv libjansson4 [2]\nRemv libedit2 [3]"
+    kernel = "Remv linux-image-5.10.0-30-amd64 [1]\nRemv nftables [1]"
+    needed = "Remv docker-ce [1]\nRemv nftables [1]"
+
+    def prep_case(label, leg="major", nft="installed", auto="", plain="", apt_rc="0", keep="", record=(), no_record=(), calls=(), no_calls=(), aborted=None):
+        count[0] += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            fake, out = os.path.join(tmp, "fake").replace("\\", "/"), os.path.join(tmp, "out").replace("\\", "/")
+            os.mkdir(fake)
+            os.mkdir(out)
+            for name, text in fakes.items():
+                with open(os.path.join(fake, name), "w", newline="\n") as f:
+                    f.write(text)
+                os.chmod(os.path.join(fake, name), 0o755)
+            env = dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"], FAKE=fake, FAKE_NFT=nft, FAKE_SIM_AUTO=auto,
+                       FAKE_SIM_PLAIN=plain, FAKE_APT_RC=apt_rc, FAKE_APT_KEEP=keep)
+            p = subprocess.run([BASH, "-c", prep, "_", SCRIPT.replace("\\", "/"), out, leg], capture_output=True, text=True, env=env)
+
+            def slurp(path):
+                try:
+                    with open(path) as f:
+                        return f.read()
+                except OSError:
+                    return ""
+            rec, log_calls, abort_text = slurp(os.path.join(out, "dependency-path")), slurp(os.path.join(fake, "calls")), slurp(os.path.join(out, "aborted"))
+            problems = ["missing %r in the record %r" % (s, rec) for s in record if s not in rec]
+            problems += ["should not say %r in the record %r" % (s, rec) for s in no_record if s in rec]
+            problems += ["missing call %r in %r" % (s, log_calls) for s in calls if s not in log_calls]
+            problems += ["should not have called %r in %r" % (s, log_calls) for s in no_calls if s in log_calls]
+            if aborted is None:
+                if "returned" not in p.stdout:
+                    problems.append("did not return: %r %r" % (p.stdout[-300:], p.stderr[-300:]))
+                if abort_text:
+                    problems.append("aborted: %r" % abort_text)
+            elif aborted not in abort_text or "returned" in p.stdout:
+                problems.append("wanted an abort saying %r, got %r (stdout %r)" % (aborted, abort_text, p.stdout[-200:]))
+            if problems:
+                failures.append("prepare_dependency_path, %s: %s\n%s" % (label, "; ".join(problems), p.stderr[-400:]))
+            else:
+                print("ok: prepare_dependency_path, " + label)
+
+    prep_case("the minor leg takes nothing out", leg="minor", auto=auto_ok, record=["action not-attempted", "only the major leg takes nftables out"], no_calls=["apt-get", "systemctl"])
+    prep_case("nothing to take out when nftables is not installed", nft="absent", auto=auto_ok, record=["action skipped", "reason nftables is not installed"], no_calls=["apt-get", "systemctl"])
+    prep_case("nftables and its libraries go, when that is all apt would remove, and Docker starts again after", auto=auto_ok,
+              record=["action removed", "packages nftables libnftables1 libjansson4 libedit2"],
+              calls=["-s --autoremove remove nftables", "-y -q --autoremove remove nftables", "systemctl restart docker"])
+    prep_case("the libraries nothing else needs go with it when apt offers both", auto=auto_ok, plain="Remv nftables [1]",
+              record=["action removed", "packages nftables libnftables1 libjansson4 libedit2"], calls=["-y -q --autoremove remove nftables"], no_calls=["-y -q remove nftables"])
+    prep_case("only nftables goes when apt would clear more away with it, if that is all a plain removal takes", auto=kernel, plain="Remv nftables [1]",
+              record=["action removed", "packages nftables\n"], calls=["-s remove nftables", "-y -q remove nftables", "systemctl restart docker"],
+              no_calls=["-y -q --autoremove remove nftables"])
+    prep_case("nothing goes when something else needs nftables", auto=needed, plain=needed, no_record=["action removed"],
+              record=["action skipped", "would take more than libraries with it: docker-ce nftables"], no_calls=["-y -q", "systemctl"])
+    prep_case("a removal that fails is a run that cannot go on", auto=auto_ok, apt_rc="100", aborted="could not take nftables out", no_record=["action removed"], no_calls=["systemctl"])
+    prep_case("a removal that leaves nftables installed is a run that cannot go on", auto=auto_ok, keep="1", aborted="nftables is still installed", no_record=["action removed"], no_calls=["systemctl"])
 
 if failures:
     print("\n".join(failures), file=sys.stderr)

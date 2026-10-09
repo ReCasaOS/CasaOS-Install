@@ -12,14 +12,20 @@ name: docker-update-proof
 # invalid; it fails the job for both. Nothing is judged in the guest.
 #
 #   major   Debian 11, installed with --use-debian-archive: Docker 28.0.4 from Docker's own
-#           repository, containerd.io on the 1.7 line, a 29 on offer. The owner's box.
+#           repository, containerd.io on the 1.7 line, a 29 on offer. The owner's box. Docker 29
+#           needs nftables and Docker 28 did not: when apt can take nftables out without taking
+#           anything but libraries with it, the leg does, before the first check, so that the update
+#           has a package to bring that the box did not have.
 #   minor   Ubuntu 24.04: the previous patch of the current Docker minor (found at run time,
 #           not written down), the current one on offer; and last, with the box put back there
 #           and dockerd made unable to start, a second update that has to fail with `daemon`.
 #
 # What each leg asserts (the report lists every verdict by name):
-#   the check offers the update (versions, major_jump, the plan and its plan_id); the
-#   containers listing; the refusals, none of which changes the engine (a held docker-ce, a
+#   the check offers the update (versions, major_jump, the plan and its plan_id); the plan
+#   is judged on what dpkg did with it: the upgrades are engine packages, the new packages
+#   (at most 10) have valid names, nothing is removed, and the packages dpkg added and
+#   upgraded are exactly the plan's (a run that brought no new package says "No new
+#   dependency was exercised"); the containers listing; the refusals, none of which changes the engine (a held docker-ce, a
 #   dpkg lock held by another process, a running package update, a plan that is not the plan,
 #   a body that is not a plan_id, a token in the query, a refresh token); the run (the POST is
 #   fast, a second press is refused, the status goes through running to succeeded and keeps
