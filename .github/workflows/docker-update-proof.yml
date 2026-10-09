@@ -30,8 +30,9 @@ name: docker-update-proof
 #           date, sort, sleep and grep, which Ubuntu 26.04 may take from uutils. Ubuntu 24.04 alone also
 #           kills the unit with SIGKILL in the middle of the install (as soon as dpkg runs a maintainer
 #           script of Docker's), before the last failure: the status has to say failed (`no_result` or
-#           `install`), dpkg --audit has to show the half-finished install, and the repair the
-#           dashboard names (dpkg --configure -a, then apt-get -f install) has to complete it.
+#           `install`), dpkg --audit has to show the half-finished install, the next check has to refuse
+#           with `dpkg` (and the one after the repair nothing), and the repair the dashboard names
+#           (dpkg --configure -a, then apt-get -f install) has to complete it.
 #
 # What each leg asserts (the report lists every verdict by name):
 #   the check offers the update (versions, major_jump, the plan and its plan_id); the plan

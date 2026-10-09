@@ -318,6 +318,8 @@ def build(d, leg, s=None):
         kill_extra = dict(outcome="failed", error="The update did not leave a result: it stopped before it finished.", error_code="no_result", started_at=iso(T0 + 205),
                           completed_at=iso(T0 + 262), **{"from": s["start"]}, rollback_command="sudo apt-get install --allow-downgrades " + pins)
         api(d, "kill-packages", 200, packages_body(s))
+        api(d, "kill-packages-dirty", 200, packages_body(s, available=False, refusal_code="dpkg"))   # dpkg is in the middle of a package: the check refuses with `dpkg`
+        api(d, "kill-packages-clean", 200, ok({"supported": True, "docker": {"installed": True, "version": s["to"]}}))   # the repair completed the install: nothing left to update
         api(d, "kill-post", 200, ok(status_data("running")))
         put(d, "kill-hit", "caught %f 4242 /bin/sh /var/lib/dpkg/info/containerd.io.prerm upgrade 1.7.27-1\n" % (T0 + 225))
         put(d, "docker-update-kill.log", "\n".join(kl) + "\n")
@@ -766,7 +768,10 @@ K_LOG = "kill -9: the log agrees with the status"
 K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
 K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
-KILL_HEALTHY = ["Docker update proof, minor leg: PASS", "caught", "no_result", "dpkg --audit said", "kill -9: the log agrees with the status"]
+K_DIRTY = "kill -9: the next check after the kill refuses with `dpkg`, before the repair"
+K_CLEAN = "kill -9: after the repair the check refuses nothing"
+KILL_HEALTHY = ["Docker update proof, minor leg: PASS", "caught", "no_result", "dpkg --audit said", "kill -9: the log agrees with the status",
+                "The next check after the kill said refusal `dpkg`; after the repair it said no refusal (the update is not on offer)", "**PASS** " + K_DIRTY, "**PASS** " + K_CLEAN]
 
 
 def kfails(name, verdict, mutate, extra=()):
@@ -821,6 +826,29 @@ kfails("a half-finished install that the repair does not complete", K_REPAIR, la
 kfails("a repair after which Docker does not answer", K_REPAIR, lambda d: put(d, "kill-docker", "no\n"))
 kfails("a repair that fails twice and leaves dpkg unhappy", K_REPAIR, lambda d: (put(d, "kill-repair-2.exit", "100\n"), put(d, "kill-audit-after.txt", "exit 0\nsomething is still half configured\n"))[0],
        extra=["exit 100, dpkg --audit then something is still half configured"])
+
+# the check the dashboard runs after the kill, with dpkg in the middle of a package: the core refuses it with `dpkg` (its journal in /var/lib/dpkg/updates and
+# `dpkg --audit` say so), and once the repair has completed the install it refuses nothing
+def dirty_update(fn):
+    return lambda d: jedit(d, "kill-packages-dirty.json", lambda j: fn(update(j)))
+
+
+kfails("a check after the kill that offers the update as if dpkg were well", K_DIRTY, dirty_update(lambda u: u.update(refusal="", available=True)))
+kfails("a check after the kill that refuses for another reason", K_DIRTY, dirty_update(lambda u: u.update(refusal="plan")))
+kfails("a check after the kill that refuses with `dpkg` and still offers the update", K_DIRTY, dirty_update(lambda u: u.update(available=True)))
+kfails("a check after the kill that says nothing of Docker", K_DIRTY, lambda d: jedit(d, "kill-packages-dirty.json", lambda j: j["data"]["docker"].pop("update")))
+kfails("a check after the kill that fails", K_DIRTY, lambda d: api(d, "kill-packages-dirty", 500, {"success": 500, "message": "boom"}))
+kfails("a check after the repair that still refuses with `dpkg`", K_CLEAN, lambda d: jedit(d, "kill-packages-clean.json", lambda j: j["data"]["docker"].update(update=dict(available=False, refusal="dpkg"))))
+kfails("a check after the repair that refuses for another reason", K_CLEAN, lambda d: jedit(d, "kill-packages-clean.json", lambda j: j["data"]["docker"].update(update=dict(available=False, refusal="daemon"))))
+kfails("a check after the repair that fails", K_CLEAN, lambda d: api(d, "kill-packages-clean", 500, {"success": 500, "message": "boom"}))
+case("a check after the repair that offers the update again refuses nothing", 0, ["PASS", "**PASS** " + K_CLEAN, "after the repair it said no refusal (the update is on offer)"], ["**FAIL**", "INVALID"],
+     leg="minor", spec=KILL_MINOR, mutate=lambda d: api(d, "kill-packages-clean", 200, packages_body(KILL_MINOR)))
+invalid("no check after the kill", "no answer was recorded for kill-packages-dirty", lambda d: remove(d, "kill-packages-dirty.code", "kill-packages-dirty.json"), leg="minor",
+        silent=("kill -9: the next check",), spec=KILL_MINOR)
+invalid("no check after the repair", "no answer was recorded for kill-packages-clean", lambda d: remove(d, "kill-packages-clean.code", "kill-packages-clean.json"), leg="minor",
+        silent=("kill -9: after the repair",), spec=KILL_MINOR)
+invalid("a check after the kill that curl could not send", "curl could not reach the core for kill-packages-dirty",
+        lambda d: (api(d, "kill-packages-dirty", 0, curl=7), remove(d, "kill-packages-dirty.json")), leg="minor", silent=("kill -9: the next check",), spec=KILL_MINOR)
 
 # the kill -9 injection is judged only where it was asked for, and it is a run that proves nothing when it did not catch dpkg
 KILLSILENT = ("kill -9",)
@@ -1391,6 +1419,18 @@ else:
               files={"kill-repair-1.exit": "1\n", "kill-repair-2.exit": "100\n", "kill-audit-1.txt": "exit 0\n", "kill-audit-after.txt": "exit 0\n", "kill-docker": "yes, after *"},
               calls=["apt-get -o DPkg::Lock::Timeout=300"])
     kill_case("repair_dpkg says when Docker does not answer", 'wait_docker() { return 1; }; repair_dpkg kill', files={"kill-docker": "no\n"})
+
+    # kill_run, with stand-ins for everything it calls: what it asks of the core and does, in order. The check after the kill comes before the repair and the
+    # check after the repair comes last; a kill that caught nothing asks and repairs nothing
+    KR = ('put_back() { echo put_back >>"$FAKE/calls"; }; plan_id_of() { echo abc; }; sleep() { :; }; marker() { echo "marker $1" >>"$FAKE/calls"; }; log() { :; }; '
+          'call_as() { echo "call_as $2 $3 $4" >>"$FAKE/calls"; }; post_plan() { echo "post_plan $1" >>"$FAKE/calls"; echo 200 >"$OUT/$1.code"; }; '
+          'poll_status() { echo "poll_status $1" >>"$FAKE/calls"; }; audit_dpkg() { echo "audit_dpkg $1" >>"$FAKE/calls"; }; runtime_log() { echo "$OUT/runtime.log"; }; '
+          'repair_dpkg() { echo "repair_dpkg $1" >>"$FAKE/calls"; }; ')
+    kill_case("kill_run asks for the check after the kill before the repair, and for another after it", KR + 'catch_maintainer() { echo "caught 1 4242 /bin/sh x" >"$1"; }; kill_run',
+              ordered=["call_as kill-packages GET /v1/sys/packages", "post_plan kill-post", "marker kill_killed", "poll_status kill-status", "call_as kill-packages-dirty GET /v1/sys/packages",
+                       "repair_dpkg kill", "call_as kill-packages-clean GET /v1/sys/packages"])
+    kill_case("kill_run, when the kill caught nothing, asks for no check after it and repairs nothing", KR + 'catch_maintainer() { echo "missed no maintainer script of Docker\'s ran within 900 s" >"$1"; }; kill_run',
+              calls=["poll_status kill-status"], no_calls=["kill-packages-dirty", "kill-packages-clean", "repair_dpkg", "audit_dpkg"])
 
     # the facts of the system and apt's own simulation, with stand-ins for apt-get, dpkg, dpkg-query and systemctl
     ffakes = {

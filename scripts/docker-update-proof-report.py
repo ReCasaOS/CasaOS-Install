@@ -25,7 +25,8 @@ The legs:
             dockerd made unable to start (failure injection, last). One minor leg is also given `kill` after the
             leg: it kills the unit with SIGKILL in the middle of the install (as soon as dpkg runs a maintainer
             script of Docker's), before that last failure. The report then wants the evidence of it: what the
-            status says (failed, `no_result` or `install`), what dpkg --audit says, and that the repair the
+            status says (failed, `no_result` or `install`), what dpkg --audit says, that the next check after
+            the kill refuses with `dpkg` (and the one after the repair refuses nothing), and that the repair the
             dashboard will name (dpkg --configure -a, then apt-get -f install) completes the install.
 
 The legs run on more than one system: the report shows the tools of the one it judges (apt, systemd, dpkg, the
@@ -81,6 +82,8 @@ K_LOG = "kill -9: the log agrees with the status"
 K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
 K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
+K_DIRTY = "kill -9: the next check after the kill refuses with `dpkg`, before the repair"
+K_CLEAN = "kill -9: after the repair the check refuses nothing"
 V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable of the command line to an empty string"
 # a curl that got no HTTP status is the feature's silence when it reached the core and waited for nothing (it timed out, was cut off), and the
 # harness's failure in any other case (it could not resolve, could not connect, could not even start)
@@ -980,6 +983,12 @@ if leg == "minor" and kill_expected:
         verdict(K_ROLLBACK, on(kdd, rollback_command_ok(krb)), "rollback_command %r" % krb)
         audit = audit_of("kill-audit.txt")
         verdict(K_AUDIT, on(audit, bool(HALF_FINISHED.search(audit[1])) if audit else False), "dpkg --audit said: %s" % ((audit[1][:300] if audit else "") or "nothing"))
+        # the core refuses what dpkg's own journal and `dpkg --audit` call unfinished, before the repair: a check that offers the update there would run apt into the
+        # error that the unit reports as a failed download
+        code, body = resp("kill-packages-dirty")
+        du, code_dirty = dobj(body, "docker", "update"), code
+        verdict(K_DIRTY, on(code is not None, code == 200 and du.get("refusal") == "dpkg" and du.get("available") is False),
+                "HTTP %s, refusal %r, available %r%s" % (code, du.get("refusal"), du.get("available"), "" if du else " (the check returned no docker.update)"))
         audit1, audit2 = audit_of("kill-audit-1.txt"), audit_of("kill-audit-after.txt")
         r1, r2, back = read("kill-repair-1.exit").strip(), read("kill-repair-2.exit").strip(), read("kill-docker").strip()
         if not (r1.isdigit() and r2.isdigit() and back):
@@ -995,9 +1004,16 @@ if leg == "minor" and kill_expected:
         verdict(K_REPAIR, on(audit2 and r1.isdigit() and r2.isdigit() and back and not repair_trouble, bool(audit2) and audit2[1] == "" and back.startswith("yes")),
                 "`dpkg --configure -a` exit %s, dpkg --audit then %s; `apt-get -f install` exit %s, dpkg --audit then %s; Docker back: %s" %
                 (r1 or "?", (audit1[1][:80] or "nothing") if audit1 else "?", r2 or "?", ((audit2[1][:200] or "nothing") if audit2 else "?"), back or "?"))
+        code, body = resp("kill-packages-clean")
+        cu = dobj(body, "docker", "update")
+        verdict(K_CLEAN, on(code is not None, code == 200 and not cu.get("refusal")),
+                "HTTP %s, refusal %r, available %r" % (code, cu.get("refusal"), cu.get("available")))
         P("The kill caught dpkg running `%s` (pid %s)." % (hit.split(" ", 3)[3] if len(hit.split(" ", 3)) > 3 else "?", hit.split(" ", 3)[2] if len(hit.split(" ", 3)) > 2 else "?"))
         P("What the status said: state %s, error_code `%s`, %s." % (kdd.get("state"), ecode, "a rollback command" if krb else "no rollback command"))
         P("The killed unit left dpkg saying: %s" % ((audit[1][:300].replace("\n", " ") if audit else "") or "nothing"))
+        if code is not None and code_dirty is not None:
+            said = lambda u: "refusal `%s`" % u["refusal"] if u.get("refusal") else "no refusal (the update is %s)" % ("on offer" if u.get("available") else "not on offer")
+            P("The next check after the kill said %s; after the repair it said %s." % (said(du), said(cu)))
         if audit1:
             P("The repair the dashboard will name: dpkg --configure -a (exit %s) left dpkg --audit %s, so apt-get -f install was %s." %
               (r1 or "?", "saying nothing" if not audit1[1] else "still unhappy", "not needed" if not audit1[1] else "needed (exit %s)" % (r2 or "?")))

@@ -25,8 +25,10 @@
 #                                  status has to keep answering. With PROOF_KILL_INSTALL=1 (one minor
 #                                  leg) the unit is first killed with SIGKILL in the middle of the install,
 #                                  as soon as dpkg runs a maintainer script of Docker's (kill_run): the status
-#                                  has to find out by itself, and the repair the dashboard names
-#                                  (dpkg --configure -a, then apt-get -f install) is run.
+#                                  has to find out by itself; the next check, asked for before the repair, has to
+#                                  refuse with `dpkg` (dpkg is in the middle of a package); and the repair the
+#                                  dashboard names (dpkg --configure -a, then apt-get -f install) is run, after
+#                                  which the check has to refuse nothing.
 #
 # In both: the refusals first (a hold, dpkg's lock, a running package update, a plan that is not
 # the plan, a body that is not a plan_id, a token in the query, a refresh token), none of which
@@ -646,8 +648,9 @@ repair_dpkg() {
 }
 
 # kill_run: the box is put back, the update asked for the way the dashboard does, and as soon as dpkg runs a maintainer script of Docker's
-# the unit gets SIGKILL. What the status says (it has to find that out by itself, from a log with no end), what dpkg --audit says, and the
-# repair the dashboard names are recorded. A run that cannot get as far leaves `missed <why>` in kill-hit, which the report counts as a run
+# the unit gets SIGKILL. What the status says (it has to find that out by itself, from a log with no end), what dpkg --audit says, what the
+# next check says while dpkg is half-finished (kill-packages-dirty: the core must refuse it with `dpkg`), the repair the dashboard names, and
+# what the check says once it is done (kill-packages-clean: nothing to refuse) are recorded. A run that cannot get as far leaves `missed <why>` in kill-hit, which the report counts as a run
 # that proved nothing, and goes on: the failure that follows still has its turn. Nothing is judged here.
 kill_run() {
     local id
@@ -675,7 +678,12 @@ kill_run() {
     marker kill_terminal
     cp "$(runtime_log)" "${OUT}/docker-update-kill.log" 2>/dev/null || true
     log "the killed update ended: $(jq -c '.data | {state, outcome, error_code, rollback_command}' "${OUT}/kill-status-final.json" 2>/dev/null || echo unreadable)"
-    if grep -q '^caught ' "${OUT}/kill-hit"; then repair_dpkg kill; fi
+    if grep -q '^caught ' "${OUT}/kill-hit"; then
+        # dpkg is in the middle of a package: the next check has to refuse with `dpkg`; once the repair has completed the install, it refuses nothing
+        call_as internal kill-packages-dirty GET /v1/sys/packages
+        repair_dpkg kill
+        call_as internal kill-packages-clean GET /v1/sys/packages
+    fi
 }
 
 # ---- the failure, last ---------------------------------------------------------------------------------------------
