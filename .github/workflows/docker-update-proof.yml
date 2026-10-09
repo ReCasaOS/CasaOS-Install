@@ -47,22 +47,33 @@ name: docker-update-proof
 #   container back, exactly the policy-`no` one listed in not_returned, the witness intact,
 #   AppManagement and the core not restarted and answering, the published port answering.
 #
-# It installs a release that has the feature: run it against the first release that does.
-# A release before it fails on the first check, by name. By hand only; it publishes nothing
-# and changes nothing outside the guests. The minor leg is the longer one: its failure
-# injection waits for the unit's own timeouts, which can add up to ten minutes.
+# It installs a release that has the feature (a release before it fails on the first check, by
+# name), and it is meant to be run on a candidate before that release becomes the latest one:
+#   1. publish the installer release as a pre-release (gh release create vX.Y.Z --prerelease ...):
+#      GitHub does not call a pre-release the latest release, so nothing installs it by itself;
+#   2. dispatch this workflow with tag=vX.Y.Z (a push run takes the tag from the repository
+#      variable DOCKER_PROOF_TAG instead, and stops at once when there is none);
+#   3. every leg green: promote it (gh release edit vX.Y.Z --prerelease=false --latest).
+# release.yml publishes a release as the latest one at once (prerelease: false), so a candidate has
+# to be made a pre-release by hand, or release.yml has to be told to; nothing here changes that.
+# Left empty, the tag is the latest published release: the same proof, after the fact.
+# By hand only; it publishes nothing and changes nothing outside the guests. The minor legs are
+# the longer ones: their failure injection waits for the unit's own timeouts, which can add up
+# to ten minutes.
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: The installer release to install (a tag of this repository); empty for the latest published release
+        description: The installer release to install, a tag of this repository, a pre-release when it is a candidate; empty for the repository variable DOCKER_PROOF_TAG when there is one, else the latest published release
         required: false
         default: ''
         type: string
   # TODO-REMOVE-BEFORE-MERGE: a workflow that has only workflow_dispatch cannot be run from a branch that is not the
-  # default one, so the proof runs on each push to this branch while it is being proven (the tag is then empty: the
-  # latest release). Delete this comment and the push: stanza below it before the branch is merged.
+  # default one, so the proof runs on each push to this branch while it is being proven. A push has no input to take
+  # a tag from: the repository variable DOCKER_PROOF_TAG names the (pre-)release it proves, and a push with no such
+  # variable stops before it spends a minute on a guest. Delete this comment and the push: stanza below it before the
+  # branch is merged (the variable and the EVENT check in the Fetch step then serve no purpose, and can go with it).
   push:
     branches: [ci/docker-update-proof]
 
@@ -129,7 +140,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
-      TAG: ${{ inputs.tag }}
+      TAG: ${{ inputs.tag || vars.DOCKER_PROOF_TAG }}
+      EVENT: ${{ github.event_name }}
       LEG: ${{ matrix.leg }}
       BASE: ${{ matrix.base }}
       IMAGE: ${{ matrix.image }}
@@ -155,10 +167,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${TAG}" ]; then
+            # a run nobody dispatched has no input to take a tag from: the repository variable names the release it proves
+            if [ "${EVENT}" != workflow_dispatch ]; then
+              echo "a ${EVENT} run needs the repository variable DOCKER_PROOF_TAG: a release tag, or the tag of a pre-release for a candidate. The latest release is not what such a run is here to prove."
+              exit 1
+            fi
             TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
           fi
           [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
-          echo "installer release: ${TAG}"
+          # a candidate is a pre-release: GitHub does not call it the latest release, so nothing installs it by itself, and it is promoted when every leg is green
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
           mkdir published
           gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
           (cd published && sha256sum --check install.sh.sha256)

@@ -1452,6 +1452,66 @@ prove = next((s for n, s in wf_runs.items() if n == "Prove it"), "")
 report_step = next((s for n, s in wf_runs.items() if n == "Report"), "")
 check("the guest is told to kill the unit where the cell says so", "PROOF_KILL_INSTALL='${KILL_INSTALL}'" in prove and "KILL_INSTALL: ${{ matrix.kill_install }}" in wf)
 check("the report is told to expect the kill where the guest was", "${KILL_INSTALL:+kill}" in report_step)
+# the release the legs install: the latest one, or the tag that was named, which may be a pre-release (a candidate that is not the latest release yet)
+check("the tag comes from the input, then from the repository variable DOCKER_PROOF_TAG, and the job knows which event it is",
+      "TAG: ${{ inputs.tag || vars.DOCKER_PROOF_TAG }}" in wf and "EVENT: ${{ github.event_name }}" in wf)
+FAKE_GH = '''gh() {
+  echo "gh $*" >>"$FAKE/calls"
+  case "$*" in
+  *"--json tagName"*) echo "$FAKE_LATEST" ;;
+  *"--json isPrerelease"*) if [ -n "$FAKE_MISSING" ]; then echo "release not found" >&2; return 1; fi; echo "$FAKE_PRE" ;;
+  "release download "*)
+    echo 'echo installed' >published/install.sh
+    if [ -n "$FAKE_BAD_SUM" ]; then echo "0000000000000000000000000000000000000000000000000000000000000000  install.sh" >published/install.sh.sha256
+    else (cd published && sha256sum install.sh >install.sh.sha256); fi ;;
+  esac
+}
+'''
+fetch_step = wf_runs.get("Fetch the published installer", "")
+
+
+def fetch_case(label, tag, event, want_code=0, latest="v0.5.20", pre="false", bad_sum="", missing="", calls=(), no_calls=(), summary=(), said=()):
+    if not have_bash():
+        return
+    count[0] += 1
+    with tempfile.TemporaryDirectory() as tmp:
+        fake, work = os.path.join(tmp, "fake").replace("\\", "/"), os.path.join(tmp, "work")
+        os.mkdir(fake)
+        os.mkdir(work)
+        env = dict(os.environ, TAG=tag, EVENT=event, GITHUB_REPOSITORY="ReCasaOS/CasaOS-Install", GITHUB_STEP_SUMMARY=os.path.join(tmp, "summary").replace("\\", "/"),
+                   FAKE=fake, FAKE_LATEST=latest, FAKE_PRE=pre, FAKE_BAD_SUM=bad_sum, FAKE_MISSING=missing)
+        p = subprocess.run([BASH, "-c", FAKE_GH + fetch_step], capture_output=True, text=True, env=env, cwd=work)
+        seen = open(os.path.join(fake, "calls")).read() if os.path.exists(os.path.join(fake, "calls")) else ""
+        said_summary = open(os.path.join(tmp, "summary")).read() if os.path.exists(os.path.join(tmp, "summary")) else ""
+        problems = []
+        if (p.returncode == 0) != (want_code == 0):
+            problems.append("exit %d, wanted %s" % (p.returncode, "0" if want_code == 0 else "a failure"))
+        problems += ["missing call %r in %r" % (s, seen) for s in calls if s not in seen]
+        problems += ["should not have called %r in %r" % (s, seen) for s in no_calls if s in seen]
+        problems += ["the summary lacks %r: %r" % (s, said_summary) for s in summary if s not in said_summary]
+        problems += ["did not say %r: %r" % (s, p.stdout + p.stderr) for s in said if s not in p.stdout + p.stderr]
+        if problems:
+            failures.append("fetching the installer, %s: %s" % (label, "; ".join(problems)))
+        else:
+            print("ok: fetching the installer, " + label)
+
+
+REPO = "-R ReCasaOS/CasaOS-Install"
+fetch_case("a dispatch with no tag takes the latest release", "", "workflow_dispatch", calls=["release view %s --json tagName --jq .tagName" % REPO, "release download v0.5.20 %s" % REPO],
+           summary=["installer release: v0.5.20 (pre-release: false)"])
+fetch_case("a dispatch with a tag takes that release and does not ask which is the latest", "v0.5.21", "workflow_dispatch", calls=["release download v0.5.21 %s" % REPO],
+           no_calls=["--json tagName"], summary=["installer release: v0.5.21 (pre-release: false)"])
+fetch_case("a pre-release is a candidate: it is installed, and the summary says so", "v0.5.21-rc.1", "workflow_dispatch", pre="true", calls=["release view v0.5.21-rc.1 %s --json isPrerelease" % REPO, "release download v0.5.21-rc.1 %s" % REPO],
+           no_calls=["--json tagName"], summary=["installer release: v0.5.21-rc.1 (pre-release: true)"])
+fetch_case("a push with the repository variable proves the candidate it names, not the latest release", "v0.5.21-rc.1", "push", pre="true", calls=["release download v0.5.21-rc.1 %s" % REPO],
+           no_calls=["--json tagName"], summary=["(pre-release: true)"])
+fetch_case("a push with no variable stops at once, and says which variable it wants", "", "push", want_code=1, said=["DOCKER_PROOF_TAG"], no_calls=["gh "])
+fetch_case("a run that is not a dispatch with no variable stops too", "", "schedule", want_code=1, said=["DOCKER_PROOF_TAG"], no_calls=["gh "])
+for bad in ("main", "v1", "0.5.21", "v0.5.21; reboot", "v0.5.21 -R other/repo", "v0.5.21\n", "$(reboot)", "../v0.5.21"):
+    fetch_case("a tag that is not a release tag (%r) is refused before anything is asked of GitHub" % bad, bad, "workflow_dispatch", want_code=1, said=["not a release tag"], no_calls=["gh "])
+fetch_case("an installer whose checksum is not the published one is not used", "v0.5.21", "workflow_dispatch", want_code=1, bad_sum="1", calls=["release download v0.5.21"])
+fetch_case("a tag GitHub has no release for stops the run before anything is downloaded", "v9.9.9", "workflow_dispatch", want_code=1, missing="1", calls=["release view v9.9.9"], no_calls=["release download"])
+
 try:
     import yaml
 except ImportError:
