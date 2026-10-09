@@ -14,7 +14,11 @@ is INVALID, not a verdict: there is no skipped check that stays quiet.
 The legs:
     major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box. The
             harness takes nftables out first when apt can do that cleanly, because Docker 29 needs it
-            and Docker 28 did not: the update then has a package to bring that the box does not have.
+            and Docker 28 did not: the update then has a package to bring that the box does not have. When it has
+            succeeded the harness runs the rollback command (apt-get install --allow-downgrades of the PREVIOUS pins) and the
+            verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with the containers, the database's
+            volume and the images intact. A FAIL there is meant to turn the leg red: it means that the core must not offer the
+            rollback command after a major jump.
     minor   Ubuntu 24.04, the previous patch of the current Docker minor, then a second update with
             dockerd made unable to start (failure injection, last).
 
@@ -49,6 +53,7 @@ PIN_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")  
 # systemd rewrites ${NAME} in the command line of a transient unit: a name it has no value for becomes the empty string, and says so
 EMPTY_ENV_RE = re.compile(r"environment variable name evaluates to an empty string", re.I)
 V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
+V_ROLLBACK = "rollback after the major jump"
 V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable name to an empty string"
 POST_SECONDS = 30      # "a few seconds" in the spec; this only catches a POST that blocks through apt
 HOLE = 60.0            # seconds without a poller sample, inside the run: the poller is dead
@@ -220,6 +225,13 @@ def package_version(info, name):
 
 def running(info):
     return {n for n, c in info["containers"].items() if c["state"] == "running"}
+
+
+def lost_writes(logs_name, file_name):
+    """(the ids the database acknowledged, the ids its file on the volume holds, the acknowledged ones the file does not hold)"""
+    acked = re.findall(r"^\S+ ack (\S+)$", read(logs_name), re.M)
+    filed = set(read(file_name).split())
+    return acked, filed, [a for a in acked if a not in filed]
 
 
 def load_samples(name):
@@ -596,9 +608,7 @@ code, _ = resp("am-compose")
 verdict("AppManagement lists its projects again once Docker is back, without a restart", on(code is not None, code == 200), "HTTP %s" % code)
 code, _ = resp("web-after")
 verdict("the published port answers again", on(code is not None, code == 200), "HTTP %s" % code)
-acked = re.findall(r"^\S+ ack (\S+)$", read("db-logs.txt"), re.M)
-filed = set(read("db-file.txt").split())
-lost = [a for a in acked if a not in filed]
+acked, filed, lost = lost_writes("db-logs.txt", "db-file.txt")
 verdict("no acknowledged write of the database is lost", bool(acked) and bool(filed) and not lost,
         "%d acknowledged, %d in the file, %d missing (this finds a lost or rolled-back volume, not a power cut)" % (len(acked), len(filed), len(lost)))
 code, body = resp("packages-after")
@@ -610,6 +620,74 @@ after_names = {c.get("name") for c in dlist(body, "containers") if isinstance(c,
 verdict("GET /v1/sys/docker/containers lists the containers that are running again",
         on(code is not None, code == 200 and dget(body, "running") is True and {n for n, p in CONTAINERS.items() if p in COMES_BACK} <= after_names and "p-no" not in after_names),
         "HTTP %s, listed: %s" % (code, ", ".join(sorted(after_names - {None})) or "none"))
+
+# ---- the way back after the major jump: major leg only -----------------------------------------------------------------
+
+rollback_seconds = None
+if leg == "major":
+    P("## Rolling back")
+    P("")
+    rb_exit, rb_cmd = read("rollback-exit").strip(), read("rollback-command").strip()
+    rb_name = "%s: Docker %s starts again with the containers, the volume's content and the images intact" % (V_ROLLBACK, start_version or "?")
+    if "rollback_start" not in markers:
+        invalid("marker rollback_start is missing from the timeline: the rollback did not get that far")
+    if not rb_exit or not rb_cmd:
+        invalid("rollback-exit or rollback-command is missing: the rollback step did not run")
+    elif rb_exit == "not-run":
+        verdict(rb_name, False, "the PREVIOUS marker carries no pin, so the core could print no rollback command and there is nothing to run")
+        P("The PREVIOUS marker held no pin: no rollback command could be made, and none was run.")
+    elif not rb_exit.isdigit():
+        invalid("rollback-exit says %r, which is not an exit status" % rb_exit)
+    else:
+        # the command is the one the core prints after a failure, made here of the pins of the PREVIOUS marker: set against the log, so that a
+        # harness that built it from anything else is an invalid run, not a rollback that passed
+        rb_pins = rb_cmd.split()[4:] if rb_cmd.startswith("sudo apt-get install --allow-downgrades ") else []
+        prev_pins = [w for w in field("PREVIOUS").split() if PIN_RE.match(w)]
+        if marks and (not rb_pins or not all(bare(p.split("=")[0]) in ALLOWLIST for p in rb_pins) or sorted(rb_pins) != sorted(prev_pins)):   # prev_pins are pins
+            invalid("the rollback command the harness ran (%r) is not the one made of the PREVIOUS pins (%s)" % (rb_cmd, " ".join(prev_pins)))
+        if "rollback_settled" not in markers:
+            invalid("marker rollback_settled is missing from the timeline: the rollback did not get that far")
+        for need in ("snapshot-rollback.txt", "images-before.txt", "images-rollback.txt", "rollback-settle"):   # the database's two files may be empty: that is Docker 28 not reading what Docker 29 wrote
+            if not read(need).strip():
+                invalid("%s is missing or empty: the rollback did not get that far" % need)
+        rb_code, _ = resp("rollback-web")
+        rb_snap, rb_settle = snapshot("rollback"), read("rollback-settle").strip()
+        images_before, images_after = set(read("images-before.txt").split("\n")) - {""}, set(read("images-rollback.txt").split("\n")) - {""}
+        rb_acked, rb_filed, rb_lost = lost_writes("rollback-db-logs.txt", "rollback-db-file.txt")
+        down = sorted(n for n, pol in CONTAINERS.items() if pol in COMES_BACK and n not in running(rb_snap))
+        gone_images = sorted(images_before - images_after)
+        why = []
+        if rb_exit != "0":
+            why.append("apt-get exited %s (see rollback.log)" % rb_exit)
+        if rb_snap.get("docker") != start_version:
+            why.append("the daemon says %r, not %s" % (rb_snap.get("docker"), start_version))
+        if package_version(rb_snap, "docker-ce") != installed_full:
+            why.append("dpkg has docker-ce %r, not %s" % (package_version(rb_snap, "docker-ce"), installed_full))
+        if down:
+            why.append("not running: %s" % ", ".join(down))
+        if not rb_settle.isdigit():
+            why.append("the containers that start by themselves were not back after 150 s")
+        if gone_images:
+            why.append("images gone: %s" % ", ".join(gone_images))
+        if not rb_acked or not rb_filed:
+            why.append("no acknowledged write could be read back (%d in the log, %d in the file)" % (len(rb_acked), len(rb_filed)))
+        elif rb_lost:
+            why.append("%d acknowledged writes missing from the volume" % len(rb_lost))
+        if rb_code != 200:
+            why.append("the published port answers HTTP %s" % rb_code)
+        trusted = not any(p.startswith(("the rollback command the harness", "marker rollback_", "snapshot-rollback", "images-", "rollback-", "no answer was recorded for rollback-web")) for p in problems)
+        verdict(rb_name, on(trusted, not why), "; ".join(why) or "the command %r ran, exit %s; %d images, %d acknowledged writes, the containers back after %s s" %
+                (rb_cmd, rb_exit, len(images_after), len(rb_acked), rb_settle))
+        if why:
+            P("**The rollback did not hold: %s.** The core must not offer the rollback command after a major jump (hide it when `major_jump` is true, and tell the owner to copy "
+              "/var/lib/containerd and /var/lib/docker before the update)." % "; ".join(why))
+        elif trusted:
+            P("`%s` ran (exit %s; the harness adds -y and --force-confold so that it can run unattended). Docker %s started again, the containers that start by themselves "
+              "were back after %s s, %d images were still there, and every one of the %d writes the database acknowledged was on the volume." %
+              (rb_cmd, rb_exit, start_version, rb_settle, len(images_after), len(rb_acked)))
+        if "rollback_start" in markers and "rollback_settled" in markers:
+            rollback_seconds = markers["rollback_settled"] - markers["rollback_start"]
+    P("")
 
 # ---- the numbers, for whoever reads this ---------------------------------------------------------------------
 
@@ -651,6 +729,8 @@ if len(stamps) > 2:
     if gaps:
         P("- the database stopped writing for %.1f s at the longest (between two acknowledged writes)." % max(gaps))
 P("- the status endpoint was asked %d times and failed %d." % (len(samples), sum(1 for _, h, _ in samples if h != "200")))
+if rollback_seconds is not None:
+    P("- the rollback, from its command to the containers that start by themselves being back: %.0f s." % rollback_seconds)
 P("")
 
 # ---- the failure injection: minor leg only, last ------------------------------------------------------------------

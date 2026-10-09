@@ -19,6 +19,7 @@ script, to see that a broken one is caught. TEST_BASH=<path> names a bash where 
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -132,6 +133,7 @@ def marker(kind, rest=""):
     return "%s%s %s%s" % (PREFIX, kind, NONCE, (" " + rest) if rest else "")
 
 
+IMAGES = "sha256:1a2b3c busybox:latest\nsha256:4d5e6f nginx:alpine\n"
 JOURNAL = ("Oct 09 10:02:01 box systemd[1]: Started CasaOS Docker update.\n"
            "Oct 09 10:04:11 box systemd[1]: casaos-docker-update.service: Deactivated successfully.\n")
 EMPTY_ENV = "Oct 09 10:02:01 box systemd[1]: casaos-docker-update.service: Invalid environment variable name evaluates to an empty string: Package\n"
@@ -193,6 +195,8 @@ def build(d, leg, s=None):
             dv, web, amdocker, names = "-", "000", "500", "-"
         rows.append("%f\t%s\t200\t%s\t200\t%s\t%s" % (t, dv, web, amdocker, names))
     marks = {"post_start": 100, "post_done": 101, "terminal": 190, "settled": 196}
+    if leg == "major":
+        marks.update(rollback_start=215, rollback_done=250, rollback_settled=262)
     if leg == "minor":
         marks.update(fail_post=300, fail_terminal=400, fail_settled=420)
     rows += ["#\t%f\t%s" % (T0 + at, name) for name, at in marks.items()]
@@ -240,6 +244,17 @@ def build(d, leg, s=None):
         acks.append("%s ack %s" % (datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "000Z", i))
     put(d, "db-logs.txt", "\n".join(acks) + "\n")
     put(d, "db-file.txt", "\n".join(ids) + "\n")
+    if leg == "major":
+        # the way back: the command made of the PREVIOUS pins, run on the Docker that has just been installed
+        put(d, "rollback-command", "sudo apt-get install --allow-downgrades " + " ".join("%s=%s" % (n, c) for n, c, _ in s["plan"]) + "\n")
+        put(d, "rollback-exit", "0\n")
+        put(d, "snapshot-rollback.txt", snapshot_text(s, True, 1100, int(T0 + 240), docker_version=s["start"]))
+        put(d, "images-before.txt", IMAGES)
+        put(d, "images-rollback.txt", IMAGES)
+        put(d, "rollback-settle", "9\n")
+        put(d, "rollback-db-logs.txt", "\n".join(acks) + "\n")
+        put(d, "rollback-db-file.txt", "\n".join(ids) + "\n")
+        api(d, "rollback-web", 200)
     api(d, "am-compose", 200)
     api(d, "web-after", 200)
     api(d, "packages-after", 200, ok({"supported": True, "docker": {"installed": True, "version": s["to"]}}))
@@ -355,13 +370,34 @@ def run_report(d, leg):
     return p.returncode, p.stdout + p.stderr
 
 
-def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False, spec=None):
+PIN_SHAPE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")
+
+
+def rollback_follows_log(d):
+    """what the guest makes of the log it collected: the command of the log's PREVIOUS pins (the words that are not pins dropped), or the word
+    that there was nothing to run, and none of what a rollback would have left behind"""
+    if not os.path.exists(os.path.join(d, "rollback-command")):
+        return
+    with open(os.path.join(d, "docker-update.log")) as f:
+        pins = [w for ln in f.read().splitlines() if ln.split(" ")[0] == PREFIX + "PREVIOUS" for w in ln.split(" ")[2:] if PIN_SHAPE.match(w)]
+    if pins:
+        put(d, "rollback-command", "sudo apt-get install --allow-downgrades " + " ".join(pins) + "\n")
+        return
+    put(d, "rollback-exit", "not-run\n")
+    put(d, "rollback-command", "none\n")
+    remove(d, "snapshot-rollback.txt", "images-rollback.txt", "rollback-settle", "rollback-db-logs.txt", "rollback-db-file.txt", "rollback-web.code", "rollback-web.secs")
+
+
+def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False, spec=None, follow=False):
+    """follow: the guest ran on the log as mutated, so the rollback it did is the one of that log's PREVIOUS marker"""
     count[0] += 1
     with tempfile.TemporaryDirectory() as d:
         if not empty:
             build(d, leg, spec)
         if mutate:
             mutate(d)
+        if follow:
+            rollback_follows_log(d)
         code, text = run_report(d, leg)
         problems = []
         if code != want_code:
@@ -376,9 +412,9 @@ def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=No
             print("ok:", name)
 
 
-def fails(name, verdict, mutate, leg="major", extra=(), spec=None):
+def fails(name, verdict, mutate, leg="major", extra=(), spec=None, follow=False):
     """a case in which one thing is wrong and the verdict of that name has to say FAIL (and nothing else about the harness)"""
-    case(name, 1, ["**FAIL** " + verdict] + list(extra), ["INVALID"], leg=leg, mutate=mutate, spec=spec)
+    case(name, 1, ["**FAIL** " + verdict] + list(extra), ["INVALID"], leg=leg, mutate=mutate, spec=spec, follow=follow)
 
 
 def invalid(name, reason, mutate, leg="major", empty=False, silent=()):
@@ -389,14 +425,14 @@ def invalid(name, reason, mutate, leg="major", empty=False, silent=()):
 # healthy
 V_UP = "every upgrade in the plan is an engine package with validated versions"
 V_NEW = "every new package in the plan has a valid name and version, is not a distro Docker package, and there are at most 10"
-case("a healthy major leg passes, and says that the dependency path was exercised", 0,
+case("a healthy major leg passes, rolls back, and says that the dependency path was exercised", 0,
      ["Docker update proof, major leg: PASS", "28.0.4", "29.8.0", "dockerd did not answer for 6.0 s", "The dependency path was exercised",
-      "nftables 0.9.8-3.1+deb11u1", "the harness took out nftables, libnftables1, libjansson4, libedit2"],
+      "nftables 0.9.8-3.1+deb11u1", "the harness took out nftables, libnftables1, libjansson4, libedit2", "**PASS** rollback after the major jump"],
      ["**FAIL**", "INVALID", "No new dependency was exercised"])
 case("a healthy minor leg passes, failure injection included, and says that no new dependency was exercised", 0,
      ["Docker update proof, minor leg: PASS", "failure: the run failed with error_code `daemon`", "failure: the rollback command", "No new dependency was exercised",
       "only the major leg takes nftables out"],
-     ["**FAIL**", "INVALID", "The dependency path was exercised"], leg="minor")
+     ["**FAIL**", "INVALID", "The dependency path was exercised", "rollback after the major jump"], leg="minor")
 case("a major leg on a box that kept nftables passes, and says that no new dependency was exercised", 0,
      ["Docker update proof, major leg: PASS", "No new dependency was exercised", "taking nftables out would take more than libraries with it: docker-ce nftables",
       "nftables was already installed"],
@@ -510,7 +546,7 @@ fails("something before the core's line", "success: the log has the markers", la
 fails("installed before downloaded", "success: the log has the markers", lambda d: ledit(d, "docker-update.log", swap_kinds("DOWNLOADED", "INSTALLED")))
 fails("no download marker", "success: the log has the markers", lambda d: ledit(d, "docker-update.log", lambda ls: [ln for ln in ls if "DOWNLOADED" not in ln]))
 fails("a log that does not start with the core's line", "success: the log has the markers", lambda d: ledit(d, "docker-update.log", lambda ls: ls[1:]))
-fails("a PREVIOUS marker without docker-ce", "the PREVIOUS marker records the docker-ce", lambda d: replace(d, "docker-update.log", "docker-ce=5:28.0.4-1~debian.11~bullseye ", ""))
+fails("a PREVIOUS marker without docker-ce", "the PREVIOUS marker records the docker-ce", lambda d: replace(d, "docker-update.log", "docker-ce=5:28.0.4-1~debian.11~bullseye ", ""), follow=True)
 fails("a DAEMON marker with another version", "the DAEMON marker records the running version", lambda d: replace(d, "docker-update.log", marker("DAEMON", "29.8.0"), marker("DAEMON", "28.0.4")))
 fails("a NOTRETURNED marker the status does not list", "the NOTRETURNED markers", lambda d: replace(d, "docker-update.log", marker("NOTRETURNED", "p-no no"), marker("NOTRETURNED", "p-db unless-stopped")))
 
@@ -519,13 +555,13 @@ V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an env
 PREV = "CASAOS_DOCKER_UPDATE_PREVIOUS " + NONCE
 fails("a PREVIOUS marker that is empty (systemd ate the script's variables)", V_PINS,
       lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]),
-      extra=["**FAIL** the PREVIOUS marker records the docker-ce"])
+      extra=["**FAIL** the PREVIOUS marker records the docker-ce"], follow=True)
 fails("a PREVIOUS marker without one of the upgraded packages", V_PINS, lambda d: replace(d, "docker-update.log", " containerd.io=1.7.27-1", ""),
-      extra=["missing: containerd.io=1.7.27-1"])
+      extra=["missing: containerd.io=1.7.27-1"], follow=True)
 fails("a PREVIOUS marker with a pin at another version than the one the package had", V_PINS, lambda d: replace(d, "docker-update.log", "containerd.io=1.7.27-1", "containerd.io=1.7.26-1"),
-      extra=["missing: containerd.io=1.7.27-1"])
+      extra=["missing: containerd.io=1.7.27-1"], follow=True)
 fails("a PREVIOUS marker with a word that is not a pin", V_PINS, lambda d: replace(d, "docker-update.log", "containerd.io=1.7.27-1", "containerd.io=1.7.27-1 nftables;reboot"),
-      extra=["not pins: nftables;reboot"])
+      extra=["not pins: nftables;reboot"], follow=True)
 fails("a PREVIOUS marker that is empty in the minor leg too", V_PINS, lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]), leg="minor")
 fails("a journal in which systemd emptied a variable of the script", V_JOURNAL, lambda d: put(d, "unit-journal.txt", JOURNAL + EMPTY_ENV),
       extra=["unit-journal.txt"])
@@ -565,6 +601,28 @@ fails("a container list that lacks a container that is running", "GET /v1/sys/do
       lambda d: jedit(d, "containers-after.json", lambda j: j["data"].update(containers=[c for c in j["data"]["containers"] if c["name"] != "p-web"])))
 fails("a container list that still has the container that did not come back", "GET /v1/sys/docker/containers lists the containers that are running again",
       lambda d: jedit(d, "containers-after.json", lambda j: j["data"]["containers"].append({"name": "p-no", "restart_policy": "no"})))
+
+# the way back after the major jump: the command made of the PREVIOUS pins, run for real
+V_ROLLBACK = "rollback after the major jump"
+fails("a rollback whose apt-get fails", V_ROLLBACK, lambda d: put(d, "rollback-exit", "100\n"), extra=["apt-get exited 100"])
+fails("a rollback that leaves the new Docker running", V_ROLLBACK, lambda d: replace(d, "snapshot-rollback.txt", "docker 28.0.4", "docker 29.8.0"), extra=["the daemon says '29.8.0'"])
+fails("a rollback that leaves the new docker-ce installed", V_ROLLBACK,
+      lambda d: replace(d, "snapshot-rollback.txt", "docker-ce=5:28.0.4-1~debian.11~bullseye", "docker-ce=5:29.8.0-1~debian.11~bullseye"), extra=["dpkg has docker-ce"])
+fails("a container with a restart policy that is not running after the rollback", V_ROLLBACK,
+      lambda d: replace(d, "snapshot-rollback.txt", "/p-web policy=unless-stopped state=running", "/p-web policy=unless-stopped state=exited"), extra=["not running: p-web"])
+fails("containers that never settle after the rollback", V_ROLLBACK, lambda d: put(d, "rollback-settle", "never\n"), extra=["not back after 150 s"])
+fails("an image that is gone after the rollback", V_ROLLBACK, lambda d: put(d, "images-rollback.txt", "sha256:1a2b3c busybox:latest\n"), extra=["images gone: sha256:4d5e6f nginx:alpine"])
+fails("an image that lost its tag in the rollback", V_ROLLBACK, lambda d: put(d, "images-rollback.txt", "sha256:1a2b3c busybox:latest\nsha256:4d5e6f nginx:<none>\n"), extra=["images gone: sha256:4d5e6f nginx:alpine"])
+fails("an acknowledged write the volume lost in the rollback", V_ROLLBACK, lambda d: ledit(d, "rollback-db-file.txt", lambda ls: ls[:-3]), extra=["acknowledged writes missing"])
+fails("a database log that cannot be read after the rollback", V_ROLLBACK, lambda d: put(d, "rollback-db-logs.txt", ""), extra=["no acknowledged write could be read back"])
+fails("a database file that cannot be read after the rollback", V_ROLLBACK, lambda d: put(d, "rollback-db-file.txt", ""), extra=["no acknowledged write could be read back"])
+fails("a published port silent after the rollback", V_ROLLBACK, lambda d: api(d, "rollback-web", 0), extra=["the published port answers HTTP 0"])
+case("no rollback to run because PREVIOUS carries no pin: the rollback fails, as the pins do", 1,
+     ["**FAIL** " + V_ROLLBACK, "carries no pin", "**FAIL** " + V_PINS], ["INVALID"],
+     mutate=lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]), follow=True)
+case("a failed rollback says what it means for the button", 1, ["**FAIL** " + V_ROLLBACK, "must not offer the rollback command"], ["INVALID"],
+     mutate=lambda d: put(d, "rollback-exit", "100\n"))
+case("a rollback that holds says so, and not what a failed one means for the button", 0, ["**PASS** " + V_ROLLBACK, "Docker 28.0.4 started again"], ["must not offer the rollback command"])
 
 # the failure injection
 fails("a failure that is not `daemon`", "failure: the run failed with error_code `daemon`", lambda d: jedit(d, "fail-status-final.json", lambda j: final(j).update(error_code="install")), leg="minor")
@@ -641,6 +699,30 @@ invalid("a failure poll that is not there", "fail-status.jsonl is missing or hol
 invalid("a failure poll that is empty", "fail-status.jsonl is missing or holds no status sample", lambda d: put(d, "fail-status.jsonl", ""), leg="minor", silent=SILENT_FAIL_POLL)
 invalid("a failure poll that holds only lines that are not samples", "fail-status.jsonl is missing or holds no status sample",
         lambda d: put(d, "fail-status.jsonl", "not a sample\n"), leg="minor", silent=SILENT_FAIL_POLL)
+SILENT_ROLLBACK = (V_ROLLBACK,)
+invalid("a rollback step that did not run", "rollback-exit or rollback-command is missing", lambda d: remove(d, "rollback-exit"), silent=SILENT_ROLLBACK)
+invalid("a rollback command that was not recorded", "rollback-exit or rollback-command is missing", lambda d: remove(d, "rollback-command"), silent=SILENT_ROLLBACK)
+invalid("a rollback command that is not an install of pins", "is not the one made of the PREVIOUS pins",
+        lambda d: put(d, "rollback-command", "sudo apt-get remove docker-ce\n"), silent=SILENT_ROLLBACK)
+invalid("a rollback command with a pin the log does not have", "is not the one made of the PREVIOUS pins",
+        lambda d: replace(d, "rollback-command", "containerd.io=1.7.27-1", "containerd.io=1.7.26-1"), silent=SILENT_ROLLBACK)
+invalid("a rollback command that leaves a pin out", "is not the one made of the PREVIOUS pins",
+        lambda d: replace(d, "rollback-command", " containerd.io=1.7.27-1", ""), silent=SILENT_ROLLBACK)
+invalid("a rollback command with a package outside the allowlist", "is not the one made of the PREVIOUS pins",
+        lambda d: (replace(d, "rollback-command", "containerd.io=1.7.27-1", "containerd.io=1.7.27-1 bash=5.1-2"), replace(d, "docker-update.log", "containerd.io=1.7.27-1", "containerd.io=1.7.27-1 bash=5.1-2"))[0],
+        silent=SILENT_ROLLBACK)
+invalid("a rollback command that removes", "is not the one made of the PREVIOUS pins",
+        lambda d: replace(d, "rollback-command", "sudo apt-get install --allow-downgrades ", "sudo apt-get remove --allow-downgrades "), silent=SILENT_ROLLBACK)
+invalid("a rollback command that is another command altogether", "is not the one made of the PREVIOUS pins",
+        lambda d: replace(d, "rollback-command", "sudo apt-get install --allow-downgrades ", "sudo sh -c 'rm -rf /' ; sudo apt-get install --allow-downgrades "), silent=SILENT_ROLLBACK)
+invalid("a timeline that lost the start of the rollback", "marker rollback_start is missing from the timeline",
+        lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if "\trollback_start" not in ln]), silent=SILENT_ROLLBACK)
+invalid("a rollback exit that is not a number", "rollback-exit says 'maybe'", lambda d: put(d, "rollback-exit", "maybe\n"), silent=SILENT_ROLLBACK)
+for gone in ("snapshot-rollback.txt", "images-before.txt", "images-rollback.txt", "rollback-settle"):
+    invalid("a rollback that left no %s" % gone, "%s is missing or empty: the rollback did not get that far" % gone, lambda d, gone=gone: remove(d, gone), silent=SILENT_ROLLBACK)
+invalid("a rollback with no answer from the published port", "no answer was recorded for rollback-web", lambda d: remove(d, "rollback-web.code"), silent=SILENT_ROLLBACK)
+invalid("a timeline that lost the end of the rollback", "marker rollback_settled is missing from the timeline",
+        lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if "\trollback_settled" not in ln]), silent=SILENT_ROLLBACK)
 invalid("a run that stopped", "the run stopped before it was done: NOT PROVEN: no older release", lambda d: put(d, "aborted", "NOT PROVEN: no older release\n"))
 invalid("a step that did not run", "no answer was recorded for held-post: that step did not run", lambda d: remove(d, "held-post.code", "held-post.json"))
 invalid("a status that was never recorded", "status-final.json holds no status", lambda d: remove(d, "status-final.json"))
@@ -844,6 +926,105 @@ else:
               record=["action skipped", "would take more than libraries with it: docker-ce nftables"], no_calls=["-y -q", "systemctl"])
     prep_case("a removal that fails is a run that cannot go on", auto=auto_ok, apt_rc="100", aborted="could not take nftables out", no_record=["action removed"], no_calls=["systemctl"])
     prep_case("a removal that leaves nftables installed is a run that cannot go on", auto=auto_ok, keep="1", aborted="nftables is still installed", no_record=["action removed"], no_calls=["systemctl"])
+
+    # previous_pins: the pins of the PREVIOUS marker, read the way the core reads the log
+    FORGED = "f" * 32
+    QUEUED = PREFIX + "QUEUED " + NONCE + " 2026-10-09T10:00:00Z"
+    PREV_LINE = PREFIX + "PREVIOUS " + NONCE
+    DOCKER_PIN = "docker-ce=5:28.0.4-1~debian.11~bullseye"
+    pins_cases = [
+        ("the pins of the marker, in order", [QUEUED, PREFIX + "STARTED " + NONCE + " t", PREV_LINE + " " + DOCKER_PIN + " containerd.io=1.7.27-1"], [DOCKER_PIN, "containerd.io=1.7.27-1"]),
+        ("a marker with no pin", [QUEUED, PREV_LINE], []),
+        ("a marker with another nonce is somebody else's text", [QUEUED, PREFIX + "PREVIOUS " + FORGED + " " + DOCKER_PIN], []),
+        ("words that are not pins are dropped", [QUEUED, PREV_LINE + " docker-ce=1 $(reboot) a;b=1 =2 x=y docker-ce-cli=5:2-1"], ["docker-ce=1", "docker-ce-cli=5:2-1"]),
+        ("the nonce is the first line's: a QUEUED line further down is ignored", ["Reading package lists...", QUEUED, PREV_LINE + " " + DOCKER_PIN], []),
+        ("a line that merely holds the marker is not the marker", [QUEUED, "container: " + PREV_LINE + " " + DOCKER_PIN], []),
+        ("a queued line whose nonce is not 32 hex digits", [PREFIX + "QUEUED abc ts", PREFIX + "PREVIOUS abc " + DOCKER_PIN], []),
+        ("a queued line whose nonce is 32 characters and not hex", [PREFIX + "QUEUED " + "g" * 32 + " ts", PREFIX + "PREVIOUS " + "g" * 32 + " " + DOCKER_PIN], []),
+        ("no log", [], []),
+    ]
+    for label, log_lines, want in pins_cases:
+        count[0] += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "docker-update.log").replace("\\", "/")
+            with open(path, "w", newline="\n") as f:
+                f.write("".join(ln + "\n" for ln in log_lines))
+            p = bash_run('previous_pins "$1"', path)
+        got = p.stdout.split()
+        if got != want or (p.returncode == 0) != bool(want):
+            failures.append("previous_pins, %s: got %r (status %d), wanted %r\n%s" % (label, got, p.returncode, want, p.stderr[-400:]))
+        else:
+            print("ok: previous_pins, " + label)
+
+    # rollback_run, with stand-ins for apt-get, docker, dpkg, systemctl and curl
+    rfakes = {
+        "apt-get": "#!/bin/sh\necho \"apt-get $*\" >>\"$FAKE/calls\"\nexit \"${FAKE_APT_RC:-0}\"\n",
+        "docker": ("#!/bin/sh\necho \"docker $*\" >>\"$FAKE/calls\"\ncase \"$1\" in\ninfo) exit 0 ;;\nversion) echo 28.0.4 ;;\n"
+                   "ps) case \"$*\" in *-aq*) echo aaaa ;; *) printf 'p-always\\np-unless-stopped\\np-db\\np-web\\np-host\\n' ;; esac ;;\n"
+                   "inspect) echo '/p-always policy=always state=running started=x restarts=0' ;;\n"
+                   "image) echo 'sha256:1a2b3c busybox:latest' ;;\nlogs) echo '2026-10-09T10:00:00.000000000Z ack 1790000000-1' ;;\nrun) echo 1790000000-1 ;;\nesac\n"),
+        "dpkg": "#!/bin/sh\nexit 0\n",
+        "systemctl": "#!/bin/sh\necho \"systemctl $*\" >>\"$FAKE/calls\"\n",
+    }
+    # curl is a function here: where a curl is installed beside bash (Git's), a stand-in in PATH is not the one that is found
+    rb = ('source "$1"; OUT="$2"; APT=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3); curl() { printf 200; }; '
+          "set -euo pipefail; rollback_run; echo returned")
+
+    def rollback_case(label, log_lines, apt_rc="0", command=None, exit_is=None, ran=True, calls=(), no_calls=()):
+        count[0] += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            fake, out = os.path.join(tmp, "fake").replace("\\", "/"), os.path.join(tmp, "out").replace("\\", "/")
+            os.mkdir(fake)
+            os.mkdir(out)
+            for name, text in rfakes.items():
+                with open(os.path.join(fake, name), "w", newline="\n") as f:
+                    f.write(text)
+                os.chmod(os.path.join(fake, name), 0o755)
+            with open(os.path.join(out, "docker-update.log"), "w", newline="\n") as f:
+                f.write("".join(ln + "\n" for ln in log_lines))
+            env = dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"], FAKE=fake, FAKE_APT_RC=apt_rc)
+            p = subprocess.run([BASH, "-c", rb, "_", SCRIPT.replace("\\", "/"), out], capture_output=True, text=True, env=env)
+
+            def slurp(name, where=out):
+                try:
+                    with open(os.path.join(where, name)) as f:
+                        return f.read()
+                except OSError:
+                    return ""
+            seen, timeline = slurp("calls", fake), slurp("timeline.tsv")
+            problems = []
+            if "returned" not in p.stdout:
+                problems.append("did not return: %r %r" % (p.stdout[-300:], p.stderr[-300:]))
+            if slurp("rollback-command").strip() != command:
+                problems.append("rollback-command is %r, wanted %r" % (slurp("rollback-command").strip(), command))
+            if slurp("rollback-exit").strip() != exit_is:
+                problems.append("rollback-exit is %r, wanted %r" % (slurp("rollback-exit").strip(), exit_is))
+            problems += ["missing call %r in %r" % (s, seen) for s in calls if s not in seen]
+            problems += ["should not have called %r in %r" % (s, seen) for s in no_calls if s in seen]
+            if "\trollback_start\n" not in timeline.replace("\r", ""):
+                problems.append("no rollback_start marker in %r" % timeline)
+            for name in ("snapshot-rollback.txt", "images-rollback.txt", "rollback-settle", "rollback-db-logs.txt", "rollback-db-file.txt", "rollback-web.code"):
+                if bool(slurp(name).strip()) != ran:
+                    problems.append("%s %s" % (name, "is empty" if ran else "should not be there"))
+            for marker_name in ("rollback_done", "rollback_settled"):
+                if ("\t%s\n" % marker_name in timeline.replace("\r", "")) != ran:
+                    problems.append("marker %s %s" % (marker_name, "is missing" if ran else "should not be there"))
+            if ran and slurp("rollback-web.code").strip() != "200":
+                problems.append("rollback-web.code is %r" % slurp("rollback-web.code"))
+            if problems:
+                failures.append("rollback_run, %s: %s\n%s" % (label, "; ".join(problems), p.stderr[-400:]))
+            else:
+                print("ok: rollback_run, " + label)
+
+    two_pins = DOCKER_PIN + " containerd.io=1.7.27-1"
+    rollback_case("the PREVIOUS pins are what is installed, with the downgrade allowed, and the box is recorded afterwards", [QUEUED, PREV_LINE + " " + two_pins],
+                  command="sudo apt-get install --allow-downgrades " + two_pins, exit_is="0",
+                  calls=["install -y -q --allow-downgrades -o Dpkg::Options::=--force-confold " + two_pins, "docker image ls", "docker logs --timestamps p-db"],
+                  no_calls=["--allow-change-held-packages", "--allow-remove-essential", "docker restart", "systemctl restart"])
+    rollback_case("an apt-get that fails is recorded, and the box is looked at all the same", [QUEUED, PREV_LINE + " " + two_pins], apt_rc="100",
+                  command="sudo apt-get install --allow-downgrades " + two_pins, exit_is="100", calls=["install -y -q --allow-downgrades"])
+    rollback_case("a PREVIOUS without a pin leaves nothing to run", [QUEUED, PREV_LINE], command="none", exit_is="not-run", ran=False, no_calls=["apt-get"])
+    rollback_case("a PREVIOUS of another nonce leaves nothing to run", [QUEUED, PREFIX + "PREVIOUS " + FORGED + " " + two_pins], command="none", exit_is="not-run", ran=False, no_calls=["apt-get"])
 
 if failures:
     print("\n".join(failures), file=sys.stderr)

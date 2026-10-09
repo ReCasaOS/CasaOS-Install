@@ -15,7 +15,9 @@
 #                                  (iptables recommends it): when apt can take it out and nothing but libraries with it,
 #                                  the leg does, before the first check, so that the update has a package to bring that
 #                                  the box did not have, as on the owner's box. What it did, or why not, is in
-#                                  $OUT/dependency-path.
+#                                  $OUT/dependency-path. After the success the rollback command the core prints after a
+#                                  failure is run for real (rollback_run), and what is left of Docker 28.0.4, the containers,
+#                                  the volume and the images is recorded.
 #   docker-update-proof.sh minor   the previous patch of the current Docker minor (found with apt-cache
 #                                  madison, never written down), the current one on offer; and last, once
 #                                  the box is put back there, a second update with dockerd made unable to
@@ -79,6 +81,18 @@ removal_ok() {
             if ($2 ~ /^nftables(:[a-z0-9-]+)?$/) { found = 1 } else if ($2 !~ /^lib[a-z0-9+.-]*(:[a-z0-9-]+)?$/) { bad = 1 }
         }
         END { sub(/^ /, "", names); print names; if (found && !bad) exit 0; exit 1 }'
+}
+
+# previous_pins <log>: the pins (name=version, one per line) of the PREVIOUS marker of the run a log records, which is what the core
+# makes its rollback command of. The nonce is the one on the log's first line (the core's), as the core reads it: a marker with
+# another nonce is somebody else's text. A word that has not the shape of a pin is dropped. Status 1 and nothing when there is no pin.
+previous_pins() {
+    awk '
+        NR == 1 { if ($1 == "CASAOS_DOCKER_UPDATE_QUEUED" && length($2) == 32 && $2 ~ /^[0-9a-f]+$/) nonce = $2; next }
+        nonce != "" && $1 == "CASAOS_DOCKER_UPDATE_PREVIOUS" && $2 == nonce {
+            for (i = 3; i <= NF; i++) if ($i ~ /^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$/) { print $i; n++ }
+        }
+        END { exit !(n > 0) }' "$1"
 }
 
 # ---- the machine --------------------------------------------------------------------------------
@@ -242,6 +256,9 @@ start_things() {
 # dpkg_dump <name>: every package dpkg knows, with its version and its state (`ii` is installed, `rc` removed with
 # its configuration kept), for the report to set before and after against the plan
 dpkg_dump() { dpkg-query -W -f='${Package}\t${Version}\t${db:Status-Abbrev}\n' >"${OUT}/dpkg-$1.tsv" || abort "dpkg-query could not list the packages"; }
+
+# images_dump <name>: the images the daemon has (id and name:tag, sorted), for the rollback to be set against
+images_dump() { timeout -s KILL 30 docker image ls --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>"${OUT}/images-$1.err" | sort >"${OUT}/images-$1.txt" || true; }
 
 installed() { # <package>
     local st
@@ -469,6 +486,38 @@ runtime_log() {
     echo "${dir:-/var/log/casaos}/docker-update.log"
 }
 
+# ---- the way back, major leg: the rollback command, run for real --------------------------------------------------------
+
+# rollback_run: after the success, the command the core prints after a failure (sudo apt-get install --allow-downgrades <the pins of the
+# PREVIOUS marker>) is run, on the box that has just gone from Docker 28 to 29 and has run the apps on it since; then what is left is
+# recorded: Docker's version, the containers, the volume's content, the images. -y and --force-confold are the only things added to the
+# command, so that it can run with nobody to answer. A PREVIOUS without a pin leaves no command: rollback-exit says not-run, which the
+# report counts as the rollback failing (the core had nothing to give). Nothing is judged here.
+rollback_run() {
+    local pins=() rc=0
+    marker rollback_start
+    mapfile -t pins < <(previous_pins "${OUT}/docker-update.log" || true)
+    if [ "${#pins[@]}" -eq 0 ]; then
+        echo none >"${OUT}/rollback-command"
+        echo not-run >"${OUT}/rollback-exit"
+        log "the log's PREVIOUS marker has no pin: no rollback command to run"
+        return 0
+    fi
+    echo "sudo apt-get install --allow-downgrades ${pins[*]}" >"${OUT}/rollback-command"
+    "${APT[@]}" install -y -q --allow-downgrades -o Dpkg::Options::=--force-confold "${pins[@]}" >"${OUT}/rollback.log" 2>&1 || rc=$?
+    echo "${rc}" >"${OUT}/rollback-exit"
+    marker rollback_done
+    log "the rollback command ended with ${rc}"
+    wait_docker 300 || true
+    settle rollback-settle
+    marker rollback_settled
+    snapshot rollback
+    images_dump rollback
+    timeout -s KILL 20 docker logs --timestamps p-db >"${OUT}/rollback-db-logs.txt" 2>&1 || true
+    timeout -s KILL 30 docker run --rm -v pdb:/data busybox cat /data/log >"${OUT}/rollback-db-file.txt" 2>"${OUT}/rollback-db-file.err" || true
+    code_of - http://127.0.0.1:18081/ 5 >"${OUT}/rollback-web.code"
+}
+
 # ---- the failure, last ---------------------------------------------------------------------------------------------
 
 mend_daemon_json() {
@@ -578,12 +627,14 @@ main() {
     } >"${OUT}/apt-docker-ce.txt"
     cat "${OUT}/apt-docker-ce.txt"
     snapshot before
+    images_dump before
 
     poll_timeline &
     POLL_PID=$!
     sleep 5
     refusals
     update_run
+    if [ "${LEG}" = major ]; then rollback_run; fi
     if [ "${LEG}" = minor ]; then failure_run; fi
     collect_journal unit-journal-end.txt
     kill "${POLL_PID}" 2>/dev/null || true
