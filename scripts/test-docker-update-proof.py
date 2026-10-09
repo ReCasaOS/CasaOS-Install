@@ -144,6 +144,13 @@ IMAGES = "sha256:1a2b3c busybox:latest\nsha256:4d5e6f nginx:alpine\n"
 BOX_FACTS = ("apt apt 2.2.4 (amd64)\ndpkg Debian 'dpkg' package management program version 1.20.13 (amd64).\nsystemd systemd 247 (247.3-7+deb11u6)\n"
              "timeout timeout (GNU coreutils) 8.32\ndate date (GNU coreutils) 8.32\nsort sort (GNU coreutils) 8.32\nsleep sleep (GNU coreutils) 8.32\n"
              "grep grep (GNU grep) 3.6\nsh /usr/bin/dash\n")
+# what `systemctl --version` says on the system of each leg: Debian 11 (the major leg) has systemd 247, Ubuntu 24.04 has 255
+SYSTEMD = {"major": "systemd 247 (247.3-7+deb11u6)", "minor": "systemd 255 (255.4-1ubuntu8.6)"}
+
+
+def box_facts(systemd):
+    """box-facts of a system whose `systemctl --version` begins with this line"""
+    return BOX_FACTS.replace(SYSTEMD["major"], systemd)
 
 
 def simulation_text(s):
@@ -155,7 +162,10 @@ def simulation_text(s):
     return "\n".join(lines) + "\n# exit 0\n"
 JOURNAL = ("Oct 09 10:02:01 box systemd[1]: Started CasaOS Docker update.\n"
            "Oct 09 10:04:11 box systemd[1]: casaos-docker-update.service: Deactivated successfully.\n")
-EMPTY_ENV = "Oct 09 10:02:01 box systemd[1]: casaos-docker-update.service: Invalid environment variable name evaluates to an empty string: Package\n"
+# the two warnings systemd 254 and later writes when it rewrites ${NAME} in a command line (src/core/exec-invoke.c): a name that is valid and has no value,
+# which is what ${Package} and ${Version} are, and a name that is not a name, which is what ${previous# } and ${pin%%=*} are
+UNSET_ENV = "Oct 09 10:02:01 box systemd[1]: casaos-docker-update.service: Referenced but unset environment variable evaluates to an empty string: Package, Version\n"
+INVALID_ENV = "Oct 09 10:02:01 box systemd[1]: casaos-docker-update.service: Invalid environment variable name evaluates to an empty string: pin%%=*, previous# \n"
 
 
 def success_log(s, t_dl):
@@ -286,7 +296,7 @@ def build(d, leg, s=None):
     put(d, "dependency-path", s["dependency"])
     put(d, "unit-journal.txt", JOURNAL)
     put(d, "unit-journal-end.txt", JOURNAL)
-    put(d, "box-facts", BOX_FACTS)
+    put(d, "box-facts", box_facts(SYSTEMD[leg]))
     put(d, "apt-simulation.txt", simulation_text(s))
 
     if s.get("kill"):
@@ -476,14 +486,16 @@ def invalid(name, reason, mutate, leg="major", empty=False, silent=(), spec=None
 # healthy
 V_UP = "every upgrade in the plan is an engine package with validated versions"
 V_NEW = "every new package in the plan has a valid name and version, is not a distro Docker package, and there are at most 10"
+V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable of the command line to an empty string"
 case("a healthy major leg passes, rolls back, and says that the dependency path was exercised", 0,
      ["Docker update proof, major leg: PASS", "28.0.4", "29.8.0", "dockerd did not answer for 6.0 s", "The dependency path was exercised",
-      "nftables 0.9.8-3.1+deb11u1", "the harness took out nftables, libnftables1, libjansson4, libedit2", "**PASS** rollback after the major jump"],
-     ["**FAIL**", "INVALID", "No new dependency was exercised"])
+      "nftables 0.9.8-3.1+deb11u1", "the harness took out nftables, libnftables1, libjansson4, libedit2", "**PASS** rollback after the major jump",
+      "**NOT APPLICABLE** " + V_JOURNAL, "systemd 247 is older than 254 and writes no such line", "1 not applicable: " + V_JOURNAL],
+     ["**FAIL**", "INVALID", "No new dependency was exercised", "**PASS** " + V_JOURNAL])
 case("a healthy minor leg passes, failure injection included, and says that no new dependency was exercised", 0,
      ["Docker update proof, minor leg: PASS", "failure: the run failed with error_code `daemon`", "failure: the rollback command", "No new dependency was exercised",
-      "only the major leg takes nftables out"],
-     ["**FAIL**", "INVALID", "The dependency path was exercised", "rollback after the major jump"], leg="minor")
+      "only the major leg takes nftables out", "**PASS** " + V_JOURNAL],
+     ["**FAIL**", "INVALID", "The dependency path was exercised", "rollback after the major jump", "NOT APPLICABLE", "not applicable"], leg="minor")
 case("a major leg on a box that kept nftables passes, and says that no new dependency was exercised", 0,
      ["Docker update proof, major leg: PASS", "No new dependency was exercised", "taking nftables out would take more than libraries with it: docker-ce nftables",
       "nftables was already installed"],
@@ -619,11 +631,10 @@ fails("a DAEMON marker with another version", "the DAEMON marker records the run
 fails("a NOTRETURNED marker the status does not list", "the NOTRETURNED markers", lambda d: replace(d, "docker-update.log", marker("NOTRETURNED", "p-no no"), marker("NOTRETURNED", "p-db unless-stopped")))
 
 V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
-V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable name to an empty string"
 PREV = "CASAOS_DOCKER_UPDATE_PREVIOUS " + NONCE
 fails("a PREVIOUS marker that is empty (systemd ate the script's variables)", V_PINS,
       lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]),
-      extra=["**FAIL** the PREVIOUS marker records the docker-ce"], follow=True)
+      extra=["**FAIL** the PREVIOUS marker records the docker-ce", "**NOT APPLICABLE** " + V_JOURNAL], follow=True)
 fails("a PREVIOUS marker without one of the upgraded packages", V_PINS, lambda d: replace(d, "docker-update.log", " containerd.io=1.7.27-1", ""),
       extra=["missing: containerd.io=1.7.27-1"], follow=True)
 fails("a PREVIOUS marker with a pin at another version than the one the package had", V_PINS, lambda d: replace(d, "docker-update.log", "containerd.io=1.7.27-1", "containerd.io=1.7.26-1"),
@@ -636,13 +647,25 @@ fails("a first PREVIOUS marker that lacks a pin, though a later one has it", V_P
       lambda d: ledit(d, "docker-update.log", lambda ls: [x for ln in ls for x in ([PREV + " docker-ce=5:28.0.4-1~debian.11~bullseye", ln] if ln.startswith(PREV) else [ln])]),
       extra=["missing: containerd.io=1.7.27-1"], follow=True)
 fails("a PREVIOUS marker that is empty in the minor leg too", V_PINS, lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]), leg="minor")
-fails("a journal in which systemd emptied a variable of the script", V_JOURNAL, lambda d: put(d, "unit-journal.txt", JOURNAL + EMPTY_ENV),
-      extra=["unit-journal.txt"])
-fails("a journal of the later runs in which systemd emptied a variable", V_JOURNAL, lambda d: put(d, "unit-journal-end.txt", EMPTY_ENV + JOURNAL),
-      extra=["unit-journal-end.txt"])
-fails("that line in the minor leg, in other letters", V_JOURNAL, lambda d: put(d, "unit-journal.txt", JOURNAL + EMPTY_ENV.replace("Invalid environment", "invalid Environment")), leg="minor")
-case("other lines about the unit are not that line", 0, ["PASS"], ["**FAIL**", "INVALID"],
+# the journal verdict: systemd writes either line only from v254. Debian 11 (247) and Debian 12 (252) never do, so on them the verdict is NOT APPLICABLE:
+# named in the report, neither a pass nor a fail, and the verdict on the PREVIOUS pins is what catches an emptied variable there
+for what, line in (("a variable that is unset", UNSET_ENV), ("a variable name that is not a name", INVALID_ENV)):
+    fails("systemd 255 saying that it emptied %s in the command line of the unit" % what, V_JOURNAL, lambda d, line=line: put(d, "unit-journal.txt", JOURNAL + line),
+          leg="minor", extra=["unit-journal.txt"])
+    fails("the same line in the journal of the later runs (%s)" % what, V_JOURNAL, lambda d, line=line: put(d, "unit-journal-end.txt", line + JOURNAL),
+          leg="minor", extra=["unit-journal-end.txt"])
+    fails("a line systemd 247 cannot write is a line all the same (%s)" % what, V_JOURNAL, lambda d, line=line: put(d, "unit-journal.txt", JOURNAL + line), extra=["unit-journal.txt"])
+fails("that line in other letters", V_JOURNAL, lambda d: put(d, "unit-journal.txt", JOURNAL + UNSET_ENV.replace("Referenced but unset", "referenced But Unset")), leg="minor")
+case("other lines about the unit are not that line", 0, ["PASS", "**PASS** " + V_JOURNAL], ["**FAIL**", "INVALID"], leg="minor",
      mutate=lambda d: put(d, "unit-journal.txt", JOURNAL + "Oct 09 10:02:02 box systemd[1]: casaos-docker-update.service: Failed to set up environment: x\n"))
+for version, writes in (("systemd 252 (252.31-1~deb12u1)", False), ("systemd 253 (253.5-1)", False), ("systemd 254 (254.5-1)", True), ("systemd 257 (257.9-1~deb13u1)", True)):
+    case("%s: the journal verdict is %s" % (version, "a pass" if writes else "not applicable"), 0,
+         ["**PASS** " + V_JOURNAL] if writes else ["**NOT APPLICABLE** " + V_JOURNAL, "%s is older than 254 and writes no such line" % version.split(" (")[0]],
+         ["**NOT APPLICABLE**", "**FAIL**", "INVALID"] if writes else ["**PASS** " + V_JOURNAL, "**FAIL**", "INVALID"],
+         leg="minor", mutate=lambda d, version=version: put(d, "box-facts", box_facts(version)))
+case("a systemd line with no version number: whether the line can be written is not known", 1,
+     ["INVALID RUN", "box-facts has a systemd line with no version number"], ["**FAIL** " + V_JOURNAL, "**PASS** " + V_JOURNAL, "**NOT APPLICABLE** " + V_JOURNAL],
+     mutate=lambda d: put(d, "box-facts", box_facts("systemd unknown")))
 
 # the box afterwards
 fails("a daemon that is still the old one", "the running Docker is the new version", lambda d: replace(d, "snapshot-after.txt", "docker 29.8.0", "docker 28.0.4"))

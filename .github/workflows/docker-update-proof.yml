@@ -47,6 +47,11 @@ name: docker-update-proof
 #   container back, exactly the policy-`no` one listed in not_returned, the witness intact,
 #   AppManagement and the core not restarted and answering, the published port answering.
 #
+# One verdict depends on the system: the unit's journal must have no line saying that systemd emptied a variable of the
+# unit's command line (the $$ escaping of the script). systemd writes that line from v254 on (Ubuntu 24.04, Debian 13,
+# Ubuntu 26.04) and never before (Debian 11's 247, Debian 12's 252): there the verdict is reported NOT APPLICABLE, which is
+# neither a pass nor a fail, and the verdict on the pins of the PREVIOUS marker is what catches an emptied variable.
+#
 # It installs a release that has the feature (a release before it fails on the first check, by
 # name), and it is meant to be run on a candidate before that release becomes the latest one:
 #   1. publish the installer release as a pre-release (gh release create vX.Y.Z --prerelease ...):

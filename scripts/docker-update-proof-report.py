@@ -29,6 +29,11 @@ The legs:
 The legs run on more than one system: the report shows the tools of the one it judges (apt, systemd, dpkg, the
 utilities the unit's script calls) and checks that this system's apt prints its simulation in the form the core reads.
 
+One verdict depends on the system: the unit's journal has no line saying that systemd emptied a variable of the command
+line. systemd writes such a line from v254 on (Ubuntu 24.04's 255, Debian 13's 257) and never before (Debian 11's 247,
+Debian 12's 252), so on an older one that verdict is NOT APPLICABLE: named in the report, neither a pass nor a fail, and not
+counted among the passes. What catches an emptied variable on those systems is the verdict on the pins of the PREVIOUS marker.
+
 The plan may hold packages the box does not have (the dependencies of the new Docker). It is judged on
 what the box did with it: the packages dpkg had installed just before the POST and just after the run
 (dpkg-before.tsv, dpkg-after.tsv) must differ by exactly the plan's new packages (added) and its upgrades,
@@ -58,8 +63,11 @@ DISTRO_DOCKER = ("docker.io", "containerd", "docker-compose-v2", "docker-buildx"
 MAX_NEW = 10           # dockerpkg.MaxNewPackages
 MARKER_RE = re.compile(r"^CASAOS_DOCKER_UPDATE_([A-Z_]+) ([0-9a-f]{32})(?: (.*))?$")
 PIN_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")   # name=version, the shape of a pin in PREVIOUS and in a rollback command
-# systemd rewrites ${NAME} in the command line of a transient unit: a name it has no value for becomes the empty string, and says so
-EMPTY_ENV_RE = re.compile(r"environment variable name evaluates to an empty string", re.I)
+# systemd rewrites ${NAME} in the command line of a transient unit: a name it has no value for becomes the empty string. From v254 on it says so, in
+# one of two words (src/core/exec-invoke.c): "Referenced but unset environment variable evaluates to an empty string: Package" for a name that is valid
+# and has no value, "Invalid environment variable name evaluates to an empty string: pin%%=*" for a name that is not a name. Before v254 it says nothing.
+EMPTY_ENV_RE = re.compile(r"(Referenced but unset|Invalid) environment variable( name)? evaluates to an empty string", re.I)
+JOURNAL_FROM = 254     # the first systemd that writes either line
 V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
 V_ROLLBACK = "rollback after the major jump"
 V_SIM = "apt's simulation exits 0 and names docker-ce from the installed version to the one on offer, in the form the core reads"
@@ -71,7 +79,7 @@ K_LOG = "kill -9: the log agrees with the status"
 K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
 K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
-V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable name to an empty string"
+V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable of the command line to an empty string"
 POST_SECONDS = 30      # "a few seconds" in the spec; this only catches a POST that blocks through apt
 HOLE = 60.0            # seconds without a poller sample, inside the run: the poller is dead
 FAIL_RUN = 3           # consecutive status samples that failed: the status endpoint went away
@@ -96,6 +104,11 @@ def verdict(name, ok, detail=""):
         verdicts.append(("PASS" if ok else "FAIL", name, detail))
 
 
+def not_applicable(name, why):
+    """a check that this system cannot answer: named in the report, neither a pass nor a fail"""
+    verdicts.append(("NOT APPLICABLE", name, why))
+
+
 def on(have, cond):
     return None if not have else bool(cond)
 
@@ -115,8 +128,10 @@ def finish():
     text += lines
     text += ["", "## Verdicts", ""]
     text += ["- **%s** %s%s" % (s, n, (": " + d) if d else "") for s, n, d in verdicts]
-    text += ["", "%d of %d verdicts pass%s." % (sum(1 for v in verdicts if v[0] == "PASS"), len(verdicts),
-                                                "; failing: " + "; ".join(v[1] for v in fails) if fails else "")]
+    skipped = [v[1] for v in verdicts if v[0] == "NOT APPLICABLE"]
+    passes = sum(1 for v in verdicts if v[0] == "PASS")
+    text += ["", "%d of %d verdicts pass%s%s." % (passes, passes + len(fails), "; failing: " + "; ".join(v[1] for v in fails) if fails else "",
+                                                "; %d not applicable: %s" % (len(skipped), "; ".join(skipped)) if skipped else "")]
     out = "\n".join(text) + "\n"
     try:
         with open(os.path.join(out_dir, "report.md"), "w", encoding="utf-8") as f:
@@ -385,6 +400,12 @@ if read("box-facts").strip():
     for k_ in ("apt", "dpkg", "systemd", "timeout", "date", "sort", "sleep", "grep", "sh"):
         if not facts.get(k_):
             invalid("box-facts has no %s line: the tools of this system were not recorded" % k_)
+systemd_major = None
+if facts.get("systemd"):
+    m_ = re.match(r"^systemd (\d+)\b", facts["systemd"])
+    systemd_major = int(m_.group(1)) if m_ else None
+    if systemd_major is None:
+        invalid("box-facts has a systemd line with no version number (%r): whether this systemd can write the line the journal verdict looks for is not known" % facts["systemd"][:60])
 sim = read("apt-simulation.txt")
 sim_exit = re.search(r"^# exit (\d+)$", sim, re.M)
 if sim.strip() and not sim_exit:
@@ -627,7 +648,14 @@ odd_words = [w for w in prev_words if not PIN_RE.match(w)]
 verdict(V_PINS, on(marks and plan_up, not lost_pins and not odd_words),   # an empty PREVIOUS misses every pin of the plan
         "PREVIOUS: %r; missing: %s; not pins: %s" % (prev_field, ", ".join(lost_pins) or "none", ", ".join(odd_words) or "none"))
 bad_journal = ["%s: %s" % (jname, ln.strip()) for jname, jlines in sorted(journals.items()) for ln in jlines if EMPTY_ENV_RE.search(ln)]
-verdict(V_JOURNAL, on(all(journals.values()), not bad_journal), "; ".join(bad_journal) or "%d lines read" % sum(len(v) for v in journals.values()))
+if all(journals.values()):
+    if bad_journal:      # a line that is there counts on every system
+        verdict(V_JOURNAL, False, "; ".join(bad_journal))
+    elif systemd_major is not None and systemd_major >= JOURNAL_FROM:
+        verdict(V_JOURNAL, True, "systemd %d; %d lines read" % (systemd_major, sum(len(v) for v in journals.values())))
+    elif systemd_major is not None:
+        not_applicable(V_JOURNAL, "systemd %d is older than %d and writes no such line, whatever the command line holds: a journal without it proves nothing here, and the "
+                                  "verdict on the pins of the PREVIOUS marker is what catches an emptied variable on this system" % (systemd_major, JOURNAL_FROM))
 verdict("the DAEMON marker records the running version", on(marks, field("DAEMON").strip() == expected_to), "DAEMON: %r (wanted %r)" % (field("DAEMON"), expected_to))
 logged_nr = sorted(m[2].split()[0] for m in marks if m[0] == "NOTRETURNED" and m[2].split())
 verdict("the NOTRETURNED markers are the containers the status lists", on(marks and fd, logged_nr == [n for n, _ in nr_pairs]), "log %r, status %r" % (logged_nr, [n for n, _ in nr_pairs]))
