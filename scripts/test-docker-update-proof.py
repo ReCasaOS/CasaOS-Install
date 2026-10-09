@@ -132,6 +132,11 @@ def marker(kind, rest=""):
     return "%s%s %s%s" % (PREFIX, kind, NONCE, (" " + rest) if rest else "")
 
 
+JOURNAL = ("Oct 09 10:02:01 box systemd[1]: Started CasaOS Docker update.\n"
+           "Oct 09 10:04:11 box systemd[1]: casaos-docker-update.service: Deactivated successfully.\n")
+EMPTY_ENV = "Oct 09 10:02:01 box systemd[1]: casaos-docker-update.service: Invalid environment variable name evaluates to an empty string: Package\n"
+
+
 def success_log(s, t_dl):
     prev = " ".join("%s=%s" % (n, c) for n, c, _ in s["plan"])
     lines = [marker("QUEUED", iso(T0 + 100)), marker("STARTED", iso(T0 + 101)), marker("PREVIOUS", prev)]
@@ -243,6 +248,8 @@ def build(d, leg, s=None):
     put(d, "dpkg-before.tsv", dpkg_text(s, False))
     put(d, "dpkg-after.tsv", dpkg_text(s, True))
     put(d, "dependency-path", s["dependency"])
+    put(d, "unit-journal.txt", JOURNAL)
+    put(d, "unit-journal-end.txt", JOURNAL)
 
     if leg == "minor":
         api(d, "fail-packages", 200, packages_body(s))
@@ -507,6 +514,27 @@ fails("a PREVIOUS marker without docker-ce", "the PREVIOUS marker records the do
 fails("a DAEMON marker with another version", "the DAEMON marker records the running version", lambda d: replace(d, "docker-update.log", marker("DAEMON", "29.8.0"), marker("DAEMON", "28.0.4")))
 fails("a NOTRETURNED marker the status does not list", "the NOTRETURNED markers", lambda d: replace(d, "docker-update.log", marker("NOTRETURNED", "p-no no"), marker("NOTRETURNED", "p-db unless-stopped")))
 
+V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
+V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable name to an empty string"
+PREV = "CASAOS_DOCKER_UPDATE_PREVIOUS " + NONCE
+fails("a PREVIOUS marker that is empty (systemd ate the script's variables)", V_PINS,
+      lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]),
+      extra=["**FAIL** the PREVIOUS marker records the docker-ce"])
+fails("a PREVIOUS marker without one of the upgraded packages", V_PINS, lambda d: replace(d, "docker-update.log", " containerd.io=1.7.27-1", ""),
+      extra=["missing: containerd.io=1.7.27-1"])
+fails("a PREVIOUS marker with a pin at another version than the one the package had", V_PINS, lambda d: replace(d, "docker-update.log", "containerd.io=1.7.27-1", "containerd.io=1.7.26-1"),
+      extra=["missing: containerd.io=1.7.27-1"])
+fails("a PREVIOUS marker with a word that is not a pin", V_PINS, lambda d: replace(d, "docker-update.log", "containerd.io=1.7.27-1", "containerd.io=1.7.27-1 nftables;reboot"),
+      extra=["not pins: nftables;reboot"])
+fails("a PREVIOUS marker that is empty in the minor leg too", V_PINS, lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]), leg="minor")
+fails("a journal in which systemd emptied a variable of the script", V_JOURNAL, lambda d: put(d, "unit-journal.txt", JOURNAL + EMPTY_ENV),
+      extra=["unit-journal.txt"])
+fails("a journal of the later runs in which systemd emptied a variable", V_JOURNAL, lambda d: put(d, "unit-journal-end.txt", EMPTY_ENV + JOURNAL),
+      extra=["unit-journal-end.txt"])
+fails("that line in the minor leg, in other letters", V_JOURNAL, lambda d: put(d, "unit-journal.txt", JOURNAL + EMPTY_ENV.replace("Invalid environment", "invalid Environment")), leg="minor")
+case("other lines about the unit are not that line", 0, ["PASS"], ["**FAIL**", "INVALID"],
+     mutate=lambda d: put(d, "unit-journal.txt", JOURNAL + "Oct 09 10:02:02 box systemd[1]: casaos-docker-update.service: Failed to set up environment: x\n"))
+
 # the box afterwards
 fails("a daemon that is still the old one", "the running Docker is the new version", lambda d: replace(d, "snapshot-after.txt", "docker 29.8.0", "docker 28.0.4"))
 fails("a daemon that is not the new one in the poller either", "the running Docker is the new version",
@@ -598,6 +626,21 @@ case("a plan whose id counts the new packages: dropping one from the list is a d
 
 # a run that proves nothing is never green
 invalid("an empty directory", "start-version is missing or empty", None, empty=True)
+invalid("no journal of the unit", "unit-journal.txt is missing or holds no journal line", lambda d: remove(d, "unit-journal.txt"), silent=(V_JOURNAL,))
+invalid("no journal of the unit for the later runs", "unit-journal-end.txt is missing or holds no journal line", lambda d: remove(d, "unit-journal-end.txt"), silent=(V_JOURNAL,))
+invalid("a journal that only says there is nothing in it", "unit-journal.txt is missing or holds no journal line",
+        lambda d: put(d, "unit-journal.txt", "-- No entries --\n"), silent=(V_JOURNAL,))
+invalid("a journal that journalctl could not read", "unit-journal-end.txt is missing or holds no journal line",
+        lambda d: put(d, "unit-journal-end.txt", "\n-- Journal begins at Fri 2026-10-09 --\n"), silent=(V_JOURNAL,))
+SILENT_POLL = ("the run reaches a terminal state", "the status endpoint keeps answering")
+SILENT_FAIL_POLL = ("failure: the run reaches a terminal state", "failure: the status endpoint keeps answering")
+invalid("a status poll that is not there", "status.jsonl is missing or holds no status sample", lambda d: remove(d, "status.jsonl"), silent=SILENT_POLL)
+invalid("a status poll that holds only lines that are not samples", "status.jsonl is missing or holds no status sample", lambda d: put(d, "status.jsonl", "not a sample\n"), silent=SILENT_POLL)
+invalid("a status poll that is empty", "status.jsonl is missing or holds no status sample", lambda d: put(d, "status.jsonl", ""), silent=SILENT_POLL)
+invalid("a failure poll that is not there", "fail-status.jsonl is missing or holds no status sample", lambda d: remove(d, "fail-status.jsonl"), leg="minor", silent=SILENT_FAIL_POLL)
+invalid("a failure poll that is empty", "fail-status.jsonl is missing or holds no status sample", lambda d: put(d, "fail-status.jsonl", ""), leg="minor", silent=SILENT_FAIL_POLL)
+invalid("a failure poll that holds only lines that are not samples", "fail-status.jsonl is missing or holds no status sample",
+        lambda d: put(d, "fail-status.jsonl", "not a sample\n"), leg="minor", silent=SILENT_FAIL_POLL)
 invalid("a run that stopped", "the run stopped before it was done: NOT PROVEN: no older release", lambda d: put(d, "aborted", "NOT PROVEN: no older release\n"))
 invalid("a step that did not run", "no answer was recorded for held-post: that step did not run", lambda d: remove(d, "held-post.code", "held-post.json"))
 invalid("a status that was never recorded", "status-final.json holds no status", lambda d: remove(d, "status-final.json"))

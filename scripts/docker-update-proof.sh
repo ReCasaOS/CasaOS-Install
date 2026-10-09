@@ -444,7 +444,7 @@ update_run() {
     snapshot after
     dpkg_dump after
     cp "$(runtime_log)" "${OUT}/docker-update.log" 2>/dev/null || true
-    journalctl -u casaos-docker-update.service --no-pager >"${OUT}/unit-journal.txt" 2>&1 || true
+    collect_journal unit-journal.txt
     timeout -s KILL 20 docker logs --timestamps p-db >"${OUT}/db-logs.txt" 2>&1 || true
     timeout -s KILL 30 docker run --rm -v pdb:/data busybox cat /data/log >"${OUT}/db-file.txt" 2>"${OUT}/db-file.err" || true
     local code=000
@@ -458,6 +458,10 @@ update_run() {
     call_as internal packages-after GET /v1/sys/packages
     CALL_MAX=60 call_as internal containers-after GET /v1/sys/docker/containers
 }
+
+# collect_journal <file>: what systemd and the unit said about casaos-docker-update.service so far, every run of it. The report
+# looks in it for the line systemd writes when it rewrites ${NAME} in the unit's command line and has no value for the name.
+collect_journal() { journalctl -u casaos-docker-update.service --no-pager -o short-iso >"${OUT}/$1" 2>&1 || true; }
 
 runtime_log() {
     local dir
@@ -581,6 +585,7 @@ main() {
     refusals
     update_run
     if [ "${LEG}" = minor ]; then failure_run; fi
+    collect_journal unit-journal-end.txt
     kill "${POLL_PID}" 2>/dev/null || true
     POLL_PID=""
     log "done"

@@ -45,6 +45,11 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]*(:[a-z0-9]+)?$")   # dockerpkg.Vali
 DISTRO_DOCKER = ("docker.io", "containerd", "docker-compose-v2", "docker-buildx")   # the distribution's, in conflict with Docker's own packages
 MAX_NEW = 10           # dockerpkg.MaxNewPackages
 MARKER_RE = re.compile(r"^CASAOS_DOCKER_UPDATE_([A-Z_]+) ([0-9a-f]{32})(?: (.*))?$")
+PIN_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")   # name=version, the shape of a pin in PREVIOUS and in a rollback command
+# systemd rewrites ${NAME} in the command line of a transient unit: a name it has no value for becomes the empty string, and says so
+EMPTY_ENV_RE = re.compile(r"environment variable name evaluates to an empty string", re.I)
+V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
+V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable name to an empty string"
 POST_SECONDS = 30      # "a few seconds" in the spec; this only catches a POST that blocks through apt
 HOLE = 60.0            # seconds without a poller sample, inside the run: the poller is dead
 FAIL_RUN = 3           # consecutive status samples that failed: the status endpoint went away
@@ -314,9 +319,19 @@ for line in read("apt-docker-ce.txt").splitlines():
 installed_full, candidate_full = apt.get("installed"), apt.get("candidate")
 expected_to = engine(candidate_full)
 
-for need in ("start-version", "apt-docker-ce.txt", "timeline.tsv", "status.jsonl", "snapshot-before.txt", "snapshot-after.txt", "dpkg-before.tsv", "dpkg-after.tsv", "dependency-path"):
+for need in ("start-version", "apt-docker-ce.txt", "timeline.tsv", "snapshot-before.txt", "snapshot-after.txt", "dpkg-before.tsv", "dpkg-after.tsv", "dependency-path"):
     if not read(need).strip():
         invalid("%s is missing or empty: the run did not get that far" % need)
+# a poll that left no sample (a file that is missing, empty, or holds nothing but lines that are not samples) judges nothing: the verdicts
+# that read it would be dropped without a word
+if not samples:
+    invalid("status.jsonl is missing or holds no status sample: the run was not polled")
+# the journal of the unit is read for a line that is not there: a journal that could not be read proves nothing
+journals = {}
+for jname in ("unit-journal.txt", "unit-journal-end.txt"):
+    journals[jname] = [ln for ln in read(jname).splitlines() if ln.strip() and not ln.startswith("-- ")]
+    if not journals[jname]:
+        invalid("%s is missing or holds no journal line of the unit's: journalctl could not read it, and its silence would prove nothing" % jname)
 for m in ("post_start", "terminal", "settled"):
     if m not in markers:
         invalid("marker %s is missing from the timeline: the run did not get that far" % m)
@@ -529,6 +544,15 @@ marks = check_log(log_text, "success", "SUCCESS", ["QUEUED", "STARTED", "PREVIOU
 by_kind = {m[0]: m for m in marks}
 field = lambda kind: by_kind.get(kind, (None, None, ""))[2]
 verdict("the PREVIOUS marker records the docker-ce that was installed", on(marks, ("docker-ce=%s" % installed_full) in field("PREVIOUS").split()), "PREVIOUS: %s" % field("PREVIOUS"))
+# what the rollback command is made of: a PREVIOUS that systemd emptied (the script's ${Package}=${Version} gone) gives a command that goes nowhere
+prev_words = field("PREVIOUS").split()
+want_pins = sorted("%s=%s" % (n, cur) for n, (cur, _) in plan_up.items())
+lost_pins = [p for p in want_pins if p not in prev_words]
+odd_words = [w for w in prev_words if not PIN_RE.match(w)]
+verdict(V_PINS, on(marks and plan_up, not lost_pins and not odd_words),   # an empty PREVIOUS misses every pin of the plan
+        "PREVIOUS: %r; missing: %s; not pins: %s" % (field("PREVIOUS"), ", ".join(lost_pins) or "none", ", ".join(odd_words) or "none"))
+bad_journal = ["%s: %s" % (jname, ln.strip()) for jname, jlines in sorted(journals.items()) for ln in jlines if EMPTY_ENV_RE.search(ln)]
+verdict(V_JOURNAL, on(all(journals.values()), not bad_journal), "; ".join(bad_journal) or "%d lines read" % sum(len(v) for v in journals.values()))
 verdict("the DAEMON marker records the running version", on(marks, field("DAEMON").strip() == expected_to), "DAEMON: %r (wanted %r)" % (field("DAEMON"), expected_to))
 logged_nr = sorted(m[2].split()[0] for m in marks if m[0] == "NOTRETURNED" and m[2].split())
 verdict("the NOTRETURNED markers are the containers the status lists", on(marks and fd, logged_nr == [n for n, _ in nr_pairs]), "log %r, status %r" % (logged_nr, [n for n, _ in nr_pairs]))
@@ -644,6 +668,8 @@ if leg == "minor":
     verdict("failure: the POST starts the run although dockerd will be unable to start", on(code is not None, code == 200 and dget(body, "state") in ("running", "finalizing")),
             "HTTP %s, state %r" % (code, dget(body, "state")))
     fsamples = load_samples("fail-status.jsonl")
+    if not fsamples:
+        invalid("fail-status.jsonl is missing or holds no status sample: the failure run was not polled")
     verdict("failure: the run reaches a terminal state", on(fsamples, any(d and d.get("state") in TERMINAL for _, _, d in fsamples)),
             "%d status samples%s" % (len(fsamples), "; gave up after " + read("fail-status.timeout").strip() if read("fail-status.timeout").strip() else ""))
     verdict("failure: the status endpoint keeps answering while dockerd cannot start", on(fsamples, not status_runs(fsamples)),
@@ -660,7 +686,7 @@ if leg == "minor":
     rb = fdd.get("rollback_command") or ""
     pins = rb.split()[4:] if rb.startswith("sudo apt-get install --allow-downgrades ") else []
     verdict("failure: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version",
-            on(fdd, pins and all(re.match(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$", p) and p.split("=")[0] in ALLOWLIST for p in pins)
+            on(fdd, pins and all(PIN_RE.match(p) and p.split("=")[0] in ALLOWLIST for p in pins)
                and any(p.startswith("docker-ce=") and engine(p.split("=", 1)[1]) == start_version for p in pins)),
             "rollback_command %r" % rb)
     flog = read("docker-update-fail.log")
