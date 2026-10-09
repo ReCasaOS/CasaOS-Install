@@ -12,9 +12,17 @@ where the leg needs it). An invalid run proves nothing and is never green. A ste
 is INVALID, not a verdict: there is no skipped check that stays quiet.
 
 The legs:
-    major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box.
+    major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box. The
+            harness takes nftables out first when apt can do that cleanly, because Docker 29 needs it
+            and Docker 28 did not: the update then has a package to bring that the box does not have.
     minor   Ubuntu 24.04, the previous patch of the current Docker minor, then a second update with
             dockerd made unable to start (failure injection, last).
+
+The plan may hold packages the box does not have (the dependencies of the new Docker). It is judged on
+what the box did with it: the packages dpkg had installed just before the POST and just after the run
+(dpkg-before.tsv, dpkg-after.tsv) must differ by exactly the plan's new packages (added) and its upgrades,
+and by nothing else, and nothing may be removed. A run in which no new package was brought says so
+("No new dependency was exercised"): that is a pass, and it is not a proof of the dependency path.
 """
 import hashlib
 import json
@@ -33,6 +41,9 @@ CONTAINERS = {"p-always": "always", "p-unless-stopped": "unless-stopped", "p-no"
 COMES_BACK = ("always", "unless-stopped")
 TERMINAL = ("succeeded", "failed")
 VERSION_RE = re.compile(r"^([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]*(:[a-z0-9]+)?$")   # dockerpkg.ValidName
+DISTRO_DOCKER = ("docker.io", "containerd", "docker-compose-v2", "docker-buildx")   # the distribution's, in conflict with Docker's own packages
+MAX_NEW = 10           # dockerpkg.MaxNewPackages
 MARKER_RE = re.compile(r"^CASAOS_DOCKER_UPDATE_([A-Z_]+) ([0-9a-f]{32})(?: (.*))?$")
 POST_SECONDS = 30      # "a few seconds" in the spec; this only catches a POST that blocks through apt
 HOLE = 60.0            # seconds without a poller sample, inside the run: the poller is dead
@@ -150,6 +161,30 @@ def timestamp(s):
         return datetime.fromisoformat(base + ("." + (frac + "000000")[:6] if frac else "") + ("+00:00" if zone in (None, "Z") else zone)).timestamp()
     except ValueError:
         return None
+
+
+def valid_version(v):
+    return isinstance(v, str) and len(v) <= 100 and bool(VERSION_RE.match(v))
+
+
+def valid_name(n):
+    return isinstance(n, str) and len(n) <= 128 and bool(NAME_RE.match(n))
+
+
+def bare(n):
+    """a package name without the architecture apt adds to a foreign one"""
+    return re.sub(r":[a-z0-9]+$", "", str(n))
+
+
+def load_dpkg(name):
+    """{package: version} of what dpkg had installed (its second state letter is `i`: `ii`, `hi`, not `rc` or `iU`) in a dump of
+    `dpkg-query -W` (name, version, state; tab separated). One row per name: a box with two architectures would need name:arch."""
+    out = {}
+    for line in read(name).splitlines():
+        f = line.split("\t")
+        if len(f) == 3 and f[1] and f[2].strip()[1:2] == "i":
+            out[f[0]] = f[1]
+    return out
 
 
 def snapshot(name):
@@ -279,7 +314,7 @@ for line in read("apt-docker-ce.txt").splitlines():
 installed_full, candidate_full = apt.get("installed"), apt.get("candidate")
 expected_to = engine(candidate_full)
 
-for need in ("start-version", "apt-docker-ce.txt", "timeline.tsv", "status.jsonl", "snapshot-before.txt", "snapshot-after.txt"):
+for need in ("start-version", "apt-docker-ce.txt", "timeline.tsv", "status.jsonl", "snapshot-before.txt", "snapshot-after.txt", "dpkg-before.tsv", "dpkg-after.tsv", "dependency-path"):
     if not read(need).strip():
         invalid("%s is missing or empty: the run did not get that far" % need)
 for m in ("post_start", "terminal", "settled"):
@@ -311,6 +346,41 @@ if "post_start" in markers and "settled" in markers and rows:
     if not pre or pre[-1]["dv"] != start_version:
         invalid("docker did not answer with %s when the update was asked for" % start_version)
 
+# ---- the plan the check offered, and what the box did about it -------------------------------------------
+
+code, body = resp("packages-1")
+plan_seen = code is not None
+up = dobj(body, "docker", "update")
+plan = up.get("packages") if isinstance(up.get("packages"), list) else []
+entries = [p for p in plan if isinstance(p, dict)]
+new_pk = [p for p in entries if p.get("new") is True]       # not installed yet: no current version
+up_pk = [p for p in entries if p.get("new") is not True]    # an upgrade
+plan_new = {bare(p.get("name")): p.get("candidate_version") for p in new_pk}
+plan_up = {bare(p.get("name")): (p.get("current_version"), p.get("candidate_version")) for p in up_pk}
+
+before_pk, after_pk = load_dpkg("dpkg-before.tsv"), load_dpkg("dpkg-after.tsv")
+for name_, pk_ in (("dpkg-before.tsv", before_pk), ("dpkg-after.tsv", after_pk)):
+    if read(name_).strip() and not pk_:
+        invalid("%s lists no installed package: that is not what dpkg-query writes" % name_)
+added = sorted(set(after_pk) - set(before_pk))
+removed = sorted(set(before_pk) - set(after_pk))
+changed = sorted(n for n in set(before_pk) & set(after_pk) if before_pk[n] != after_pk[n])
+exercised = bool(plan_new) and set(added) == set(plan_new)
+
+dep = {}   # what the harness did about the dependency path (docker-update-proof.sh, prepare_dependency_path)
+for line in read("dependency-path").splitlines():
+    k_, _, v_ = line.partition(" ")
+    dep[k_] = v_.strip()
+if read("dependency-path").strip():
+    if dep.get("action") not in ("removed", "skipped", "not-attempted"):
+        invalid("dependency-path says %r, which is not a thing the harness does" % dep.get("action"))
+    elif leg == "major" and dep["action"] == "not-attempted":
+        invalid("the major leg did not try the dependency step (dependency-path says not-attempted)")
+    elif dep["action"] == "removed" and "nftables" not in [bare(n) for n in dep.get("packages", "").split()]:
+        invalid("dependency-path says packages were removed but does not name nftables: %r" % dep.get("packages"))
+    elif dep["action"] == "removed" and "nftables" in before_pk:
+        invalid("the harness says it took nftables out, and dpkg-before.tsv still has it installed")
+
 # ---- the box ------------------------------------------------------------------------------------
 
 P("## The box")
@@ -323,22 +393,27 @@ P("| docker-ce at the start | %s (daemon %s) |" % (installed_full or "?", before
 P("| docker-ce on offer | %s |" % (candidate_full or "?"))
 P("| packages before | %s |" % before.get("packages", "?"))
 P("| packages after | %s |" % after.get("packages", "?"))
+P("| new packages the update installed | %s |" % (("; ".join("%s %s" % (n, after_pk[n]) for n in added) or "none (no new dependency was exercised)") if before_pk and after_pk else "?"))
 P("")
 
 # ---- the check offers the update -------------------------------------------------------------------
 
-code, body = resp("packages-1")
-up = dobj(body, "docker", "update")
-plan = [p for p in (up.get("packages") if isinstance(up.get("packages"), list) else [])]
 verdict("GET /v1/sys/packages offers the Docker update", on(code is not None, code == 200 and up.get("available") is True and not up.get("refusal")),
         "HTTP %s, available %r, refusal %r" % (code, up.get("available"), up.get("refusal")))
 verdict("from and to are the engine versions apt shows", on(code is not None, up.get("from") == start_version and up.get("to") == expected_to),
         "from %r (wanted %r), to %r (wanted %r)" % (up.get("from"), start_version, up.get("to"), expected_to))
 verdict("major_jump says what the jump is", on(code is not None, up.get("major_jump") is (leg == "major")), "major_jump %r on a %s leg" % (up.get("major_jump"), leg))
-bad = [p for p in plan if not isinstance(p, dict) or p.get("name") not in ALLOWLIST
-       or not all(isinstance(p.get(k), str) and len(p[k]) <= 100 and VERSION_RE.match(p[k]) for k in ("current_version", "candidate_version"))]
-verdict("the plan holds only engine packages with validated versions", on(code is not None, plan and not bad),
-        "packages: %s" % (", ".join("%s %s -> %s" % (p.get("name"), p.get("current_version"), p.get("candidate_version")) for p in plan if isinstance(p, dict)) or "none"))
+bad_up = [p for p in up_pk if p.get("name") not in ALLOWLIST or not (valid_version(p.get("current_version")) and valid_version(p.get("candidate_version")))]
+bad_new = [p for p in new_pk if not valid_name(p.get("name")) or bare(p.get("name")) in DISTRO_DOCKER or p.get("current_version") != ""
+           or not valid_version(p.get("candidate_version"))]
+fmt = lambda p: "%s %s -> %s" % (p.get("name"), p.get("current_version") or "(new)", p.get("candidate_version"))
+verdict("every upgrade in the plan is an engine package with validated versions", on(plan_seen, up_pk and not bad_up and len(entries) == len(plan)),
+        "upgrades: %s%s%s" % (", ".join(fmt(p) for p in up_pk) or "none", "; not acceptable: " + ", ".join(fmt(p) for p in bad_up) if bad_up else "",
+                              "; %d entries that are not objects" % (len(plan) - len(entries)) if len(entries) != len(plan) else ""))
+verdict("every new package in the plan has a valid name and version, is not a distro Docker package, and there are at most %d" % MAX_NEW,
+        on(plan_seen, not bad_new and len(new_pk) <= MAX_NEW),
+        "%d new package%s: %s%s" % (len(new_pk), "" if len(new_pk) == 1 else "s", ", ".join(fmt(p) for p in new_pk) or "none",
+                                    "; not acceptable: " + ", ".join(fmt(p) for p in bad_new) if bad_new else ""))
 dce = next((p for p in plan if isinstance(p, dict) and p.get("name") == "docker-ce"), {})
 verdict("the plan's docker-ce is the one dpkg has and the one apt offers",
         on(code is not None, dce.get("current_version") == installed_full and dce.get("candidate_version") == candidate_full),
@@ -465,6 +540,17 @@ verdict("the running Docker is the new version", on(after["present"] and at_sett
         "daemon %r, the poller at the end %r, wanted %r" % (after.get("docker"), at_settled[-1]["dv"] if at_settled else None, expected_to))
 verdict("dpkg has the version apt offered", on(after["present"], package_version(after, "docker-ce") == candidate_full),
         "docker-ce %r (wanted %r)" % (package_version(after, "docker-ce"), candidate_full))
+have_dpkg = plan_seen and bool(before_pk) and bool(after_pk)
+verdict("the run removed no package", on(before_pk and after_pk, not removed), "removed: %s" % (", ".join(removed) or "none"))
+stray = sorted((set(added) | set(changed)) - set(plan_new) - set(plan_up))
+verdict("nothing outside the plan was installed or upgraded", on(have_dpkg, not stray), "outside the plan: %s" % (", ".join(stray) or "none"))
+wrong_new = sorted(n for n, k in plan_new.items() if after_pk.get(n) != k)
+verdict("dpkg added exactly the plan's new packages, at the planned versions", on(have_dpkg, set(added) == set(plan_new) and not wrong_new),
+        "plan: %s; dpkg added: %s" % (", ".join("%s %s" % kv for kv in sorted(plan_new.items())) or "none", ", ".join("%s %s" % (n, after_pk[n]) for n in added) or "none"))
+wrong_up = sorted(n for n, (cur, cand) in plan_up.items() if before_pk.get(n) != cur or after_pk.get(n) != cand)
+verdict("dpkg upgraded exactly the plan's upgrades, from and to the planned versions", on(have_dpkg, set(changed) == set(plan_up) and not wrong_up),
+        "plan: %s; dpkg changed: %s" % (", ".join("%s %s>%s" % (n, c, k) for n, (c, k) in sorted(plan_up.items())) or "none",
+                                         ", ".join("%s %s>%s" % (n, before_pk[n], after_pk[n]) for n in changed) or "none"))
 pb, pa = unit_number(before, "docker", "MainPID"), unit_number(after, "docker", "MainPID")
 dl_fields = field("DOWNLOADED").split()
 dl = timestamp(dl_fields[0]) if dl_fields else None
@@ -505,6 +591,18 @@ verdict("GET /v1/sys/docker/containers lists the containers that are running aga
 
 P("## What was observed")
 P("")
+if before_pk and after_pk:
+    if exercised:
+        P("- The dependency path was exercised: the update installed %d package%s the box did not have, as its plan said (%s)." %
+          (len(added), "" if len(added) == 1 else "s", "; ".join("%s %s" % (n, after_pk[n]) for n in added)))
+    else:
+        why = ("the plan named new packages (%s) and dpkg did not add exactly those, see the verdicts" % ", ".join(sorted(plan_new))) if plan_new else \
+            "the plan held no new package" + ("; nftables was already installed before the update" if "nftables" in before_pk else "")
+        P("- **No new dependency was exercised**: %s. This run does not prove the part of the update that installs packages the box did not have." % why)
+    P("- " + {"removed": "Before the first check the harness took out %s (all that apt would remove was nftables and libraries), so that the update would have packages to bring." %
+                        ", ".join(dep.get("packages", "").split()),
+              "skipped": "The harness did not take nftables out: %s." % dep.get("reason", "no reason given"),
+              "not-attempted": "The harness takes nothing out on this leg: %s." % dep.get("reason", "no reason given")}.get(dep.get("action"), "The harness left no usable record of the dependency step."))
 if span:
     eps = episodes(span, lambda r: r["dv"] == "-", 2, 3)
     for s_, e_ in eps:

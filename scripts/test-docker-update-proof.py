@@ -6,8 +6,12 @@ that must come out a given way, and checks what docker-update-proof-report.py sa
 
 A healthy major leg and a healthy minor leg pass. Every verdict has a case in which only the thing it
 judges is wrong, and that case must fail by that name; a run that did not get as far as it should, or
-started from a box that was not what the leg needs, must be INVALID and never green. The text-only
-functions of docker-update-proof.sh (which version a leg starts from) are tested too, when bash is here.
+started from a box that was not what the leg needs, must be INVALID and never green. The healthy major
+leg is the owner's box: nftables was taken out, the plan brings it back with its libraries, and dpkg
+agrees; the same leg on a box that kept nftables passes too, and says that no new dependency was
+exercised. The text-only functions of docker-update-proof.sh (which version a leg starts from, whether
+nftables may be taken out) are tested too, when bash is here, and so is the step that takes it out, with
+stand-ins for apt, dpkg, systemctl and docker.
 
 REPORT=<path> and PROOF_SCRIPT=<path> run the cases against other copies of the report and of the guest
 script, to see that a broken one is caught. TEST_BASH=<path> names a bash where plain `bash` is not the one.
@@ -29,17 +33,37 @@ PREFIX = "CASAOS_DOCKER_UPDATE_"
 CONTAINERS = {"p-always": "always", "p-unless-stopped": "unless-stopped", "p-no": "no", "p-db": "unless-stopped",
               "p-web": "unless-stopped", "p-host": "unless-stopped"}
 
+# what nftables brings on Debian 11: the package and the libraries apt takes out with it, and puts back when Docker 29 asks for it
+NFT = [("nftables", "0.9.8-3.1+deb11u1"), ("libnftables1", "0.9.8-3.1+deb11u1"), ("libjansson4", "2.13.1-1.1"), ("libedit2", "3.1-20191231-2+b1")]
+NFT_REMOVED = "action removed\npackages " + " ".join(n for n, _ in NFT) + "\n"
+# what the box has that the update has nothing to do with
+BASE = [("ca-certificates", "20210119"), ("curl", "7.74.0-1.3+deb11u14"), ("iptables", "1.8.7-1"), ("jq", "1.6-2.1"), ("libc6", "2.31-13+deb11u11"),
+        ("python3", "3.9.2-3"), ("systemd", "247.3-7+deb11u6")]
+
 LEGS = {
     "major": dict(os="Debian GNU/Linux 11 (bullseye)", tag="debian.11~bullseye", start="28.0.4", to="29.8.0", major_jump=True,
                   plan=[("docker-ce", "5:28.0.4-1~debian.11~bullseye", "5:29.8.0-1~debian.11~bullseye"),
                         ("docker-ce-cli", "5:28.0.4-1~debian.11~bullseye", "5:29.8.0-1~debian.11~bullseye"),
                         ("containerd.io", "1.7.27-1", "2.1.4-1"),
-                        ("docker-ce-rootless-extras", "5:28.0.4-1~debian.11~bullseye", "5:29.8.0-1~debian.11~bullseye")]),
+                        ("docker-ce-rootless-extras", "5:28.0.4-1~debian.11~bullseye", "5:29.8.0-1~debian.11~bullseye")],
+                  new=NFT, removed=NFT, dependency=NFT_REMOVED),
     "minor": dict(os="Ubuntu 24.04.3 LTS", tag="ubuntu.24.04~noble", start="29.8.1", to="29.8.2", major_jump=False,
                   plan=[("docker-ce", "5:29.8.1-1~ubuntu.24.04~noble", "5:29.8.2-1~ubuntu.24.04~noble"),
                         ("docker-ce-cli", "5:29.8.1-1~ubuntu.24.04~noble", "5:29.8.2-1~ubuntu.24.04~noble"),
-                        ("docker-ce-rootless-extras", "5:29.8.1-1~ubuntu.24.04~noble", "5:29.8.2-1~ubuntu.24.04~noble")]),
+                        ("docker-ce-rootless-extras", "5:29.8.1-1~ubuntu.24.04~noble", "5:29.8.2-1~ubuntu.24.04~noble")],
+                  new=[], removed=[], dependency="action not-attempted\nreason only the major leg takes nftables out: Docker 29 already needs it\n"),
 }
+# the major leg on a box where nftables could not be taken out: it and its libraries are installed, the plan has nothing new to bring
+HAD_NFT = dict(LEGS["major"], new=[], removed=[], present=NFT,
+               dependency="action skipped\nreason taking nftables out would take more than libraries with it: docker-ce nftables\n")
+# the harness took nftables out, and the Docker on offer does not need it after all
+NO_NEED = dict(LEGS["major"], new=[])
+
+
+def many_new(n):
+    """the major leg whose update brings n packages the box did not have, none of them nftables"""
+    return dict(LEGS["major"], new=[("libdep%d" % i, "1.%d-1" % i) for i in range(n)], removed=[],
+                dependency="action skipped\nreason nftables is not installed\n")
 
 
 def iso(t):
@@ -71,9 +95,28 @@ def api(d, name, code, body=None, secs=0.4):
         put(d, name + ".json", json.dumps(body))
 
 
+def full_plan(s):
+    """the upgrades, then the new packages (which have no current version), as (name, current, candidate)"""
+    return list(s["plan"]) + [(n, "", k) for n, k in s["new"]]
+
+
+def dpkg_text(s, after):
+    """what `dpkg-query -W` lists before the update or after it: the base of the box, Docker's packages at the version they have then,
+    the new ones only after; what the harness took out is `rc` (removed, configuration kept) until the update brings it back"""
+    rows = [(n, v, "ii") for n, v in BASE + s.get("present", [])]
+    rows += [(n, k if after else c, "ii") for n, c, k in s["plan"]]
+    brought = {n for n, _ in s["new"]}
+    if after:
+        rows += [(n, k, "ii") for n, k in s["new"]]
+    rows += [(n, v, "rc") for n, v in s["removed"] if not (after and n in brought)]
+    rows.append(("docker.io", "", "un"))
+    return "".join("%s\t%s\t%s \n" % row for row in sorted(rows))
+
+
 def packages_body(s, available=True, refusal_code="", version=None):
     plan = [dict(name=n, current_version=c, candidate_version=k) for n, c, k in s["plan"]]
-    update = dict(available=available, refusal=refusal_code, refusal_detail=[], packages=plan, plan_id=plan_hash(s["plan"]),
+    plan += [dict(name=n, current_version="", candidate_version=k, new=True) for n, k in s["new"]]
+    update = dict(available=available, refusal=refusal_code, refusal_detail=[], packages=plan, plan_id=plan_hash(full_plan(s)),
                   **{"from": s["start"], "to": s["to"], "major_jump": s["major_jump"]})
     return ok({"supported": True, "count": 0, "docker": dict(installed=True, version=version or s["start"], update=update)})
 
@@ -114,9 +157,9 @@ def snapshot_text(s, after, docker_pid, enter, am=77, core=79, gw=80, gone=("p-n
     return "\n".join(lines) + "\n"
 
 
-def build(d, leg):
-    """the directory a healthy leg leaves"""
-    s = LEGS[leg]
+def build(d, leg, s=None):
+    """the directory a healthy leg leaves; s describes the leg (LEGS[leg] when none is given)"""
+    s = s or LEGS[leg]
     installed, candidate = s["plan"][0][1], s["plan"][0][2]
     put(d, "os", s["os"] + "\n")
     put(d, "leg", leg + "\n")
@@ -196,6 +239,10 @@ def build(d, leg):
     api(d, "web-after", 200)
     api(d, "packages-after", 200, ok({"supported": True, "docker": {"installed": True, "version": s["to"]}}))
     api(d, "containers-after", 200, ok({"running": True, "containers": [{"name": n, "restart_policy": p} for n, p in sorted(CONTAINERS.items()) if n != "p-no"]}))
+
+    put(d, "dpkg-before.tsv", dpkg_text(s, False))
+    put(d, "dpkg-after.tsv", dpkg_text(s, True))
+    put(d, "dependency-path", s["dependency"])
 
     if leg == "minor":
         api(d, "fail-packages", 200, packages_body(s))
@@ -301,11 +348,11 @@ def run_report(d, leg):
     return p.returncode, p.stdout + p.stderr
 
 
-def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False):
+def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False, spec=None):
     count[0] += 1
     with tempfile.TemporaryDirectory() as d:
         if not empty:
-            build(d, leg)
+            build(d, leg, spec)
         if mutate:
             mutate(d)
         code, text = run_report(d, leg)
@@ -322,19 +369,36 @@ def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=No
             print("ok:", name)
 
 
-def fails(name, verdict, mutate, leg="major", extra=()):
+def fails(name, verdict, mutate, leg="major", extra=(), spec=None):
     """a case in which one thing is wrong and the verdict of that name has to say FAIL (and nothing else about the harness)"""
-    case(name, 1, ["**FAIL** " + verdict] + list(extra), ["INVALID"], leg=leg, mutate=mutate)
+    case(name, 1, ["**FAIL** " + verdict] + list(extra), ["INVALID"], leg=leg, mutate=mutate, spec=spec)
 
 
-def invalid(name, reason, mutate, leg="major", empty=False):
-    case(name, 1, ["INVALID RUN", reason], ["**FAIL** " + "the run succeeded"], leg=leg, mutate=mutate, empty=empty)
+def invalid(name, reason, mutate, leg="major", empty=False, silent=()):
+    """a run that proves nothing; the verdicts named in silent must not be made up from the evidence that is not there"""
+    case(name, 1, ["INVALID RUN", reason], ["**FAIL** " + "the run succeeded"] + ["**FAIL** " + s for s in silent], leg=leg, mutate=mutate, empty=empty)
 
 
 # healthy
-case("a healthy major leg passes", 0, ["Docker update proof, major leg: PASS", "28.0.4", "29.8.0", "dockerd did not answer for 6.0 s"], ["**FAIL**", "INVALID"])
-case("a healthy minor leg passes, failure injection included", 0, ["Docker update proof, minor leg: PASS", "failure: the run failed with error_code `daemon`", "failure: the rollback command"],
-     ["**FAIL**", "INVALID"], leg="minor")
+V_UP = "every upgrade in the plan is an engine package with validated versions"
+V_NEW = "every new package in the plan has a valid name and version, is not a distro Docker package, and there are at most 10"
+case("a healthy major leg passes, and says that the dependency path was exercised", 0,
+     ["Docker update proof, major leg: PASS", "28.0.4", "29.8.0", "dockerd did not answer for 6.0 s", "The dependency path was exercised",
+      "nftables 0.9.8-3.1+deb11u1", "the harness took out nftables, libnftables1, libjansson4, libedit2"],
+     ["**FAIL**", "INVALID", "No new dependency was exercised"])
+case("a healthy minor leg passes, failure injection included, and says that no new dependency was exercised", 0,
+     ["Docker update proof, minor leg: PASS", "failure: the run failed with error_code `daemon`", "failure: the rollback command", "No new dependency was exercised",
+      "only the major leg takes nftables out"],
+     ["**FAIL**", "INVALID", "The dependency path was exercised"], leg="minor")
+case("a major leg on a box that kept nftables passes, and says that no new dependency was exercised", 0,
+     ["Docker update proof, major leg: PASS", "No new dependency was exercised", "taking nftables out would take more than libraries with it: docker-ce nftables",
+      "nftables was already installed"],
+     ["**FAIL**", "INVALID", "The dependency path was exercised"], spec=HAD_NFT)
+case("nftables taken out for a Docker that does not need it: no new dependency was exercised", 0,
+     ["Docker update proof, major leg: PASS", "No new dependency was exercised", "the harness took out nftables"],
+     ["**FAIL**", "INVALID", "The dependency path was exercised"], spec=NO_NEED)
+case("ten new packages are within the bound", 0, ["Docker update proof, major leg: PASS", "The dependency path was exercised"], ["**FAIL**", "INVALID"], spec=many_new(10))
+fails("eleven new packages are not", V_NEW, None, spec=many_new(11))
 case("a package update in the way may be refused as `maintenance` or as `running`", 0, ["PASS"], ["**FAIL**"],
      mutate=lambda d: api(d, "unit-post", 409, refusal("maintenance")))
 
@@ -346,9 +410,28 @@ fails("to is not what apt offers", "from and to are the engine versions apt show
 fails("from is not what is installed", "from and to are the engine versions apt shows", lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(**{"from": "28.0.3"})))
 fails("a major jump that says it is not one", "major_jump says what the jump is", lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(major_jump=False)))
 fails("a same-major update that says it is a jump", "major_jump says what the jump is", lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(major_jump=True)), leg="minor")
-fails("a package outside the allowlist in the plan", "the plan holds only engine packages", lambda d: jedit(d, "packages-1.json", lambda j: update(j)["packages"].append(
+def pkgs(j):
+    return update(j)["packages"]
+
+
+def add_new(name):
+    """a package the plan would install, appended to the first check"""
+    return lambda d: jedit(d, "packages-1.json", lambda j: pkgs(j).append({"name": name, "current_version": "", "candidate_version": "1.0-1", "new": True}))
+
+
+fails("an upgrade of a package outside the allowlist", V_UP, lambda d: jedit(d, "packages-1.json", lambda j: pkgs(j).append(
+    {"name": "libc6", "current_version": "2.31-13", "candidate_version": "2.31-14"})))
+fails("an upgrade of the distribution's docker.io", V_UP, lambda d: jedit(d, "packages-1.json", lambda j: pkgs(j).append(
     {"name": "docker.io", "current_version": "1", "candidate_version": "2"})))
-fails("a version string that is not a dpkg version", "the plan holds only engine packages", lambda d: jedit(d, "packages-1.json", lambda j: update(j)["packages"][0].update(candidate_version="1; rm -rf /")))
+fails("a version string that is not a dpkg version", V_UP, lambda d: jedit(d, "packages-1.json", lambda j: pkgs(j)[0].update(candidate_version="1; rm -rf /")))
+fails("an upgrade with no current version that does not say it is new", V_UP, lambda d: jedit(d, "packages-1.json", lambda j: pkgs(j)[0].update(current_version="")))
+fails("a plan with nothing to upgrade", V_UP, lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(packages=[p for p in pkgs(j) if p.get("new")])))
+fails("a new package whose name is not a package name", V_NEW, add_new("Bad Name; reboot"))
+for distro in ("docker.io", "containerd", "docker-compose-v2", "docker-buildx"):
+    fails("a new package that is the distribution's %s" % distro, V_NEW, add_new(distro))
+fails("a new package with a version that is not a dpkg version", V_NEW, lambda d: jedit(d, "packages-1.json", lambda j: [p for p in pkgs(j) if p["name"] == "nftables"][0].update(candidate_version="1.0; reboot")))
+fails("a new package that says it has a current version", V_NEW, lambda d: jedit(d, "packages-1.json", lambda j: [p for p in pkgs(j) if p["name"] == "nftables"][0].update(current_version="0.9.7-1")))
+fails("a plan entry that is not an object", V_UP, lambda d: jedit(d, "packages-1.json", lambda j: pkgs(j).append("nftables")))
 fails("the plan's docker-ce is not what apt offers", "the plan's docker-ce is the one dpkg has", lambda d: jedit(d, "packages-1.json", lambda j: update(j)["packages"][0].update(candidate_version="5:29.9.9-1")))
 fails("the plan's docker-ce is not what is installed", "the plan's docker-ce is the one dpkg has", lambda d: jedit(d, "packages-1.json", lambda j: update(j)["packages"][0].update(current_version="5:28.0.3-1~debian.11~bullseye")))
 fails("a plan_id that is not the hash of the plan", "plan_id is the sha256", lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(plan_id="a" * 64)))
@@ -483,6 +566,36 @@ fails("a Docker that does not start again", "failure: with the file mended", lam
 fails("containers that do not come back after the repair", "failure: with the file mended", lambda d: put(d, "fail-settle", "never\n"), leg="minor")
 fails("a failure POST that is refused", "failure: the POST starts the run", lambda d: api(d, "fail-post", 409, refusal("daemon")), leg="minor")
 
+# what dpkg did during the run: the plan against the packages that really came and went
+V_REMOVED = "the run removed no package"
+V_STRAY = "nothing outside the plan was installed or upgraded"
+V_ADDED = "dpkg added exactly the plan's new packages, at the planned versions"
+V_UPGRADED = "dpkg upgraded exactly the plan's upgrades, from and to the planned versions"
+
+
+def after_lines(fn):
+    return lambda d: ledit(d, "dpkg-after.tsv", fn)
+
+
+fails("a package the run removed", V_REMOVED, after_lines(lambda ls: [ln for ln in ls if not ln.startswith("jq\t")]))
+fails("a package left unpacked counts as gone", V_REMOVED, lambda d: replace(d, "dpkg-after.tsv", "libc6\t2.31-13+deb11u11\tii ", "libc6\t2.31-13+deb11u11\tiU "))
+fails("a package nobody planned that the run installed", V_STRAY, after_lines(lambda ls: ls + ["ufw\t0.36-7.1\tii "]), extra=["**FAIL** " + V_ADDED])
+fails("a package nobody planned that the run upgraded", V_STRAY, lambda d: replace(d, "dpkg-after.tsv", "libc6\t2.31-13+deb11u11", "libc6\t2.31-13+deb11u12"),
+      extra=["**FAIL** " + V_UPGRADED])
+fails("a new package of the plan that dpkg did not install", V_ADDED, after_lines(lambda ls: [ln for ln in ls if not ln.startswith("nftables\t")]))
+fails("a new package installed at another version than planned", V_ADDED, lambda d: replace(d, "dpkg-after.tsv", "nftables\t0.9.8-3.1+deb11u1", "nftables\t0.9.8-3.1+deb11u2"))
+fails("a package the plan calls new that the box already had", V_ADDED, lambda d: (
+    replace(d, "dpkg-before.tsv", "nftables\t0.9.8-3.1+deb11u1\trc ", "nftables\t0.9.8-3.1+deb11u1\tii "),
+    put(d, "dependency-path", "action skipped\nreason taking nftables out would take more than libraries with it: x\n"))[0])
+fails("an upgrade that dpkg did not apply", V_UPGRADED, lambda d: replace(d, "dpkg-after.tsv", "docker-ce\t5:29.8.0-1~debian.11~bullseye", "docker-ce\t5:28.0.4-1~debian.11~bullseye"))
+fails("an upgrade from another version than the plan says", V_UPGRADED, lambda d: replace(d, "dpkg-before.tsv", "containerd.io\t1.7.27-1", "containerd.io\t1.7.26-1"))
+fails("an upgrade to another version than the plan says", V_UPGRADED, lambda d: replace(d, "dpkg-after.tsv", "containerd.io\t2.1.4-1", "containerd.io\t2.1.3-1"))
+case("new packages named in the plan that dpkg did not install are not claimed as a dependency that was exercised", 1,
+     ["**FAIL** " + V_ADDED, "No new dependency was exercised"], ["The dependency path was exercised", "INVALID"],
+     mutate=after_lines(lambda ls: [ln for ln in ls if not ln.startswith(("nftables\t", "libnftables1\t"))]))
+case("a plan whose id counts the new packages: dropping one from the list is a different plan", 1, ["**FAIL** plan_id is the sha256"], ["INVALID"],
+     mutate=lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(packages=[p for p in pkgs(j) if p["name"] != "libedit2"])))
+
 # a run that proves nothing is never green
 invalid("an empty directory", "start-version is missing or empty", None, empty=True)
 invalid("a run that stopped", "the run stopped before it was done: NOT PROVEN: no older release", lambda d: put(d, "aborted", "NOT PROVEN: no older release\n"))
@@ -506,6 +619,16 @@ invalid("a daemon that did not answer when the update was asked for", "docker di
 invalid("a box that was not put back for the failure injection", "the failure injection cannot run",
         lambda d: jedit(d, "fail-packages.json", lambda j: update(j).update(available=False, refusal="plan")), leg="minor")
 invalid("a repair that was not recorded", "the repair after the failure injection was not recorded", lambda d: remove(d, "fail-repaired"), leg="minor")
+DPKG_VERDICTS = ("the run removed no package", "nothing outside the plan was installed or upgraded", "dpkg added exactly", "dpkg upgraded exactly")
+invalid("no listing of the packages before the update", "dpkg-before.tsv is missing or empty", lambda d: remove(d, "dpkg-before.tsv"), silent=DPKG_VERDICTS)
+invalid("no listing of the packages after the update", "dpkg-after.tsv is missing or empty", lambda d: remove(d, "dpkg-after.tsv"), silent=DPKG_VERDICTS)
+invalid("a listing with no installed package in it", "dpkg-before.tsv lists no installed package", lambda d: put(d, "dpkg-before.tsv", "not what dpkg-query writes\n"), silent=DPKG_VERDICTS)
+invalid("no record of what the harness did about the dependency", "dependency-path is missing or empty", lambda d: remove(d, "dependency-path"))
+invalid("a record of the dependency step that says something else", "dependency-path says 'reformat'", lambda d: put(d, "dependency-path", "action reformat\n"))
+invalid("a major leg that did not try the dependency step", "the major leg did not try the dependency step", lambda d: put(d, "dependency-path", "action not-attempted\nreason x\n"))
+invalid("nftables taken out and still installed", "the harness says it took nftables out, and dpkg-before.tsv still has it installed",
+        lambda d: replace(d, "dpkg-before.tsv", "nftables\t0.9.8-3.1+deb11u1\trc ", "nftables\t0.9.8-3.1+deb11u1\tii "))
+invalid("a removal that does not name nftables", "does not name nftables", lambda d: put(d, "dependency-path", "action removed\npackages libedit2\n"))
 case("a leg that is neither", 1, ["INVALID RUN", "major or minor"], [], leg="sideways", empty=True)
 # a run in which the harness aborted AND the feature is wrong says both
 case("a feature that is missing and a run that stopped says FAIL and INVALID", 1, ["FAIL and INVALID RUN", "**FAIL** GET /v1/sys/packages offers the Docker update"], [],
