@@ -35,7 +35,8 @@
 #
 # Nothing here judges: it writes what it saw into $OUT and docker-update-proof-report.py turns
 # that into verdicts, or says the run is invalid. It stops early (and says why, in $OUT/aborted)
-# only when it cannot go on: no plan to confirm, a start version apt does not have. What dpkg had
+# only when it cannot go on: no plan to confirm, a start version apt does not have, a tool of its own
+# that fails (jq, curl, apt, docker: guard_run names the command). What dpkg had
 # installed just before the update was asked for and just after it ended goes to dpkg-before.tsv
 # and dpkg-after.tsv: the report sets them against the plan.
 #
@@ -133,7 +134,19 @@ cleanup() {
     apt-mark unhold docker-ce >/dev/null 2>&1 || true
     systemctl stop casaos-package-update.service >/dev/null 2>&1 || true
     if [ "${DAEMON_JSON_BROKEN:-0}" = 1 ]; then mend_daemon_json || true; fi
+    # a command that failed under set -e ended the run with nothing said, and the report would judge what is left as if it were a run
+    if [ "${rc}" -ne 0 ] && [ ! -s "${OUT}/aborted" ]; then
+        echo "the guest script ended on a failing command (exit ${rc}): ${FAILED_AT:-no command recorded}" >>"${OUT}/aborted"
+    fi
     exit "${rc}"
+}
+
+# guard_run: from here a command that fails ends the run (in functions too), and the report is told which one. A tool of the harness that
+# fails (jq, curl, apt, docker) is not a verdict on the feature: a run that ended on one is an invalid run, and says so.
+guard_run() {
+    set -Eeuo pipefail
+    trap 'FAILED_AT="line ${LINENO}: ${BASH_COMMAND}"' ERR
+    trap cleanup EXIT
 }
 
 # ---- Docker, ReCasaOS, the things that have to come back --------------------------------------
@@ -266,6 +279,18 @@ start_things() {
 # its configuration kept), for the report to set before and after against the plan
 dpkg_dump() { dpkg-query -W -f='${Package}\t${Version}\t${db:Status-Abbrev}\n' >"${OUT}/dpkg-$1.tsv" || abort "dpkg-query could not list the packages"; }
 
+# db_dump <prefix>: what the database container acknowledged (its log) and what its volume holds (the file), for the report to set against each
+# other: <prefix>db-logs.txt and <prefix>db-file.txt, and how each command ended in <prefix>db-logs.exit and <prefix>db-file.exit. A docker that could
+# not run leaves a file with nothing in it, which is not a database that lost its writes: the report reads the exit status before it reads the file.
+db_dump() {
+    local rc=0
+    timeout -s KILL 20 docker logs --timestamps p-db >"${OUT}/$1db-logs.txt" 2>&1 || rc=$?
+    echo "${rc}" >"${OUT}/$1db-logs.exit"
+    rc=0
+    timeout -s KILL 30 docker run --rm -v pdb:/data busybox cat /data/log >"${OUT}/$1db-file.txt" 2>"${OUT}/$1db-file.err" || rc=$?
+    echo "${rc}" >"${OUT}/$1db-file.exit"
+}
+
 # images_dump <name>: the images the daemon has (id and name:tag, sorted), for the rollback to be set against
 images_dump() { timeout -s KILL 30 docker image ls --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>"${OUT}/images-$1.err" | sort >"${OUT}/images-$1.txt" || true; }
 
@@ -310,8 +335,9 @@ snapshot() { # <name>
         echo "packages $(dpkg -l 'docker*' 'containerd*' 2>/dev/null | awk '$1 == "ii" {printf "%s=%s ", $2, $3}')"
         for u in docker containerd casaos-app-management casaos-message-bus casaos casaos-gateway; do
             ts="$(systemctl show "${u}.service" -p ActiveEnterTimestamp --value 2>/dev/null || true)"
-            ep=0
-            if [ -n "${ts}" ]; then ep="$(date -d "${ts}" +%s 2>/dev/null || echo 0)"; fi
+            # none: the unit has not been active. unreadable: this system's date could not read the time systemd gave. Never 0, which is a time
+            ep=none
+            if [ -n "${ts}" ]; then ep="$(date -d "${ts}" +%s 2>/dev/null)" || ep=unreadable; fi
             echo "unit ${u} $(systemctl show "${u}.service" -p MainPID -p NRestarts | tr '\n' ' ')EnterEpoch=${ep}"
         done
         echo "containers"
@@ -330,9 +356,10 @@ write_internal_header() { # the gateway rewrites the secret at each boot: read i
 }
 
 # call_as <internal|jwt|refresh|none> <name> <method> <path> [body]: writes <name>.json (the body),
-# <name>.code (the HTTP status, 000 when there was none) and <name>.secs (how long it took) into $OUT
+# <name>.code (the HTTP status, 000 when there was none), <name>.secs (how long it took) and <name>.curl (how curl ended: 0, or why it got no
+# answer, which the report tells a curl that never reached the core from one that reached it and waited for nothing) into $OUT
 call_as() {
-    local who="$1" name="$2" method="$3" path="$4" body="${5:-}" code="" secs=""
+    local who="$1" name="$2" method="$3" path="$4" body="${5:-}" code="" secs="" out="" rc=0
     local args=(-sS --max-time "${CALL_MAX:-330}" -o "${OUT}/${name}.json" -w '%{http_code} %{time_total}' -X "${method}")
     case "${who}" in
     internal) write_internal_header; args+=(-H @"${AUTH_DIR}/internal") ;;
@@ -342,13 +369,17 @@ call_as() {
     *) abort "call_as: unknown credential ${who}" ;;
     esac
     if [ -n "${body}" ]; then args+=(-H 'content-type: application/json' -d "${body}"); fi
-    read -r code secs < <(curl "${args[@]}" "${CASA_URL}${path}" 2>"${OUT}/${name}.err" || echo "000 0") || true
+    out="$(curl "${args[@]}" "${CASA_URL}${path}" 2>"${OUT}/${name}.err")" || rc=$?
+    read -r code secs <<<"${out}" || true
     echo "${code:-000}" >"${OUT}/${name}.code"
     echo "${secs:-0}" >"${OUT}/${name}.secs"
+    echo "${rc}" >"${OUT}/${name}.curl"
 }
 
 post_plan() { # <name> <plan id> [credential]
-    CALL_MAX=60 call_as "${3:-internal}" "$1" POST /v1/sys/docker/update "$(jq -nc --arg p "$2" '{plan_id: $p}')"
+    local body
+    body="$(jq -nc --arg p "$2" '{plan_id: $p}')" || abort "jq could not make the body of a POST"
+    CALL_MAX=60 call_as "${3:-internal}" "$1" POST /v1/sys/docker/update "${body}"
 }
 
 plan_id_of() { jq -r '.data.docker.update.plan_id // empty' "${OUT}/$1.json" 2>/dev/null || true; }
@@ -497,8 +528,7 @@ update_run() {
     dpkg_dump after
     cp "$(runtime_log)" "${OUT}/docker-update.log" 2>/dev/null || true
     collect_journal unit-journal.txt
-    timeout -s KILL 20 docker logs --timestamps p-db >"${OUT}/db-logs.txt" 2>&1 || true
-    timeout -s KILL 30 docker run --rm -v pdb:/data busybox cat /data/log >"${OUT}/db-file.txt" 2>"${OUT}/db-file.err" || true
+    db_dump ""
     local code=000
     for _ in $(seq 1 30); do
         code="$(code_of "${AUTH_DIR}/jwt" "${CASA_URL}/v2/app_management/compose" 5)"
@@ -548,8 +578,7 @@ rollback_run() {
     marker rollback_settled
     snapshot rollback
     images_dump rollback
-    timeout -s KILL 20 docker logs --timestamps p-db >"${OUT}/rollback-db-logs.txt" 2>&1 || true
-    timeout -s KILL 30 docker run --rm -v pdb:/data busybox cat /data/log >"${OUT}/rollback-db-file.txt" 2>"${OUT}/rollback-db-file.err" || true
+    db_dump rollback-
     code_of - http://127.0.0.1:18081/ 5 >"${OUT}/rollback-web.code"
 }
 
@@ -744,7 +773,7 @@ main() {
     echo "${LEG}" >"${OUT}/leg"
     AUTH_DIR="$(mktemp -d)"
     chmod 700 "${AUTH_DIR}"
-    trap cleanup EXIT
+    guard_run
 
     export DEBIAN_FRONTEND=noninteractive
     APT=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3)

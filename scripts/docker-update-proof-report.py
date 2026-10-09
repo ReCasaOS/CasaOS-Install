@@ -9,7 +9,9 @@ Exit status: 0 only when every verdict is PASS. 1 for a FAIL (the check, the but
 not do what the spec says) and 1 for an INVALID RUN (the harness could not do what it set out to:
 the box was not what it should be, a step did not run, the poller died, the box could not be put
 where the leg needs it). An invalid run proves nothing and is never green. A step that did not run
-is INVALID, not a verdict: there is no skipped check that stays quiet.
+is INVALID, not a verdict: there is no skipped check that stays quiet. So is a tool of the harness that failed on the guest (a
+date that cannot read a time, a curl that reaches nothing, an apt that cannot fetch, a docker CLI that cannot run): a FAIL needs a
+value the feature produced, and what the harness's own tools leave behind when they fail says nothing about the button.
 
 The legs:
     major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box. The
@@ -80,6 +82,12 @@ K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with va
 K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
 V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable of the command line to an empty string"
+# a curl that got no HTTP status is the feature's silence when it reached the core and waited for nothing (it timed out, was cut off), and the
+# harness's failure in any other case (it could not resolve, could not connect, could not even start)
+CURL_REACHED = (28, 52, 55, 56)
+# what apt says when the network, dpkg's lock or its package lists are the trouble, and not the packages it was asked for
+APT_TROUBLE_RE = re.compile(r"Failed to fetch|Temporary failure resolving|Could not resolve|Unable to locate package|Could not get lock|Unable to acquire the dpkg frontend lock|"
+                            r"Hash Sum mismatch|Some index files failed to download|Connection (?:timed out|failed|reset)", re.I)
 POST_SECONDS = 30      # "a few seconds" in the spec; this only catches a POST that blocks through apt
 HOLE = 60.0            # seconds without a poller sample, inside the run: the poller is dead
 FAIL_RUN = 3           # consecutive status samples that failed: the status endpoint went away
@@ -145,10 +153,14 @@ def finish():
 # ---- reading what was written ----------------------------------------------------------
 
 def resp(name):
-    """(http code, body) of an API call the harness made; (None, {}) when that call was never made"""
+    """(http code, body) of an API call the harness made; (None, {}) when that call was never made, or its curl never reached the core"""
     code = read(name + ".code").strip()
     if not code:
         invalid("no answer was recorded for %s: that step did not run" % name)
+        return None, {}
+    curl = read(name + ".curl").strip()
+    if curl.isdigit() and int(curl) != 0 and int(curl) not in CURL_REACHED and not (code.isdigit() and int(code) > 0):
+        invalid("curl could not reach the core for %s (curl exit %s, see %s.err): the harness asked nothing of the feature" % (name, curl, name))
         return None, {}
     try:
         body = json.loads(read(name + ".json") or "null")
@@ -266,6 +278,18 @@ def rollback_command_ok(rb):
         any(p.startswith("docker-ce=") and engine(p.split("=", 1)[1]) == start_version for p in pins)
 
 
+def tool_trouble(status, text):
+    """why a command that ended with this status, and said this, did not get to try what it was run for; None when it did. The harness's own trouble:
+    the shell could not run it (126, 127), it was killed (128 and above), or apt says that the network, dpkg's lock or its package lists were the
+    trouble. A version apt does not have, or packages that do not agree, are not that: they are what the command was run to find out."""
+    if status in (126, 127):
+        return "the shell could not run it (exit %d)" % status
+    if status >= 128:
+        return "it was killed (exit %d)" % status
+    m = APT_TROUBLE_RE.search(text or "") if status else None
+    return "apt says that the network, the lock or its package lists were the trouble (%r)" % m.group(0) if m else None
+
+
 def audit_of(name):
     """(exit status, text) of a `dpkg --audit` the harness recorded: its first line is `exit N`, the rest is what dpkg said (nothing when it found nothing wrong)"""
     first, _, rest = read(name).partition("\n")
@@ -281,6 +305,22 @@ def lost_writes(logs_name, file_name):
     acked = re.findall(r"^\S+ ack (\S+)$", read(logs_name), re.M)
     filed = set(read(file_name).split())
     return acked, filed, [a for a in acked if a not in filed]
+
+
+def db_evidence(prefix):
+    """True when both commands that read the database's evidence (its log, its file on the volume) ran to their end. When one did not, say so: what it left
+    proves nothing about the writes (a lost write is a file that was read and lacks them)"""
+    ok_ = True
+    for ev, what in (("db-logs", "docker logs"), ("db-file", "docker run ... cat")):
+        name = "%s%s.exit" % (prefix, ev)
+        status = read(name).strip()
+        if not status.isdigit():
+            invalid("%s is missing or not an exit status: the database's evidence was not read to its end" % name)
+            ok_ = False
+        elif status != "0":
+            invalid("%s: %s exited %s, so %s%s.txt says nothing about the writes" % (name, what, status, prefix, ev))
+            ok_ = False
+    return ok_
 
 
 def load_samples(name):
@@ -432,6 +472,11 @@ if before["present"] and start_version and before.get("docker") != start_version
     invalid("the box did not start on Docker %s (the daemon says %s)" % (start_version, before.get("docker")))
 if installed_full and start_version and engine(installed_full) != start_version:
     invalid("dpkg has docker-ce %s, not the %s the leg starts on" % (installed_full, start_version))
+# the time dockerd began is a number, `none` (the unit is not active) or `unreadable` (this system's date could not read what systemd gave: the harness's, not dockerd's)
+epoch_word = re.search(r"EnterEpoch=(\S+)", after.get("unit docker", ""))
+epoch_unreadable = bool(epoch_word) and epoch_word.group(1) == "unreadable"
+if epoch_unreadable:
+    invalid("snapshot-after.txt: date could not read the time systemd gave for docker.service (EnterEpoch=unreadable), so when dockerd started cannot be set against the download")
 if candidate_full and installed_full:
     if leg == "major" and not (major(expected_to) or 0) > (major(start_version) or 0):
         invalid("apt offers docker-ce %s on top of %s: there is no major jump to prove (the last release of a major, or a repository that stopped)" % (candidate_full, installed_full))
@@ -581,7 +626,7 @@ verdict("POST with a refresh token: 401", on(code is not None, code == 401), "HT
 refused("POST with the dashboard's own token in the header reaches the route (wrong plan: 409 `changed`)", "jwt-post", ("changed",))
 code, body = resp("packages-2")
 up2 = dobj(body, "docker", "update")
-verdict("after the hold is lifted the update is offered again, with the same plan", on(code is not None, code == 200 and up2.get("available") is True and up2.get("plan_id") == plan_id),
+verdict("after the hold is lifted the update is offered again, with the same plan", on(code is not None and plan_seen, code == 200 and up2.get("available") is True and up2.get("plan_id") == plan_id),
         "HTTP %s, available %r, plan_id %r (first %r)" % (code, up2.get("available"), up2.get("plan_id"), plan_id))
 P("The refusal checks ran on the live box and changed nothing of the engine: docker-ce held and released, dpkg's lock held by another process, "
   "a stand-in transient unit named casaos-package-update.service kept active, and POSTs with a wrong plan_id or a body that is not one.")
@@ -683,7 +728,7 @@ dl_fields = field("DOWNLOADED").split()
 dl = timestamp(dl_fields[0]) if dl_fields else None
 enter = unit_number(after, "docker", "EnterEpoch")
 verdict("the new dockerd is a new process", on(after["present"], pb is not None and pa is not None and pb != pa), "pid %s -> %s" % (pb, pa))
-verdict("everything was downloaded before Docker restarted", on(marks and after["present"], dl is not None and enter is not None and enter >= dl - 3),
+verdict("everything was downloaded before Docker restarted", on(marks and after["present"] and not epoch_unreadable, dl is not None and enter is not None and enter >= dl - 3),
         "DOWNLOADED at %r, dockerd running since %r" % (field("DOWNLOADED"), enter))
 back_missing = sorted(n for n, pol in CONTAINERS.items() if pol in COMES_BACK and n not in running(after))
 verdict("every container with restart policy always or unless-stopped is running again", on(after["present"], not back_missing), "not running: %s" % (", ".join(back_missing) or "none"))
@@ -700,7 +745,8 @@ verdict("AppManagement lists its projects again once Docker is back, without a r
 code, _ = resp("web-after")
 verdict("the published port answers again", on(code is not None, code == 200), "HTTP %s" % code)
 acked, filed, lost = lost_writes("db-logs.txt", "db-file.txt")
-verdict("no acknowledged write of the database is lost", bool(acked) and bool(filed) and not lost,
+db_read = db_evidence("")
+verdict("no acknowledged write of the database is lost", on(db_read, bool(acked) and bool(filed) and not lost),
         "%d acknowledged, %d in the file, %d missing (this finds a lost or rolled-back volume, not a power cut)" % (len(acked), len(filed), len(lost)))
 code, body = resp("packages-after")
 dk, uk = dobj(body, "docker"), dobj(body, "docker", "update")
@@ -745,6 +791,10 @@ if leg == "major":
         rb_snap, rb_settle = snapshot("rollback"), read("rollback-settle").strip()
         images_before, images_after = set(read("images-before.txt").split("\n")) - {""}, set(read("images-rollback.txt").split("\n")) - {""}
         rb_acked, rb_filed, rb_lost = lost_writes("rollback-db-logs.txt", "rollback-db-file.txt")
+        db_evidence("rollback-")
+        rb_trouble = tool_trouble(int(rb_exit), read("rollback.log")) if rb_exit != "0" else None   # a failure that is apt's or the shell's, not the rollback's
+        if rb_trouble:
+            invalid("the rollback's apt-get did not get to try the rollback: %s (see rollback.log)" % rb_trouble)
         down = sorted(n for n, pol in CONTAINERS.items() if pol in COMES_BACK and n not in running(rb_snap))
         gone_images = sorted(images_before - images_after)
         why = []
@@ -766,10 +816,11 @@ if leg == "major":
             why.append("%d acknowledged writes missing from the volume" % len(rb_lost))
         if rb_code != 200:
             why.append("the published port answers HTTP %s" % rb_code)
-        trusted = not any(p.startswith(("the rollback command the harness", "marker rollback_", "snapshot-rollback", "images-", "rollback-", "no answer was recorded for rollback-web")) for p in problems)
+        trusted = not any(p.startswith(("the rollback command the harness", "the rollback's apt-get", "marker rollback_", "snapshot-rollback", "images-", "rollback-",
+                                        "no answer was recorded for rollback-web")) for p in problems)
         verdict(rb_name, on(trusted, not why), "; ".join(why) or "the command %r ran, exit %s; %d images, %d acknowledged writes, the containers back after %s s" %
                 (rb_cmd, rb_exit, len(images_after), len(rb_acked), rb_settle))
-        if why:
+        if why and trusted:
             P("**The rollback did not hold: %s.** The core must not offer the rollback command after a major jump (hide it when `major_jump` is true, and tell the owner to copy "
               "/var/lib/containerd and /var/lib/docker before the update)." % "; ".join(why))
         elif trusted:
@@ -784,7 +835,7 @@ if leg == "major":
 
 P("## What was observed")
 P("")
-if before_pk and after_pk:
+if before_pk and after_pk and plan_seen:
     if exercised:
         P("- The dependency path was exercised: the update installed %d package%s the box did not have, as its plan said (%s)." %
           (len(added), "" if len(added) == 1 else "s", "; ".join("%s %s" % (n, after_pk[n]) for n in added)))
@@ -933,7 +984,15 @@ if leg == "minor" and kill_expected:
         r1, r2, back = read("kill-repair-1.exit").strip(), read("kill-repair-2.exit").strip(), read("kill-docker").strip()
         if not (r1.isdigit() and r2.isdigit() and back):
             invalid("the repair after the kill -9 injection was not recorded")
-        verdict(K_REPAIR, on(audit2 and r1.isdigit() and r2.isdigit() and back, bool(audit2) and audit2[1] == "" and back.startswith("yes")),
+        repair_trouble = None
+        if r1.isdigit() and r2.isdigit():
+            for step_, status_, log_ in (("dpkg --configure -a", r1, "kill-repair-1.log"), ("apt-get -f install", r2, "kill-repair-2.log")):
+                why_ = tool_trouble(int(status_), read(log_))
+                if why_ and not repair_trouble:
+                    repair_trouble = "%s: %s" % (step_, why_)
+        if repair_trouble:
+            invalid("the repair after the kill -9 injection could not be tried: %s" % repair_trouble)
+        verdict(K_REPAIR, on(audit2 and r1.isdigit() and r2.isdigit() and back and not repair_trouble, bool(audit2) and audit2[1] == "" and back.startswith("yes")),
                 "`dpkg --configure -a` exit %s, dpkg --audit then %s; `apt-get -f install` exit %s, dpkg --audit then %s; Docker back: %s" %
                 (r1 or "?", (audit1[1][:80] or "nothing") if audit1 else "?", r2 or "?", ((audit2[1][:200] or "nothing") if audit2 else "?"), back or "?"))
         P("The kill caught dpkg running `%s` (pid %s)." % (hit.split(" ", 3)[3] if len(hit.split(" ", 3)) > 3 else "?", hit.split(" ", 3)[2] if len(hit.split(" ", 3)) > 2 else "?"))

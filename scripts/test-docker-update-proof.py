@@ -96,9 +96,12 @@ def read_file(d, name):
         return f.read()
 
 
-def api(d, name, code, body=None, secs=0.4):
+def api(d, name, code, body=None, secs=0.4, curl=None):
+    """curl: the exit status of the curl that made the call, as the guest records it for the calls to the core"""
     put(d, name + ".code", "%d\n" % code)
     put(d, name + ".secs", "%s\n" % secs)
+    if curl is not None:
+        put(d, name + ".curl", "%d\n" % curl)
     if body is not None:
         put(d, name + ".json", json.dumps(body))
 
@@ -275,6 +278,8 @@ def build(d, leg, s=None):
         acks.append("%s ack %s" % (datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "000Z", i))
     put(d, "db-logs.txt", "\n".join(acks) + "\n")
     put(d, "db-file.txt", "\n".join(ids) + "\n")
+    put(d, "db-logs.exit", "0\n")
+    put(d, "db-file.exit", "0\n")
     if leg == "major":
         # the way back: the command made of the PREVIOUS pins, run on the Docker that has just been installed
         put(d, "rollback-command", "sudo apt-get install --allow-downgrades " + " ".join("%s=%s" % (n, c) for n, c, _ in s["plan"]) + "\n")
@@ -285,6 +290,9 @@ def build(d, leg, s=None):
         put(d, "rollback-settle", "9\n")
         put(d, "rollback-db-logs.txt", "\n".join(acks) + "\n")
         put(d, "rollback-db-file.txt", "\n".join(ids) + "\n")
+        put(d, "rollback-db-logs.exit", "0\n")
+        put(d, "rollback-db-file.exit", "0\n")
+        put(d, "rollback.log", "Reading package lists...\nThe following packages will be DOWNGRADED:\n  docker-ce docker-ce-cli containerd.io\n")
         api(d, "rollback-web", 200)
     api(d, "am-compose", 200)
     api(d, "web-after", 200)
@@ -443,7 +451,8 @@ def rollback_follows_log(d):
         return
     put(d, "rollback-exit", "not-run\n")
     put(d, "rollback-command", "none\n")
-    remove(d, "snapshot-rollback.txt", "images-rollback.txt", "rollback-settle", "rollback-db-logs.txt", "rollback-db-file.txt", "rollback-web.code", "rollback-web.secs")
+    remove(d, "snapshot-rollback.txt", "images-rollback.txt", "rollback-settle", "rollback-db-logs.txt", "rollback-db-file.txt", "rollback-db-logs.exit", "rollback-db-file.exit",
+           "rollback.log", "rollback-web.code", "rollback-web.secs")
 
 
 def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False, spec=None, follow=False, args=None):
@@ -874,6 +883,71 @@ case("new packages named in the plan that dpkg did not install are not claimed a
 case("a plan whose id counts the new packages: dropping one from the list is a different plan", 1, ["**FAIL** plan_id is the sha256"], ["INVALID"],
      mutate=lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(packages=[p for p in pkgs(j) if p["name"] != "libedit2"])))
 
+# a tool of the harness that failed on the guest (a date that cannot read a time, a curl that reaches nothing, an apt that cannot fetch, a docker CLI that
+# cannot run) is not a wrong value of the feature: it is an invalid run, and says nothing about the button. Each case has its twin, the value the feature
+# gets wrong, which stays a FAIL.
+V_DOWNLOADED = "everything was downloaded before Docker restarted"
+EPOCH = "EnterEpoch=%d" % int(T0 + 147)
+invalid("an EnterEpoch that date could not compute", "date could not read the time systemd gave for docker.service",
+        lambda d: replace(d, "snapshot-after.txt", EPOCH, "EnterEpoch=unreadable", 1), silent=(V_DOWNLOADED,))
+fails("a dockerd that has no start time because its unit is not active", V_DOWNLOADED, lambda d: replace(d, "snapshot-after.txt", EPOCH, "EnterEpoch=none", 1))
+
+RB_FETCH = ("E: Failed to fetch https://download.docker.com/linux/debian/dists/bullseye/pool/stable/amd64/docker-ce_5%3a28.0.4-1~debian.11~bullseye_amd64.deb  "
+            "Temporary failure resolving 'download.docker.com'\nE: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n")
+
+
+def rollback_ends(status, log):
+    return lambda d: (put(d, "rollback-exit", "%d\n" % status), put(d, "rollback.log", log))
+
+
+for what, status, text in (("could not fetch", 100, RB_FETCH), ("could not resolve a host", 100, "E: Could not resolve 'download.docker.com'\n"),
+                           ("could not get dpkg's lock", 100, "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 812 (unattended-upgr)\n"),
+                           ("had no package lists", 100, "E: Unable to locate package docker-ce\n"),
+                           ("could not be run by the shell", 127, "env: 'apt-get': No such file or directory\n"), ("was killed", 137, "")):
+    invalid("a rollback whose apt-get %s was not tried" % what, "the rollback's apt-get did not get to try the rollback", rollback_ends(status, text), silent=(V_ROLLBACK,))
+fails("a rollback whose apt-get cannot find the version it is asked for", V_ROLLBACK,
+      rollback_ends(100, "E: Version '5:28.0.4-1~debian.11~bullseye' for 'docker-ce' was not found\n"), extra=["apt-get exited 100", "must not offer the rollback command"])
+fails("a rollback whose apt-get cannot make the packages agree", V_ROLLBACK,
+      rollback_ends(100, "The following packages have unmet dependencies:\n docker-ce : Depends: containerd.io (>= 1.6.24) but 2.1.4-1 is to be installed\nE: Unable to correct problems, you have held broken packages.\n"),
+      extra=["apt-get exited 100", "must not offer the rollback command"])
+case("an apt-get that failed to fetch something it did not need, and went on, has rolled back", 0, ["**PASS** " + V_ROLLBACK], ["**FAIL**", "INVALID"],
+     mutate=lambda d: put(d, "rollback.log", "W: Failed to fetch http://deb.debian.org/debian/dists/bullseye/InRelease  Temporary failure resolving 'deb.debian.org'\n"))
+case("a rollback that was not tried says nothing about the button", 1, ["INVALID RUN"], ["must not offer the rollback command", "**FAIL** " + V_ROLLBACK], mutate=rollback_ends(100, RB_FETCH))
+
+V_CHECK = "GET /v1/sys/packages offers the Docker update"
+V_POST = "POST /v1/sys/docker/update with the right plan_id starts the run"
+for status in (6, 7):
+    invalid("a first check that curl could not send (exit %d)" % status, "curl could not reach the core for packages-1", lambda d, status=status: (api(d, "packages-1", 0, curl=status), remove(d, "packages-1.json")),
+            silent=(V_CHECK, "after the hold is lifted"))
+invalid("a POST that curl could not send", "curl could not reach the core for update-post", lambda d: (api(d, "update-post", 0, curl=7), remove(d, "update-post.json")), silent=(V_POST,))
+for status in (28, 52, 56):
+    fails("a POST that curl reached the core with and got no answer to (exit %d)" % status, V_POST, lambda d, status=status: (api(d, "update-post", 0, secs=60.0, curl=status), remove(d, "update-post.json")))
+case("a curl that failed after the core had answered is its answer", 0, ["PASS"], ["**FAIL**", "INVALID"], mutate=lambda d: api(d, "held-post", 409, refusal("held"), curl=23))
+
+V_DB = "no acknowledged write of the database is lost"
+invalid("a database file that docker could not read", "db-file.exit: docker run ... cat exited 125", lambda d: (put(d, "db-file.exit", "125\n"), put(d, "db-file.txt", "")), silent=(V_DB,))
+invalid("a database log that docker could not read", "db-logs.exit: docker logs exited 137", lambda d: (put(d, "db-logs.exit", "137\n"), put(d, "db-logs.txt", "")), silent=(V_DB,))
+invalid("no record of whether the database file was read", "db-file.exit is missing", lambda d: remove(d, "db-file.exit"), silent=(V_DB,))
+invalid("no record of whether the database log was read", "db-logs.exit is missing", lambda d: remove(d, "db-logs.exit"), silent=(V_DB,))
+invalid("a database file that docker could not read after the rollback", "rollback-db-file.exit: docker run ... cat exited 125",
+        lambda d: (put(d, "rollback-db-file.exit", "125\n"), put(d, "rollback-db-file.txt", "")), silent=(V_ROLLBACK,))
+invalid("a database log that docker could not read after the rollback", "rollback-db-logs.exit: docker logs exited 125",
+        lambda d: (put(d, "rollback-db-logs.exit", "125\n"), put(d, "rollback-db-logs.txt", "")), silent=(V_ROLLBACK,))
+invalid("no record of whether the database was read after the rollback", "rollback-db-file.exit is missing", lambda d: remove(d, "rollback-db-file.exit"), silent=(V_ROLLBACK,))
+fails("a database file that was read, and is empty", V_DB, lambda d: put(d, "db-file.txt", ""))
+
+for what, mutate in (("could not fetch", lambda d: (put(d, "kill-repair-2.exit", "100\n"), put(d, "kill-repair-2.log", RB_FETCH))),
+                     ("could not get dpkg's lock", lambda d: (put(d, "kill-repair-2.exit", "100\n"), put(d, "kill-repair-2.log", "E: Could not get lock /var/lib/dpkg/lock-frontend\n"))),
+                     ("was not found by the shell", lambda d: put(d, "kill-repair-2.exit", "127\n")),
+                     ("(dpkg --configure -a) was killed", lambda d: put(d, "kill-repair-1.exit", "137\n"))):
+    invalid("a repair whose %s" % what, "the repair after the kill -9 injection could not be tried",
+            lambda d, mutate=mutate: (mutate(d), put(d, "kill-audit-after.txt", "exit 0\n" + read_file(d, "kill-audit.txt").split("\n", 1)[1])), leg="minor", silent=(K_REPAIR,), spec=KILL_MINOR)
+
+case("a repair that went through with apt mentioning a fetch that did not matter is a repair", 0, ["PASS", "**PASS** " + K_REPAIR], ["**FAIL**", "INVALID"], leg="minor", spec=KILL_MINOR,
+     mutate=lambda d: put(d, "kill-repair-2.log", "W: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Temporary failure resolving 'deb.debian.org'\n"))
+case("a first check that was never made says nothing of the dependency path", 1, ["INVALID RUN"], ["No new dependency was exercised", "The dependency path was exercised"],
+     mutate=lambda d: (api(d, "packages-1", 0, curl=7), remove(d, "packages-1.json")))
+
 # a run that proves nothing is never green
 invalid("an empty directory", "start-version is missing or empty", None, empty=True)
 invalid("no journal of the unit", "unit-journal.txt is missing or holds no journal line", lambda d: remove(d, "unit-journal.txt"), silent=(V_JOURNAL,))
@@ -1196,7 +1270,8 @@ else:
             problems += ["should not have called %r in %r" % (s, seen) for s in no_calls if s in seen]
             if "\trollback_start\n" not in timeline.replace("\r", ""):
                 problems.append("no rollback_start marker in %r" % timeline)
-            for name in ("snapshot-rollback.txt", "images-rollback.txt", "rollback-settle", "rollback-db-logs.txt", "rollback-db-file.txt", "rollback-web.code"):
+            for name in ("snapshot-rollback.txt", "images-rollback.txt", "rollback-settle", "rollback-db-logs.txt", "rollback-db-file.txt", "rollback-db-logs.exit", "rollback-db-file.exit",
+                         "rollback-web.code"):
                 if bool(slurp(name).strip()) != ran:
                     problems.append("%s %s" % (name, "is empty" if ran else "should not be there"))
             for marker_name in ("rollback_done", "rollback_settled"):
@@ -1336,10 +1411,79 @@ else:
     kill_case("apt_simulation records an exit status that is not 0", 'apt_simulation', dict(FAKE_INSTALLED="docker-ce", FAKE_APT_RC="100"), fakes=ffakes,
               files={"apt-simulation.txt": "Inst docker-ce [1] (2 Docker CE:stable [amd64])\n# exit 100\n"})
 
+    # the guest's own tools, and what they leave behind when they fail: told apart from what the feature does
+    SNAP = 'timeout() { shift 3; "$@"; }; docker() { echo 28.0.4; }; dpkg() { :; }; '
+
+    def snap(label, stamp, date, want):
+        kill_case(label, SNAP + 'systemctl() { case "$*" in *ActiveEnterTimestamp*) printf "%s\\n" "' + stamp + '" ;; *) printf "MainPID=7\\nNRestarts=0\\n" ;; esac; }; date() { ' + date +
+                  ' }; snapshot after; grep -o "EnterEpoch=[^ ]*" "$OUT/snapshot-after.txt" | sort -u >"$OUT/epochs"', files={"epochs": want})
+
+    DATE_FAILS = 'case "$1" in -d) return 1 ;; *) echo 2026-10-09T00:00:00Z ;; esac;'
+    DATE_READS = 'case "$1" in -d) echo 1790000147 ;; *) echo 2026-10-09T00:00:00Z ;; esac;'
+    snap("snapshot records the time a unit began, as a number", "Fri 2026-10-09 15:15:15 UTC", DATE_READS, "EnterEpoch=1790000147\n")
+    snap("snapshot says unreadable, not 0, when date cannot read the time systemd gave", "Fri 2026-10-09 15:15:15 UTC", DATE_FAILS, "EnterEpoch=unreadable\n")
+    snap("snapshot says none when the unit never began", "", DATE_FAILS, "EnterEpoch=none\n")
+    CALL = 'CASA_URL=http://127.0.0.1; '
+    kill_case("call_as records the exit status of curl beside the HTTP status: curl could not connect", CALL + 'curl() { printf "000 0.000"; return 7; }; call_as none probe GET /v1/x',
+              files={"probe.code": "000\n", "probe.curl": "7\n", "probe.secs": "0.000\n"})
+    kill_case("call_as: curl that timed out", CALL + 'curl() { printf "000 60.001"; return 28; }; call_as none probe GET /v1/x', files={"probe.code": "000\n", "probe.curl": "28\n", "probe.secs": "60.001\n"})
+    kill_case("call_as: a curl that said nothing at all", CALL + 'curl() { return 2; }; call_as none probe GET /v1/x', files={"probe.code": "000\n", "probe.curl": "2\n", "probe.secs": "0\n"})
+    kill_case("call_as: an answer", CALL + 'curl() { printf "409 0.25"; return 0; }; call_as none probe GET /v1/x', files={"probe.code": "409\n", "probe.curl": "0\n", "probe.secs": "0.25\n"})
+    DB = 'timeout() { shift 3; "$@"; }; '
+    kill_case("db_dump records the database's log, its file, and how each command ended",
+              DB + 'docker() { case "$1" in logs) echo "t ack 1" ;; run) echo 1 ;; esac; }; db_dump ""',
+              files={"db-logs.txt": "t ack 1\n", "db-file.txt": "1\n", "db-logs.exit": "0\n", "db-file.exit": "0\n"}, calls=[])
+    kill_case("db_dump, for the rollback", DB + 'docker() { case "$1" in logs) echo "t ack 1" ;; run) echo 1 ;; esac; }; db_dump rollback-',
+              files={"rollback-db-logs.txt": "t ack 1\n", "rollback-db-file.txt": "1\n", "rollback-db-logs.exit": "0\n", "rollback-db-file.exit": "0\n", "db-logs.exit": None})
+    kill_case("db_dump records a docker that cannot run, for both commands", DB + 'docker() { echo boom >&2; return 125; }; db_dump ""',
+              files={"db-logs.exit": "125\n", "db-file.exit": "125\n", "db-file.txt": ""})
+    kill_case("db_dump records which of the two commands failed", DB + 'docker() { case "$1" in logs) echo "t ack 1" ;; run) return 125 ;; esac; }; db_dump ""',
+              files={"db-logs.exit": "0\n", "db-file.exit": "125\n"})
+    kill_case("post_plan stops the run when jq cannot make the body of a POST, and sends nothing", 'jq() { return 5; }; call_as() { echo "call_as $*" >>"$FAKE/calls"; }; ( post_plan p abc ) || true',
+              files={"aborted": "jq could not make the body of a POST\n"}, no_calls=["call_as"])
+    kill_case("post_plan sends the plan_id when jq makes the body", 'jq() { echo "{\\"plan_id\\":\\"$4\\"}"; }; call_as() { echo "call_as $1 $2 $3 $4 body=$5" >>"$FAKE/calls"; }; post_plan p abc',
+              files={"aborted": None}, calls=['call_as internal p POST /v1/sys/docker/update body={"plan_id":"abc"}'])
+
+    def guard_case(label, body, want_rc, aborted=None, out_has=(), out_lacks=()):
+        """guard_run, then the body: the exit status of the whole, and what the report is told in $OUT/aborted (None: nothing)"""
+        count[0] += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out").replace("\\", "/")
+            os.mkdir(out)
+            prelude = 'source "$1"; OUT="$2"; AUTH_DIR="$OUT/auth"; mkdir "$AUTH_DIR"; apt-mark() { :; }; systemctl() { :; }; set -euo pipefail; guard_run; '
+            p = subprocess.run([BASH, "-c", prelude + body, "_", SCRIPT.replace("\\", "/"), out], capture_output=True, text=True)
+            try:
+                with open(os.path.join(out, "aborted")) as f:
+                    said = f.read().replace("\r", "")
+            except OSError:
+                said = None
+            problems = []
+            if p.returncode != want_rc:
+                problems.append("exit %d, wanted %d" % (p.returncode, want_rc))
+            if aborted is None and said is not None:
+                problems.append("aborted says %r, wanted nothing" % said)
+            if aborted is not None and (said is None or not all(s in said for s in aborted) or said.count("\n") != 1):
+                problems.append("aborted says %r, wanted one line with %r" % (said, aborted))
+            problems += ["stdout lacks %r: %r" % (s, p.stdout) for s in out_has if s not in p.stdout]
+            problems += ["stdout has %r: %r" % (s, p.stdout) for s in out_lacks if s in p.stdout]
+            if problems:
+                failures.append("guard_run, %s: %s\n%s" % (label, "; ".join(problems), p.stderr[-400:]))
+            else:
+                print("ok: guard_run, " + label)
+
+    guard_case("a command that fails ends the run, and the report is told which", "echo before; false; echo after", 1,
+               aborted=["the guest script ended on a failing command (exit 1)", "false"], out_has=["before"], out_lacks=["after"])
+    guard_case("a tool that is not there is told too", "no_such_tool_for_the_proof --x", 127, aborted=["(exit 127)", "no_such_tool_for_the_proof"])
+    guard_case("a command that fails in a function is told too", "f() { true; false; }; f", 1, aborted=["(exit 1)", "false"])
+    guard_case("a failure that is handled ends nothing", "false || true; if false; then :; fi; echo done", 0, out_has=["done"])
+    guard_case("a run that ends well says nothing", "true", 0)
+    guard_case("a run that stops on purpose says what it said, once", 'abort "NOT PROVEN: no older release"', 0, aborted=["NOT PROVEN: no older release"], out_lacks=["failing command"])
+    guard_case("what was said before the failure stays, and nothing is added to it", 'echo "NOT PROVEN: first" >"$OUT/aborted"; false', 1, aborted=["NOT PROVEN: first"], out_lacks=["failing command"])
+
     # main() is what a machine runs and nothing here can: its steps are read in the order they stand, and the conditions of the ones that belong to one leg
     with open(SCRIPT, newline="") as f:
         main_body = re.search(r"^main\(\) \{\n(.*?)^\}", f.read().replace("\r\n", "\n"), re.M | re.S).group(1)
-    step_names = ["install_docker", "install_casaos", "prepare_dependency_path", "start_things", "box_facts", "apt_simulation", "snapshot before", "images_dump before",
+    step_names = ["guard_run", "install_docker", "install_casaos", "prepare_dependency_path", "start_things", "box_facts", "apt_simulation", "snapshot before", "images_dump before",
                   "refusals", "update_run", "rollback_run", "kill_run", "failure_run", "collect_journal unit-journal-end.txt"]
     count[0] += 1
     steps_in_order = re.findall(r"^\s+(?:if \[[^\]]*\]; then )?(%s)\b" % "|".join(re.escape(n) for n in step_names), main_body, re.M)
