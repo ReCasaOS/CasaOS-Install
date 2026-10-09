@@ -15,10 +15,18 @@ name: docker-update-proof
 #           repository, containerd.io on the 1.7 line, a 29 on offer. The owner's box. Docker 29
 #           needs nftables and Docker 28 did not: when apt can take nftables out without taking
 #           anything but libraries with it, the leg does, before the first check, so that the update
-#           has a package to bring that the box did not have.
+#           has a package to bring that the box did not have. When the update has succeeded the leg
+#           runs the rollback command (apt-get install --allow-downgrades of the PREVIOUS pins) and
+#           the verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with
+#           the containers, the database's volume and the images intact. A FAIL there is meant to turn
+#           the leg red: it means that the core must not offer the rollback command after a major jump.
 #   minor   Ubuntu 24.04: the previous patch of the current Docker minor (found at run time,
-#           not written down), the current one on offer; and last, with the box put back there
-#           and dockerd made unable to start, a second update that has to fail with `daemon`.
+#           not written down), the current one on offer; then the unit killed with SIGKILL in the
+#           middle of the install (as soon as dpkg runs a maintainer script of Docker's): the status
+#           has to say failed (`no_result` or `install`), dpkg --audit has to show the half-finished
+#           install, and the repair the dashboard names (dpkg --configure -a, then apt-get -f install)
+#           has to complete it; and last, with the box put back on the previous patch and dockerd
+#           made unable to start, a second update that has to fail with `daemon`.
 #
 # What each leg asserts (the report lists every verdict by name):
 #   the check offers the update (versions, major_jump, the plan and its plan_id); the plan
@@ -78,13 +86,14 @@ jobs:
             docker_from: 28.0.4
           - leg: minor
             name: Ubuntu 24.04
-            label: the previous patch to the current one, then a Docker that cannot start
+            label: the previous patch to the current one, a unit killed during the install, then a Docker that cannot start
             id: ubuntu
             version: '24.04'
             base: https://cloud-images.ubuntu.com/releases/24.04/release
             image: ubuntu-24.04-server-cloudimg-amd64.img
             sums: SHA256SUMS
             algo: sha256sum
+            kill_install: '1'
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
@@ -98,6 +107,7 @@ jobs:
       EXPECT_VERSION_ID: ${{ matrix.version }}
       INSTALLER_ARGS: ${{ matrix.args }}
       DOCKER_FROM: ${{ matrix.docker_from }}
+      KILL_INSTALL: ${{ matrix.kill_install }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -183,7 +193,7 @@ jobs:
         run: |
           set -euo pipefail
           scp -F ssh_config published/install.sh scripts/docker-update-proof.sh vm:
-          ssh -F ssh_config vm "sudo env PROOF_DISPOSABLE=1 EXPECT_ID='${EXPECT_ID}' EXPECT_VERSION_ID='${EXPECT_VERSION_ID}' INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' OUT=/home/casa/proof bash docker-update-proof.sh ${LEG}"
+          ssh -F ssh_config vm "sudo env PROOF_DISPOSABLE=1 EXPECT_ID='${EXPECT_ID}' EXPECT_VERSION_ID='${EXPECT_VERSION_ID}' INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' PROOF_KILL_INSTALL='${KILL_INSTALL}' OUT=/home/casa/proof bash docker-update-proof.sh ${LEG}"
 
       # Red for a verdict that fails and for a run that proves nothing alike.
       - name: Report
@@ -193,7 +203,8 @@ jobs:
           mkdir -p out
           ssh -F ssh_config vm 'sudo tar -C /home/casa/proof -cf - .' | tar -xf - -C out || true
           test -s out/timeline.tsv || { echo "the run left no evidence: nothing to report" | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
-          python3 scripts/docker-update-proof-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          # `kill` when this leg also killed the unit in the middle of the install: the report then demands the evidence of it
+          python3 scripts/docker-update-proof-report.py out "${LEG}" ${KILL_INSTALL:+kill} | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: What the machine says when it is not well
         if: always()

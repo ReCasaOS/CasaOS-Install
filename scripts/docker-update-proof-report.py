@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn what docker-update-proof.sh wrote into verdicts, or say the run is invalid.
 
-    docker-update-proof-report.py <out dir> <major|minor>
+    docker-update-proof-report.py <out dir> <major|minor> [kill]
 
 Prints a markdown report (and writes it to <out dir>/report.md).
 
@@ -20,7 +20,11 @@ The legs:
             volume and the images intact. A FAIL there is meant to turn the leg red: it means that the core must not offer the
             rollback command after a major jump.
     minor   Ubuntu 24.04, the previous patch of the current Docker minor, then a second update with
-            dockerd made unable to start (failure injection, last).
+            dockerd made unable to start (failure injection, last). One minor leg is also given `kill` after the
+            leg: it kills the unit with SIGKILL in the middle of the install (as soon as dpkg runs a maintainer
+            script of Docker's), before that last failure. The report then wants the evidence of it: what the
+            status says (failed, `no_result` or `install`), what dpkg --audit says, and that the repair the
+            dashboard will name (dpkg --configure -a, then apt-get -f install) completes the install.
 
 The plan may hold packages the box does not have (the dependencies of the new Docker). It is judged on
 what the box did with it: the packages dpkg had installed just before the POST and just after the run
@@ -36,6 +40,7 @@ import sys
 from datetime import datetime
 
 out_dir, leg = sys.argv[1], sys.argv[2]
+options = sys.argv[3:]
 
 ALLOWLIST = ["docker-ce", "docker-ce-cli", "containerd.io", "docker-ce-rootless-extras", "docker-buildx-plugin",
              "docker-compose-plugin", "docker-model-plugin"]
@@ -54,6 +59,14 @@ PIN_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")  
 EMPTY_ENV_RE = re.compile(r"environment variable name evaluates to an empty string", re.I)
 V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
 V_ROLLBACK = "rollback after the major jump"
+K_POST = "kill -9: the POST starts the run"
+K_TERMINAL = "kill -9: the run reaches a terminal state"
+K_ANSWER = "kill -9: the status endpoint keeps answering while dpkg is half-finished"
+K_FAILED = "kill -9: the run is reported as failed, with error_code `no_result` or `install`"
+K_LOG = "kill -9: the log agrees with the status"
+K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
+K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
+K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
 V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable name to an empty string"
 POST_SECONDS = 30      # "a few seconds" in the spec; this only catches a POST that blocks through apt
 HOLE = 60.0            # seconds without a poller sample, inside the run: the poller is dead
@@ -227,6 +240,23 @@ def running(info):
     return {n for n, c in info["containers"].items() if c["state"] == "running"}
 
 
+def rollback_command_ok(rb):
+    """the command a failure offers: a fixed shape, validated pins of the engine's packages, and docker-ce at the version the leg started on"""
+    pins = rb.split()[4:] if rb.startswith("sudo apt-get install --allow-downgrades ") else []
+    return bool(pins) and all(PIN_RE.match(p) and p.split("=")[0] in ALLOWLIST for p in pins) and \
+        any(p.startswith("docker-ce=") and engine(p.split("=", 1)[1]) == start_version for p in pins)
+
+
+def audit_of(name):
+    """(exit status, text) of a `dpkg --audit` the harness recorded: its first line is `exit N`, the rest is what dpkg said (nothing when it found nothing wrong)"""
+    first, _, rest = read(name).partition("\n")
+    m = re.match(r"^exit (\d+)$", first.strip())
+    if not m:
+        invalid("%s is missing or not a recorded dpkg --audit (its first line is `exit N`)" % name)
+        return None
+    return int(m.group(1)), rest.strip()
+
+
 def lost_writes(logs_name, file_name):
     """(the ids the database acknowledged, the ids its file on the volume holds, the acknowledged ones the file does not hold)"""
     acked = re.findall(r"^\S+ ack (\S+)$", read(logs_name), re.M)
@@ -301,6 +331,13 @@ def check_log(text, label, want_terminal, order):
 if leg not in ("major", "minor"):
     invalid("the leg is %r: major or minor" % leg)
     finish()
+# `kill`: this leg also kills the unit with SIGKILL during the install, so the evidence of that is required (and is not looked for on a leg that did not)
+for option in options:
+    if option != "kill":
+        invalid("the report does not know the option %r (the only one is `kill`)" % option)
+kill_expected = "kill" in options
+if kill_expected and leg != "minor":
+    invalid("the kill -9 injection belongs to a minor leg")
 
 aborted = read("aborted").strip()
 if aborted:
@@ -555,14 +592,15 @@ if not log_text.strip():
 marks = check_log(log_text, "success", "SUCCESS", ["QUEUED", "STARTED", "PREVIOUS", "DOWNLOADED", "INSTALLED", "DAEMON"]) if log_text.strip() else []
 by_kind = {m[0]: m for m in marks}
 field = lambda kind: by_kind.get(kind, (None, None, ""))[2]
-verdict("the PREVIOUS marker records the docker-ce that was installed", on(marks, ("docker-ce=%s" % installed_full) in field("PREVIOUS").split()), "PREVIOUS: %s" % field("PREVIOUS"))
+prev_field = next((m[2] for m in marks if m[0] == "PREVIOUS"), "")   # the first one, as the core reads it
+verdict("the PREVIOUS marker records the docker-ce that was installed", on(marks, ("docker-ce=%s" % installed_full) in prev_field.split()), "PREVIOUS: %s" % prev_field)
 # what the rollback command is made of: a PREVIOUS that systemd emptied (the script's ${Package}=${Version} gone) gives a command that goes nowhere
-prev_words = field("PREVIOUS").split()
+prev_words = prev_field.split()
 want_pins = sorted("%s=%s" % (n, cur) for n, (cur, _) in plan_up.items())
 lost_pins = [p for p in want_pins if p not in prev_words]
 odd_words = [w for w in prev_words if not PIN_RE.match(w)]
 verdict(V_PINS, on(marks and plan_up, not lost_pins and not odd_words),   # an empty PREVIOUS misses every pin of the plan
-        "PREVIOUS: %r; missing: %s; not pins: %s" % (field("PREVIOUS"), ", ".join(lost_pins) or "none", ", ".join(odd_words) or "none"))
+        "PREVIOUS: %r; missing: %s; not pins: %s" % (prev_field, ", ".join(lost_pins) or "none", ", ".join(odd_words) or "none"))
 bad_journal = ["%s: %s" % (jname, ln.strip()) for jname, jlines in sorted(journals.items()) for ln in jlines if EMPTY_ENV_RE.search(ln)]
 verdict(V_JOURNAL, on(all(journals.values()), not bad_journal), "; ".join(bad_journal) or "%d lines read" % sum(len(v) for v in journals.values()))
 verdict("the DAEMON marker records the running version", on(marks, field("DAEMON").strip() == expected_to), "DAEMON: %r (wanted %r)" % (field("DAEMON"), expected_to))
@@ -642,7 +680,7 @@ if leg == "major":
         # the command is the one the core prints after a failure, made here of the pins of the PREVIOUS marker: set against the log, so that a
         # harness that built it from anything else is an invalid run, not a rollback that passed
         rb_pins = rb_cmd.split()[4:] if rb_cmd.startswith("sudo apt-get install --allow-downgrades ") else []
-        prev_pins = [w for w in field("PREVIOUS").split() if PIN_RE.match(w)]
+        prev_pins = [w for w in prev_field.split() if PIN_RE.match(w)]
         if marks and (not rb_pins or not all(bare(p.split("=")[0]) in ALLOWLIST for p in rb_pins) or sorted(rb_pins) != sorted(prev_pins)):   # prev_pins are pins
             invalid("the rollback command the harness ran (%r) is not the one made of the PREVIOUS pins (%s)" % (rb_cmd, " ".join(prev_pins)))
         if "rollback_settled" not in markers:
@@ -764,10 +802,7 @@ if leg == "minor":
     verdict("failure: the run failed with error_code `daemon`", on(fdd, fdd.get("state") == "failed" and fdd.get("outcome") == "failed" and fdd.get("error_code") == "daemon" and fdd.get("error")),
             "state %r, outcome %r, error_code %r, error %r" % (fdd.get("state"), fdd.get("outcome"), fdd.get("error_code"), fdd.get("error")))
     rb = fdd.get("rollback_command") or ""
-    pins = rb.split()[4:] if rb.startswith("sudo apt-get install --allow-downgrades ") else []
-    verdict("failure: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version",
-            on(fdd, pins and all(PIN_RE.match(p) and p.split("=")[0] in ALLOWLIST for p in pins)
-               and any(p.startswith("docker-ce=") and engine(p.split("=", 1)[1]) == start_version for p in pins)),
+    verdict("failure: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version", on(fdd, rollback_command_ok(rb)),
             "rollback_command %r" % rb)
     flog = read("docker-update-fail.log")
     if not flog.strip():
@@ -781,5 +816,81 @@ if leg == "minor":
     verdict("failure: with the file mended Docker starts again and the containers come back", on(repaired and settle, repaired.startswith("yes") and settle.isdigit()),
             "repair: %r, containers back after: %r" % (repaired, settle))
     P("")
+
+# ---- the kill -9 injection: the one minor leg that does it ---------------------------------------------------------------
+
+HALF_FINISHED = re.compile(r"half configured|half installed|unpacked but not yet configured", re.I)   # what dpkg --audit says of an install that was cut short
+if leg == "minor" and not kill_expected and read("kill-hit").strip():
+    invalid("kill-hit exists: the guest ran the kill -9 injection and the report was not asked to judge it (give it `kill`)")
+if leg == "minor" and kill_expected:
+    P("## Failure injection: kill -9 of the unit during the install")
+    P("")
+    P("Before the failure above, the box was put back on docker-ce %s and the button was pressed again. As soon as dpkg ran a maintainer script of Docker's packages, "
+      "the whole unit was killed with SIGKILL: the script, apt-get and dpkg, in the middle of a package." % start_version)
+    P("")
+    hit = read("kill-hit").strip()
+    if not hit:
+        invalid("kill-hit is missing: the kill -9 injection did not run")
+    elif not hit.startswith("caught "):
+        invalid("the kill -9 never caught dpkg in a maintainer script of Docker's packages (%s): the injection proved nothing" % hit)
+    else:
+        for m_ in ("kill_post", "kill_killed", "kill_terminal"):
+            if m_ not in markers:
+                invalid("marker %s is missing from the timeline: the kill -9 injection did not get that far" % m_)
+        code, body = resp("kill-packages")
+        ku = dobj(body, "docker", "update")
+        if code is not None and not (code == 200 and ku.get("available") is True and ku.get("from") == start_version):
+            invalid("after the box was put back on %s the check does not offer the update again (HTTP %s, available %r, from %r): the kill -9 injection cannot run" %
+                    (start_version, code, ku.get("available"), ku.get("from")))
+        code, body = resp("kill-post")
+        verdict(K_POST, on(code is not None, code == 200 and dget(body, "state") in ("running", "finalizing")), "HTTP %s, state %r" % (code, dget(body, "state")))
+        ksamples = load_samples("kill-status.jsonl")
+        if not ksamples:
+            invalid("kill-status.jsonl is missing or holds no status sample: the killed run was not polled")
+        verdict(K_TERMINAL, on(ksamples, any(d and d.get("state") in TERMINAL for _, _, d in ksamples)),
+                "%d status samples%s" % (len(ksamples), "; gave up after " + read("kill-status.timeout").strip() if read("kill-status.timeout").strip() else ""))
+        verdict(K_ANSWER, on(ksamples, not status_runs(ksamples)), "%d samples, %d failed" % (len(ksamples), sum(1 for _, h, _ in ksamples if h != "200")))
+        try:
+            kf = json.loads(read("kill-status-final.json") or "null")
+        except ValueError:
+            kf = None
+        kdd = kf.get("data") if isinstance(kf, dict) and isinstance(kf.get("data"), dict) else {}
+        if not kdd:
+            invalid("kill-status-final.json holds no status")
+        ecode = kdd.get("error_code")
+        verdict(K_FAILED, on(kdd, kdd.get("state") == "failed" and kdd.get("outcome") == "failed" and ecode in ("no_result", "install") and bool(kdd.get("error"))),
+                "state %r, outcome %r, error_code %r, error %r" % (kdd.get("state"), kdd.get("outcome"), ecode, kdd.get("error")))
+        klog = read("docker-update-kill.log")
+        if not klog.strip():
+            invalid("docker-update-kill.log was not collected")
+        kmarks = parse_log(klog) if klog.strip() else []
+        kkinds = [m[0] for m in kmarks]
+        kterms = [(m[0], m[2].split()[-1:]) for m in kmarks if m[0] in ("SUCCESS", "RESTART_PENDING", "FAILED")]
+        klines = [ln for ln in klog.splitlines() if ln.strip()]
+        # the log is what the status was made of: cut off in the install (no INSTALLED, and no terminal marker unless the script itself wrote FAILED install)
+        agree = (len({m[1] for m in kmarks}) == 1 and bool(klines) and klines[0].split(" ")[0] == "CASAOS_DOCKER_UPDATE_QUEUED"
+                 and "PREVIOUS" in kkinds and "DOWNLOADED" in kkinds and "INSTALLED" not in kkinds
+                 and ((ecode == "no_result" and not kterms) or (ecode == "install" and kterms == [("FAILED", ["install"])])))
+        verdict(K_LOG, on(kmarks and kdd, agree), "error_code %r; kinds %s; terminal markers %s" % (ecode, ",".join(kkinds), kterms or "none"))
+        krb = kdd.get("rollback_command") or ""
+        verdict(K_ROLLBACK, on(kdd, rollback_command_ok(krb)), "rollback_command %r" % krb)
+        audit = audit_of("kill-audit.txt")
+        verdict(K_AUDIT, on(audit, bool(HALF_FINISHED.search(audit[1])) if audit else False), "dpkg --audit said: %s" % ((audit[1][:300] if audit else "") or "nothing"))
+        audit1, audit2 = audit_of("kill-audit-1.txt"), audit_of("kill-audit-after.txt")
+        r1, r2, back = read("kill-repair-1.exit").strip(), read("kill-repair-2.exit").strip(), read("kill-docker").strip()
+        if not (r1.isdigit() and r2.isdigit() and back):
+            invalid("the repair after the kill -9 injection was not recorded")
+        verdict(K_REPAIR, on(audit2 and r1.isdigit() and r2.isdigit() and back, bool(audit2) and audit2[1] == "" and back.startswith("yes")),
+                "`dpkg --configure -a` exit %s, dpkg --audit then %s; `apt-get -f install` exit %s, dpkg --audit then %s; Docker back: %s" %
+                (r1 or "?", (audit1[1][:80] or "nothing") if audit1 else "?", r2 or "?", ((audit2[1][:200] or "nothing") if audit2 else "?"), back or "?"))
+        P("The kill caught dpkg running `%s` (pid %s)." % (hit.split(" ", 3)[3] if len(hit.split(" ", 3)) > 3 else "?", hit.split(" ", 3)[2] if len(hit.split(" ", 3)) > 2 else "?"))
+        P("What the status said: state %s, error_code `%s`, %s." % (kdd.get("state"), ecode, "a rollback command" if krb else "no rollback command"))
+        P("The killed unit left dpkg saying: %s" % ((audit[1][:300].replace("\n", " ") if audit else "") or "nothing"))
+        if audit1:
+            P("The repair the dashboard will name: dpkg --configure -a (exit %s) left dpkg --audit %s, so apt-get -f install was %s." %
+              (r1 or "?", "saying nothing" if not audit1[1] else "still unhappy", "not needed" if not audit1[1] else "needed (exit %s)" % (r2 or "?")))
+        if "kill_killed" in markers and "kill_terminal" in markers:
+            P("The status reached its terminal state %.0f s after the kill." % (markers["kill_terminal"] - markers["kill_killed"]))
+        P("")
 
 finish()

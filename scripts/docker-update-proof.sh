@@ -22,7 +22,11 @@
 #                                  madison, never written down), the current one on offer; and last, once
 #                                  the box is put back there, a second update with dockerd made unable to
 #                                  start: the run has to fail with `daemon`, say how to go back, and the
-#                                  status has to keep answering.
+#                                  status has to keep answering. With PROOF_KILL_INSTALL=1 (one minor
+#                                  leg) the unit is first killed with SIGKILL in the middle of the install,
+#                                  as soon as dpkg runs a maintainer script of Docker's (kill_run): the status
+#                                  has to find out by itself, and the repair the dashboard names
+#                                  (dpkg --configure -a, then apt-get -f install) is run.
 #
 # In both: the refusals first (a hold, dpkg's lock, a running package update, a plan that is not
 # the plan, a body that is not a plan_id, a token in the query, a refresh token), none of which
@@ -37,7 +41,8 @@
 #
 # Needs: PROOF_DISPOSABLE=1, EXPECT_ID and EXPECT_VERSION_ID (the system it must be, as
 # /etc/os-release names it), DOCKER_FROM for the major leg, INSTALLER_ARGS (options for install.sh,
-# unquoted on purpose: a list), OUT (default ./proof-out).
+# unquoted on purpose: a list), PROOF_KILL_INSTALL (1 on the minor leg that kills the unit, else empty),
+# OUT (default ./proof-out).
 
 # ---- the parts that are only text, and can be tested without a machine -----------------------
 
@@ -85,11 +90,13 @@ removal_ok() {
 
 # previous_pins <log>: the pins (name=version, one per line) of the PREVIOUS marker of the run a log records, which is what the core
 # makes its rollback command of. The nonce is the one on the log's first line (the core's), as the core reads it: a marker with
-# another nonce is somebody else's text. A word that has not the shape of a pin is dropped. Status 1 and nothing when there is no pin.
+# another nonce is somebody else's text, and only the first marker counts. A word that has not the shape of a pin is dropped.
+# Status 1 and nothing when there is no pin.
 previous_pins() {
     awk '
         NR == 1 { if ($1 == "CASAOS_DOCKER_UPDATE_QUEUED" && length($2) == 32 && $2 ~ /^[0-9a-f]+$/) nonce = $2; next }
-        nonce != "" && $1 == "CASAOS_DOCKER_UPDATE_PREVIOUS" && $2 == nonce {
+        nonce != "" && $1 == "CASAOS_DOCKER_UPDATE_PREVIOUS" && $2 == nonce && !seen {
+            seen = 1
             for (i = 3; i <= NF; i++) if ($i ~ /^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$/) { print $i; n++ }
         }
         END { exit !(n > 0) }' "$1"
@@ -98,6 +105,8 @@ previous_pins() {
 # ---- the machine --------------------------------------------------------------------------------
 
 COME_BACK=(p-always p-unless-stopped p-db p-web p-host)
+# a maintainer script of one of Docker's packages: while it runs, dpkg is in the middle of a package
+MAINTAINER_RE='/var/lib/dpkg/info/(docker-ce|docker-ce-cli|containerd\.io|docker-ce-rootless-extras)\.(preinst|prerm|postinst|postrm)'
 
 now() { date -u +%s.%N; }
 log() { echo "[proof $(date -u +%H:%M:%S)] $*" | tee -a "${OUT}/steps.log"; }
@@ -518,6 +527,102 @@ rollback_run() {
     code_of - http://127.0.0.1:18081/ 5 >"${OUT}/rollback-web.code"
 }
 
+# ---- the unit killed in the middle of the install (one minor leg) -----------------------------------------------------------
+
+# catch_maintainer <file> <seconds>: waits for dpkg to run a maintainer script of one of Docker's packages, and then kills the whole unit
+# with SIGKILL (every process of its cgroup: the script, apt-get, dpkg), so that dpkg is left in the middle of a package. <file> gets
+# `caught <time> <pid> <command line>`, or `missed <why>` when the unit ended first, nothing ran in time, or systemctl could not kill.
+catch_maintainer() {
+    local end=$((SECONDS + $2)) begun=${SECONDS} seen=0 hit="" state
+    while :; do
+        hit="$(pgrep -af "${MAINTAINER_RE}" | head -n1 || true)"
+        if [ -n "${hit}" ]; then break; fi
+        state="$(systemctl is-active casaos-docker-update.service 2>/dev/null || true)"
+        case "${state}" in
+        active | activating | deactivating) seen=1 ;;
+        *)
+            # systemd-run --no-block returns before the unit is up: it gets UNIT_GRACE seconds (30) to appear before it counts as gone
+            if [ "${seen}" = 1 ] || [ $((SECONDS - begun)) -ge "${UNIT_GRACE:-30}" ]; then
+                echo "missed the unit ended (${state:-unknown}) before dpkg ran a maintainer script of Docker's" >"$1"
+                return 0
+            fi
+            ;;
+        esac
+        if [ "${SECONDS}" -ge "${end}" ]; then
+            echo "missed no maintainer script of Docker's ran within $2 s" >"$1"
+            return 0
+        fi
+        sleep 0.1
+    done
+    # every process of the unit's cgroup (what --kill-who defaults to; the option is spelled differently from one systemd to the next)
+    if ! systemctl kill --signal=KILL casaos-docker-update.service; then
+        echo "missed systemctl kill failed" >"$1"
+        return 0
+    fi
+    echo "caught $(now) ${hit}" >"$1"
+}
+
+# audit_dpkg <file>: what `dpkg --audit` says now: its exit status on the first line, then its text (nothing when it finds nothing wrong)
+audit_dpkg() {
+    local out rc=0
+    out="$(dpkg --audit 2>&1)" || rc=$?
+    { echo "exit ${rc}"; if [ -n "${out}" ]; then printf '%s\n' "${out}"; fi; } >"$1"
+}
+
+# repair_dpkg <prefix>: the repair the dashboard names after an install that was cut short, in its order: `dpkg --configure -a`, then
+# `apt-get -f install`, with dpkg --audit after each; then Docker is started, as the cut may have left it down. -y and --force-confold are
+# all that is added to them, so that nobody has to answer. <prefix>-docker says whether Docker answered.
+repair_dpkg() {
+    local rc=0 start=${SECONDS}
+    dpkg --configure -a --force-confold >"${OUT}/$1-repair-1.log" 2>&1 || rc=$?
+    echo "${rc}" >"${OUT}/$1-repair-1.exit"
+    audit_dpkg "${OUT}/$1-audit-1.txt"
+    rc=0
+    "${APT[@]}" -f install -y -q -o Dpkg::Options::=--force-confold >"${OUT}/$1-repair-2.log" 2>&1 || rc=$?
+    echo "${rc}" >"${OUT}/$1-repair-2.exit"
+    audit_dpkg "${OUT}/$1-audit-after.txt"
+    systemctl reset-failed docker.service docker.socket containerd.service >/dev/null 2>&1 || true
+    timeout 120 systemctl start containerd.service docker.socket docker.service || true
+    if wait_docker 120; then
+        echo "yes, after $((SECONDS - start)) s" >"${OUT}/$1-docker"
+    else
+        echo no >"${OUT}/$1-docker"
+    fi
+}
+
+# kill_run: the box is put back, the update asked for the way the dashboard does, and as soon as dpkg runs a maintainer script of Docker's
+# the unit gets SIGKILL. What the status says (it has to find that out by itself, from a log with no end), what dpkg --audit says, and the
+# repair the dashboard names are recorded. A run that cannot get as far leaves `missed <why>` in kill-hit, which the report counts as a run
+# that proved nothing, and goes on: the failure that follows still has its turn. Nothing is judged here.
+kill_run() {
+    local id
+    put_back kill-putback
+    call_as internal kill-packages GET /v1/sys/packages
+    id="$(plan_id_of kill-packages)"
+    if [ -z "${id}" ]; then
+        echo "missed after the box was put back the check has no plan_id" >"${OUT}/kill-hit"
+        return 0
+    fi
+    marker kill_post
+    post_plan kill-post "${id}"
+    if [ "$(cat "${OUT}/kill-post.code")" != 200 ]; then
+        echo "missed the POST was not accepted (HTTP $(cat "${OUT}/kill-post.code"))" >"${OUT}/kill-hit"
+        return 0
+    fi
+    catch_maintainer "${OUT}/kill-hit" 900
+    marker kill_killed
+    log "kill -9 injection: $(cat "${OUT}/kill-hit")"
+    if grep -q '^caught ' "${OUT}/kill-hit"; then
+        sleep 2
+        audit_dpkg "${OUT}/kill-audit.txt"
+    fi
+    poll_status kill-status 300
+    marker kill_terminal
+    cp "$(runtime_log)" "${OUT}/docker-update-kill.log" 2>/dev/null || true
+    log "the killed update ended: $(jq -c '.data | {state, outcome, error_code, rollback_command}' "${OUT}/kill-status-final.json" 2>/dev/null || echo unreadable)"
+    if grep -q '^caught ' "${OUT}/kill-hit"; then repair_dpkg kill; fi
+}
+
 # ---- the failure, last ---------------------------------------------------------------------------------------------
 
 mend_daemon_json() {
@@ -529,16 +634,22 @@ mend_daemon_json() {
     DAEMON_JSON_BROKEN=0
 }
 
-failure_run() {
-    local pins=() fail_id start
-    # the box is put back where the first run found it: the packages the plan moved, at the versions they had
-    # (a package the update brought has no version to go back to: it stays)
+# put_back <prefix>: the box is put back where the first run found it: the packages the plan moved, at the versions they had (a package
+# the update brought has no version to go back to: it stays). <prefix>-downgrade.log is what apt said, <prefix>-settle how long the
+# containers that start by themselves took to be back.
+put_back() {
+    local pins=()
     mapfile -t pins < <(jq -r '.data.docker.update.packages[] | select((.new // false) | not) | "\(.name)=\(.current_version)"' "${OUT}/packages-2.json")
     [ "${#pins[@]}" -gt 0 ] || abort "no packages to put back"
-    "${APT[@]}" install -y -q --allow-downgrades "${pins[@]}" >"${OUT}/downgrade.log" 2>&1 || abort "could not put the box back on ${START_VERSION}"
+    "${APT[@]}" install -y -q --allow-downgrades "${pins[@]}" >"${OUT}/$1-downgrade.log" 2>&1 || abort "could not put the box back on ${START_VERSION}"
     wait_docker || abort "docker does not answer after the box was put back"
-    settle putback-settle
+    settle "$1-settle"
     "${APT[@]}" update -qq
+}
+
+failure_run() {
+    local fail_id start
+    put_back putback
     call_as internal fail-packages GET /v1/sys/packages
     fail_id="$(plan_id_of fail-packages)"
     [ -n "${fail_id}" ] || abort "after the box was put back the check has no plan_id: the failure injection cannot run"
@@ -581,6 +692,14 @@ main() {
     minor) ;;
     *) echo "usage: $0 major|minor" >&2; exit 2 ;;
     esac
+    # PROOF_KILL_INSTALL=1: this minor leg also kills the unit in the middle of the install (the report has to be told, with `kill`)
+    KILL_INSTALL=0
+    case "${PROOF_KILL_INSTALL:-}" in
+    "" | 0) ;;
+    1) KILL_INSTALL=1 ;;
+    *) echo "PROOF_KILL_INSTALL is 1 or empty" >&2; exit 2 ;;
+    esac
+    [ "${KILL_INSTALL}" = 0 ] || [ "${LEG}" = minor ] || { echo "the kill -9 injection (PROOF_KILL_INSTALL=1) belongs to a minor leg" >&2; exit 2; }
     [[ "${PROOF_DISPOSABLE:-}" == 1 ]] ||
         { echo "This installs and removes Docker, holds dpkg's lock and breaks Docker's configuration: run it on a disposable machine (PROOF_DISPOSABLE=1)." >&2; exit 2; }
     [ "$(id -u)" -eq 0 ] || { echo "Run it as root." >&2; exit 2; }
@@ -613,7 +732,7 @@ main() {
         sed -i -E 's#//(deb|security)\.debian\.org/debian-security#//archive.debian.org/debian-security#' /etc/apt/sources.list
     fi
     "${APT[@]}" update -qq
-    "${APT[@]}" install -y -q curl jq ca-certificates python3 >/dev/null
+    "${APT[@]}" install -y -q curl jq ca-certificates python3 procps >/dev/null
 
     install_docker
     echo "${START_VERSION}" >"${OUT}/start-version"
@@ -635,6 +754,7 @@ main() {
     refusals
     update_run
     if [ "${LEG}" = major ]; then rollback_run; fi
+    if [ "${KILL_INSTALL}" = 1 ]; then kill_run; fi
     if [ "${LEG}" = minor ]; then failure_run; fi
     collect_journal unit-journal-end.txt
     kill "${POLL_PID}" 2>/dev/null || true

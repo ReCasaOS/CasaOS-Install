@@ -59,6 +59,8 @@ HAD_NFT = dict(LEGS["major"], new=[], removed=[], present=NFT,
                dependency="action skipped\nreason taking nftables out would take more than libraries with it: docker-ce nftables\n")
 # the harness took nftables out, and the Docker on offer does not need it after all
 NO_NEED = dict(LEGS["major"], new=[])
+# the minor leg that also kills the unit in the middle of the install (the report is told so with `kill`)
+KILL_MINOR = dict(LEGS["minor"], kill=True)
 
 
 def many_new(n):
@@ -87,6 +89,11 @@ def plan_hash(plan):
 def put(d, name, text):
     with open(os.path.join(d, name), "w") as f:
         f.write(text)
+
+
+def read_file(d, name):
+    with open(os.path.join(d, name)) as f:
+        return f.read()
 
 
 def api(d, name, code, body=None, secs=0.4):
@@ -199,7 +206,9 @@ def build(d, leg, s=None):
         marks.update(rollback_start=215, rollback_done=250, rollback_settled=262)
     if leg == "minor":
         marks.update(fail_post=300, fail_terminal=400, fail_settled=420)
-    rows += ["#\t%f\t%s" % (T0 + at, name) for name, at in marks.items()]
+    if s.get("kill"):
+        marks.update(kill_post=205, kill_killed=225, kill_terminal=262)
+    rows +=["#\t%f\t%s" % (T0 + at, name) for name, at in marks.items()]
     put(d, "timeline.tsv", "\n".join(rows) + "\n")
 
     # the status endpoint, asked every 2 s
@@ -265,6 +274,30 @@ def build(d, leg, s=None):
     put(d, "dependency-path", s["dependency"])
     put(d, "unit-journal.txt", JOURNAL)
     put(d, "unit-journal-end.txt", JOURNAL)
+
+    if s.get("kill"):
+        # the unit killed while dpkg ran a maintainer script of containerd.io's: no terminal marker, no INSTALLED, a package half installed
+        pins = " ".join("%s=%s" % (n, c) for n, c, _ in s["plan"])
+        half = ("The following packages are only half installed, due to problems during installation. The\n"
+                "installation can probably be completed by retrying it; the packages can be removed using\n"
+                "dselect or dpkg --remove to remove them (including their configuration files):\n"
+                " containerd.io  Open Source Container Runtime\n")
+        kl = [marker("QUEUED", iso(T0 + 205)), marker("STARTED", iso(T0 + 206)), marker("PREVIOUS", pins), "container: p-always always", marker("DOWNLOADED", iso(T0 + 215)), "Unpacking containerd.io ..."]
+        kill_extra = dict(outcome="failed", error="The update did not leave a result: it stopped before it finished.", error_code="no_result", started_at=iso(T0 + 205),
+                          completed_at=iso(T0 + 262), **{"from": s["start"]}, rollback_command="sudo apt-get install --allow-downgrades " + pins)
+        api(d, "kill-packages", 200, packages_body(s))
+        api(d, "kill-post", 200, ok(status_data("running")))
+        put(d, "kill-hit", "caught %f 4242 /bin/sh /var/lib/dpkg/info/containerd.io.prerm upgrade 1.7.27-1\n" % (T0 + 225))
+        put(d, "docker-update-kill.log", "\n".join(kl) + "\n")
+        put(d, "kill-status.jsonl", "\n".join("%f\t200\t%s" % (T0 + t_, json.dumps(status_data("running" if t_ < 262 else "failed", **(kill_extra if t_ >= 262 else {}))))
+                                              for t_ in range(206, 263, 2)) + "\n")
+        put(d, "kill-status-final.json", json.dumps(ok(dict(status_data("failed", **kill_extra), log="\n".join(kl) + "\n"))))
+        put(d, "kill-audit.txt", "exit 0\n" + half)
+        put(d, "kill-audit-1.txt", "exit 0\n" + half)    # `dpkg --configure -a` does not complete a package that is half installed
+        put(d, "kill-repair-1.exit", "1\n")
+        put(d, "kill-repair-2.exit", "0\n")
+        put(d, "kill-audit-after.txt", "exit 0\n\n")
+        put(d, "kill-docker", "yes, after 9 s\n")
 
     if leg == "minor":
         api(d, "fail-packages", 200, packages_body(s))
@@ -365,8 +398,8 @@ failures = []
 count = [0]
 
 
-def run_report(d, leg):
-    p = subprocess.run([sys.executable, REPORT, d, leg], capture_output=True, text=True)
+def run_report(d, leg, args=()):
+    p = subprocess.run([sys.executable, REPORT, d, leg] + list(args), capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -379,7 +412,8 @@ def rollback_follows_log(d):
     if not os.path.exists(os.path.join(d, "rollback-command")):
         return
     with open(os.path.join(d, "docker-update.log")) as f:
-        pins = [w for ln in f.read().splitlines() if ln.split(" ")[0] == PREFIX + "PREVIOUS" for w in ln.split(" ")[2:] if PIN_SHAPE.match(w)]
+        firsts = [ln for ln in f.read().splitlines() if ln.split(" ")[0] == PREFIX + "PREVIOUS"][:1]   # the first marker, as the core reads it
+    pins = [w for ln in firsts for w in ln.split(" ")[2:] if PIN_SHAPE.match(w)]
     if pins:
         put(d, "rollback-command", "sudo apt-get install --allow-downgrades " + " ".join(pins) + "\n")
         return
@@ -388,8 +422,11 @@ def rollback_follows_log(d):
     remove(d, "snapshot-rollback.txt", "images-rollback.txt", "rollback-settle", "rollback-db-logs.txt", "rollback-db-file.txt", "rollback-web.code", "rollback-web.secs")
 
 
-def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False, spec=None, follow=False):
-    """follow: the guest ran on the log as mutated, so the rollback it did is the one of that log's PREVIOUS marker"""
+def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False, spec=None, follow=False, args=None):
+    """follow: the guest ran on the log as mutated, so the rollback it did is the one of that log's PREVIOUS marker
+    args: what the report is given after the leg; `kill` when the leg is the one that kills the unit (the spec says so), unless it is said here"""
+    if args is None:
+        args = ["kill"] if (spec or LEGS.get(leg) or {}).get("kill") else []
     count[0] += 1
     with tempfile.TemporaryDirectory() as d:
         if not empty:
@@ -398,7 +435,7 @@ def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=No
             mutate(d)
         if follow:
             rollback_follows_log(d)
-        code, text = run_report(d, leg)
+        code, text = run_report(d, leg, args)
         problems = []
         if code != want_code:
             problems.append("exit %d, wanted %d" % (code, want_code))
@@ -417,9 +454,9 @@ def fails(name, verdict, mutate, leg="major", extra=(), spec=None, follow=False)
     case(name, 1, ["**FAIL** " + verdict] + list(extra), ["INVALID"], leg=leg, mutate=mutate, spec=spec, follow=follow)
 
 
-def invalid(name, reason, mutate, leg="major", empty=False, silent=()):
+def invalid(name, reason, mutate, leg="major", empty=False, silent=(), spec=None):
     """a run that proves nothing; the verdicts named in silent must not be made up from the evidence that is not there"""
-    case(name, 1, ["INVALID RUN", reason], ["**FAIL** " + "the run succeeded"] + ["**FAIL** " + s for s in silent], leg=leg, mutate=mutate, empty=empty)
+    case(name, 1, ["INVALID RUN", reason], ["**FAIL** " + "the run succeeded"] + ["**FAIL** " + s for s in silent], leg=leg, mutate=mutate, empty=empty, spec=spec)
 
 
 # healthy
@@ -562,6 +599,11 @@ fails("a PREVIOUS marker with a pin at another version than the one the package 
       extra=["missing: containerd.io=1.7.27-1"], follow=True)
 fails("a PREVIOUS marker with a word that is not a pin", V_PINS, lambda d: replace(d, "docker-update.log", "containerd.io=1.7.27-1", "containerd.io=1.7.27-1 nftables;reboot"),
       extra=["not pins: nftables;reboot"], follow=True)
+case("a second PREVIOUS marker does not change what the first says", 0, ["PASS"], ["**FAIL**", "INVALID"],
+     mutate=lambda d: ledit(d, "docker-update.log", lambda ls: [x for ln in ls for x in ([ln, PREV + " docker-ce=5:99-1"] if ln.startswith(PREV) else [ln])]))
+fails("a first PREVIOUS marker that lacks a pin, though a later one has it", V_PINS,
+      lambda d: ledit(d, "docker-update.log", lambda ls: [x for ln in ls for x in ([PREV + " docker-ce=5:28.0.4-1~debian.11~bullseye", ln] if ln.startswith(PREV) else [ln])]),
+      extra=["missing: containerd.io=1.7.27-1"], follow=True)
 fails("a PREVIOUS marker that is empty in the minor leg too", V_PINS, lambda d: ledit(d, "docker-update.log", lambda ls: [PREV if ln.startswith(PREV) else ln for ln in ls]), leg="minor")
 fails("a journal in which systemd emptied a variable of the script", V_JOURNAL, lambda d: put(d, "unit-journal.txt", JOURNAL + EMPTY_ENV),
       extra=["unit-journal.txt"])
@@ -651,6 +693,102 @@ fails("a FAILED marker with another reason", "failure: the FAILED marker names t
 fails("a Docker that does not start again", "failure: with the file mended", lambda d: put(d, "fail-repaired", "no\n"), leg="minor")
 fails("containers that do not come back after the repair", "failure: with the file mended", lambda d: put(d, "fail-settle", "never\n"), leg="minor")
 fails("a failure POST that is refused", "failure: the POST starts the run", lambda d: api(d, "fail-post", 409, refusal("daemon")), leg="minor")
+
+# the kill -9 injection: the unit killed with SIGKILL while dpkg runs a maintainer script of Docker's packages (one minor leg)
+K_POST = "kill -9: the POST starts the run"
+K_TERMINAL = "kill -9: the run reaches a terminal state"
+K_ANSWER = "kill -9: the status endpoint keeps answering while dpkg is half-finished"
+K_FAILED = "kill -9: the run is reported as failed, with error_code `no_result` or `install`"
+K_LOG = "kill -9: the log agrees with the status"
+K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
+K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
+K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
+KILL_HEALTHY = ["Docker update proof, minor leg: PASS", "caught", "no_result", "dpkg --audit said", "kill -9: the log agrees with the status"]
+
+
+def kfails(name, verdict, mutate, extra=()):
+    fails(name, verdict, mutate, leg="minor", spec=KILL_MINOR, extra=extra)
+
+
+def as_install(d):
+    """the kill landed when only apt was killed: the script went on and wrote FAILED install"""
+    jedit(d, "kill-status-final.json", lambda j: final(j).update(error_code="install", error="The update failed while installing."))
+    ledit(d, "docker-update-kill.log", lambda ls: ls + [marker("FAILED", iso(T0 + 262) + " install")])
+
+
+case("a healthy minor leg that also kills the unit passes, and says what apt-get -f install was needed for", 0, KILL_HEALTHY + ["apt-get -f install was needed"],
+     ["**FAIL**", "INVALID"], leg="minor", spec=KILL_MINOR)
+case("a kill after which dpkg --configure -a is enough passes", 0, KILL_HEALTHY + ["apt-get -f install was not needed"], ["**FAIL**", "INVALID"], leg="minor", spec=KILL_MINOR,
+     mutate=lambda d: put(d, "kill-audit-1.txt", "exit 0\n\n"))
+case("a kill that leaves the script to write FAILED install passes", 0, ["PASS", "kill -9: the log agrees with the status"], ["**FAIL**", "INVALID"], leg="minor", spec=KILL_MINOR, mutate=as_install)
+case("a package that is only unpacked is half-finished too", 0, ["PASS"], ["**FAIL**", "INVALID"], leg="minor", spec=KILL_MINOR,
+     mutate=lambda d: put(d, "kill-audit.txt", "exit 0\nThe following packages have been unpacked but not yet configured.\n docker-ce\n"))
+case("so is a package that is only half configured", 0, ["PASS"], ["**FAIL**", "INVALID"], leg="minor", spec=KILL_MINOR,
+     mutate=lambda d: put(d, "kill-audit.txt", "exit 0\nThe following packages are only half configured, probably due to problems configuring them the first time.\n docker-ce\n"))
+kfails("a kill POST that is refused", K_POST, lambda d: api(d, "kill-post", 409, refusal("daemon")))
+kfails("a killed run that never ends", K_TERMINAL, lambda d: (jsonl_set(d, "kill-status.jsonl", lambda t, h, x: (h, dict(x, state="running"))), put(d, "kill-status.timeout", "300 s\n")))
+kfails("a killed run whose poll stopped without a terminal state", K_TERMINAL, lambda d: jsonl_set(d, "kill-status.jsonl", lambda t, h, x: (h, dict(x, state="running"))))
+kfails("a status endpoint that goes away while dpkg is half-finished", K_ANSWER, lambda d: jsonl_set(d, "kill-status.jsonl", lambda t, h, x: ("000", None) if T0 + 230 <= t <= T0 + 236 else (h, x)))
+kfails("a killed run that is reported as succeeded", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(state="succeeded", outcome="success", error_code="", error="")))
+kfails("a killed run reported with error_code `daemon`", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(error_code="daemon")))
+kfails("a killed run reported with error_code `guard`", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(error_code="guard")))
+kfails("a killed run reported with no error_code", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(error_code="")))
+kfails("a killed run reported with no explanation", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(error="")))
+kfails("a killed run that is still running", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(state="running", outcome="")))
+kfails("a killed run whose state is not failed though its outcome is", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(state="finalizing")))
+kfails("a killed run whose outcome is not failed though its state is", K_FAILED, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(outcome="")))
+kfails("a no_result with a terminal marker in the log", K_LOG, lambda d: ledit(d, "docker-update-kill.log", lambda ls: ls + [marker("SUCCESS", iso(T0 + 262))]))
+kfails("an install failure the log has no FAILED marker for", K_LOG, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(error_code="install")))
+kfails("an install failure the log says another reason for", K_LOG, lambda d: (as_install(d), replace(d, "docker-update-kill.log", " install", " download"))[0])
+kfails("a kill that came after the install had ended", K_LOG, lambda d: ledit(d, "docker-update-kill.log", lambda ls: ls + [marker("INSTALLED", iso(T0 + 240))]))
+kfails("a kill that came before anything was downloaded", K_LOG, lambda d: ledit(d, "docker-update-kill.log", lambda ls: [ln for ln in ls if "DOWNLOADED" not in ln]))
+kfails("a killed run with no PREVIOUS marker", K_LOG, lambda d: ledit(d, "docker-update-kill.log", lambda ls: [ln for ln in ls if "PREVIOUS" not in ln]))
+kfails("a killed run whose log has a marker of another nonce", K_LOG, lambda d: ledit(d, "docker-update-kill.log", lambda ls: ls + [PREFIX + "STARTED " + "f" * 32 + " " + iso(T0)]))
+kfails("a killed run whose log does not start with the core's line", K_LOG, lambda d: ledit(d, "docker-update-kill.log", lambda ls: ls[1:]))
+kfails("a killed run with no rollback command", K_ROLLBACK, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(rollback_command="")))
+kfails("a rollback command to another version than the start", K_ROLLBACK, lambda d: jedit(d, "kill-status-final.json",
+       lambda j: final(j).update(rollback_command="sudo apt-get install --allow-downgrades docker-ce=5:29.7.0-1~ubuntu.24.04~noble")))
+kfails("a rollback command that is not an install", K_ROLLBACK, lambda d: jedit(d, "kill-status-final.json",
+       lambda j: final(j).update(rollback_command="sudo apt-get remove --allow-downgrades docker-ce=5:29.8.1-1~ubuntu.24.04~noble")))
+kfails("a rollback command to a package out of the allowlist", K_ROLLBACK, lambda d: jedit(d, "kill-status-final.json",
+       lambda j: final(j).update(rollback_command="sudo apt-get install --allow-downgrades docker-ce=5:29.8.1-1~ubuntu.24.04~noble bash=1")))
+kfails("dpkg with nothing wrong after the kill", K_AUDIT, lambda d: put(d, "kill-audit.txt", "exit 0\n\n"))
+kfails("dpkg --audit that says something else", K_AUDIT, lambda d: put(d, "kill-audit.txt", "exit 0\nnothing to see here\n"))
+kfails("a half-finished install that the repair does not complete", K_REPAIR, lambda d: put(d, "kill-audit-after.txt", "exit 0\n" + read_file(d, "kill-audit.txt").split("\n", 1)[1]))
+kfails("a repair after which Docker does not answer", K_REPAIR, lambda d: put(d, "kill-docker", "no\n"))
+kfails("a repair that fails twice and leaves dpkg unhappy", K_REPAIR, lambda d: (put(d, "kill-repair-2.exit", "100\n"), put(d, "kill-audit-after.txt", "exit 0\nsomething is still half configured\n"))[0],
+       extra=["exit 100, dpkg --audit then something is still half configured"])
+
+# the kill -9 injection is judged only where it was asked for, and it is a run that proves nothing when it did not catch dpkg
+KILLSILENT = ("kill -9",)
+invalid("a kill that left no record", "kill-hit is missing: the kill -9 injection did not run", lambda d: remove(d, "kill-hit"), leg="minor", silent=KILLSILENT, spec=KILL_MINOR)
+invalid("a kill that came after the unit had ended", "the kill -9 never caught dpkg in a maintainer script", lambda d: put(d, "kill-hit", "missed the unit ended (inactive) before dpkg ran a maintainer script of Docker's\n"),
+        leg="minor", silent=KILLSILENT, spec=KILL_MINOR)
+invalid("a kill that waited for ever", "the kill -9 never caught dpkg in a maintainer script", lambda d: put(d, "kill-hit", "missed no maintainer script of Docker's ran within 900 s\n"),
+        leg="minor", silent=KILLSILENT, spec=KILL_MINOR)
+invalid("a kill whose systemctl failed", "the kill -9 never caught dpkg in a maintainer script", lambda d: put(d, "kill-hit", "missed systemctl kill failed\n"), leg="minor", silent=KILLSILENT, spec=KILL_MINOR)
+for gone in ("kill_post", "kill_killed", "kill_terminal"):
+    invalid("a timeline without the marker %s" % gone, "marker %s is missing from the timeline" % gone, lambda d, gone=gone: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if "\t%s" % gone not in ln]),
+            leg="minor", silent=KILLSILENT, spec=KILL_MINOR)
+invalid("a killed run that was not polled", "kill-status.jsonl is missing or holds no status sample", lambda d: remove(d, "kill-status.jsonl"), leg="minor", silent=("kill -9: the run reaches", "kill -9: the status endpoint"), spec=KILL_MINOR)
+invalid("a killed run whose poll holds nothing readable", "kill-status.jsonl is missing or holds no status sample", lambda d: put(d, "kill-status.jsonl", "not a sample\n"), leg="minor",
+        silent=("kill -9: the run reaches", "kill -9: the status endpoint"), spec=KILL_MINOR)
+invalid("a killed run with no last status", "kill-status-final.json holds no status", lambda d: remove(d, "kill-status-final.json"), leg="minor", silent=("kill -9: the run is reported", "kill -9: the rollback"), spec=KILL_MINOR)
+invalid("a killed run with no log", "docker-update-kill.log was not collected", lambda d: remove(d, "docker-update-kill.log"), leg="minor", silent=("kill -9: the log",), spec=KILL_MINOR)
+invalid("a kill POST that was never made", "no answer was recorded for kill-post", lambda d: remove(d, "kill-post.code", "kill-post.json"), leg="minor", silent=("kill -9: the POST",), spec=KILL_MINOR)
+invalid("a box that was not put back for the kill", "the kill -9 injection cannot run", lambda d: jedit(d, "kill-packages.json", lambda j: update(j).update(available=False, refusal="plan")), leg="minor", spec=KILL_MINOR)
+for gone in ("kill-audit.txt", "kill-audit-1.txt", "kill-audit-after.txt"):
+    invalid("no %s" % gone, "%s is missing or not a recorded dpkg --audit" % gone, lambda d, gone=gone: remove(d, gone), leg="minor", silent=("kill -9: dpkg --audit", "kill -9: after"), spec=KILL_MINOR)
+invalid("a dpkg --audit without its exit status", "kill-audit.txt is missing or not a recorded dpkg --audit", lambda d: put(d, "kill-audit.txt", "The following packages are only half installed\n"), leg="minor",
+        silent=("kill -9: dpkg --audit",), spec=KILL_MINOR)
+invalid("a repair that was not recorded", "the repair after the kill -9 injection was not recorded", lambda d: remove(d, "kill-repair-1.exit"), leg="minor", silent=("kill -9: after",), spec=KILL_MINOR)
+invalid("a repair whose second step was not recorded", "the repair after the kill -9 injection was not recorded", lambda d: put(d, "kill-repair-2.exit", ""), leg="minor", silent=("kill -9: after",), spec=KILL_MINOR)
+invalid("a repair after which nobody looked at Docker", "the repair after the kill -9 injection was not recorded", lambda d: remove(d, "kill-docker"), leg="minor", silent=("kill -9: after",), spec=KILL_MINOR)
+case("a report asked to judge a kill on the major leg", 1, ["INVALID RUN", "the kill -9 injection belongs to a minor leg"], [], args=["kill"])
+case("a report given an option it does not know", 1, ["INVALID RUN", "does not know the option 'sideways'"], [], args=["sideways"], leg="minor")
+case("a guest that killed the unit and a report that was not asked to judge it", 1, ["INVALID RUN", "kill-hit exists: the guest ran the kill -9 injection and the report was not asked to judge it"],
+     ["**FAIL** kill -9"], leg="minor", spec=KILL_MINOR, args=[])
+case("a report asked for the kill when the guest did not do it", 1, ["INVALID RUN", "kill-hit is missing: the kill -9 injection did not run"], ["**FAIL** kill -9"], leg="minor", args=["kill"])
 
 # what dpkg did during the run: the plan against the packages that really came and went
 V_REMOVED = "the run removed no package"
@@ -935,6 +1073,7 @@ else:
     pins_cases = [
         ("the pins of the marker, in order", [QUEUED, PREFIX + "STARTED " + NONCE + " t", PREV_LINE + " " + DOCKER_PIN + " containerd.io=1.7.27-1"], [DOCKER_PIN, "containerd.io=1.7.27-1"]),
         ("a marker with no pin", [QUEUED, PREV_LINE], []),
+        ("only the first marker counts, as in the core", [QUEUED, PREV_LINE + " " + DOCKER_PIN, PREV_LINE + " containerd.io=1.7.27-1"], [DOCKER_PIN]),
         ("a marker with another nonce is somebody else's text", [QUEUED, PREFIX + "PREVIOUS " + FORGED + " " + DOCKER_PIN], []),
         ("words that are not pins are dropped", [QUEUED, PREV_LINE + " docker-ce=1 $(reboot) a;b=1 =2 x=y docker-ce-cli=5:2-1"], ["docker-ce=1", "docker-ce-cli=5:2-1"]),
         ("the nonce is the first line's: a QUEUED line further down is ignored", ["Reading package lists...", QUEUED, PREV_LINE + " " + DOCKER_PIN], []),
@@ -1025,6 +1164,217 @@ else:
                   command="sudo apt-get install --allow-downgrades " + two_pins, exit_is="100", calls=["install -y -q --allow-downgrades"])
     rollback_case("a PREVIOUS without a pin leaves nothing to run", [QUEUED, PREV_LINE], command="none", exit_is="not-run", ran=False, no_calls=["apt-get"])
     rollback_case("a PREVIOUS of another nonce leaves nothing to run", [QUEUED, PREFIX + "PREVIOUS " + FORGED + " " + two_pins], command="none", exit_is="not-run", ran=False, no_calls=["apt-get"])
+
+    # the kill -9 injection and the repair after it, with stand-ins for pgrep, systemctl, dpkg, apt-get and docker
+    kfakes = {
+        "pgrep": ("#!/bin/sh\nn=$(cat \"$FAKE/pgrep.n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n >\"$FAKE/pgrep.n\"\necho \"pgrep $*\" >>\"$FAKE/calls\"\n"
+                  "if [ \"${FAKE_PGREP_AT:-0}\" -gt 0 ] && [ \"$n\" -ge \"$FAKE_PGREP_AT\" ]; then echo '4242 /bin/sh /var/lib/dpkg/info/containerd.io.prerm upgrade 1.7.27-1'; exit 0; fi\nexit 1\n"),
+        "systemctl": ("#!/bin/sh\necho \"systemctl $*\" >>\"$FAKE/calls\"\ncase \"$1\" in\nis-active) n=$(cat \"$FAKE/active.n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n >\"$FAKE/active.n\"\n"
+                      "  if [ \"$n\" -le \"${FAKE_ACTIVE_CALLS:-0}\" ]; then echo active; exit 0; fi; echo inactive; exit 3 ;;\nkill) exit \"${FAKE_KILL_RC:-0}\" ;;\nesac\n"),
+        "dpkg": ("#!/bin/sh\necho \"dpkg $*\" >>\"$FAKE/calls\"\ncase \"$1\" in\n--audit) if [ -n \"$FAKE_AUDIT\" ]; then printf '%s\\n' \"$FAKE_AUDIT\"; fi; exit \"${FAKE_AUDIT_RC:-0}\" ;;\n"
+                 "--configure) exit \"${FAKE_CONFIGURE_RC:-0}\" ;;\nesac\n"),
+        "apt-get": "#!/bin/sh\necho \"apt-get $*\" >>\"$FAKE/calls\"\nexit \"${FAKE_APT_RC:-0}\"\n",
+        "docker": "#!/bin/sh\nexit 0\n",
+    }
+    HALF = "The following packages are only half installed, due to problems during installation:\n containerd.io  Open Source Container Runtime"
+
+    def kill_case(label, snippet, env_extra=None, files=None, no_files=(), calls=(), no_calls=(), ordered=()):
+        """runs a snippet in a bash that has sourced the guest script, with the stand-ins in front; files maps a file of $OUT to its exact content, None to its absence"""
+        count[0] += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            fake, out = os.path.join(tmp, "fake").replace("\\", "/"), os.path.join(tmp, "out").replace("\\", "/")
+            os.mkdir(fake)
+            os.mkdir(out)
+            for name, text in kfakes.items():
+                with open(os.path.join(fake, name), "w", newline="\n") as f:
+                    f.write(text)
+                os.chmod(os.path.join(fake, name), 0o755)
+            env = dict(os.environ, PATH=fake + os.pathsep + os.environ["PATH"], FAKE=fake, **(env_extra or {}))
+            p = subprocess.run([BASH, "-c", 'source "$1"; OUT="$2"; APT=(env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3); '
+                                'set -euo pipefail; ' + snippet + "; echo returned", "_", SCRIPT.replace("\\", "/"), out], capture_output=True, text=True, env=env)
+
+            def slurp(name, where):
+                try:
+                    with open(os.path.join(where, name)) as f:
+                        return f.read().replace("\r", "")
+                except OSError:
+                    return None
+            seen = slurp("calls", fake) or ""
+            problems = []
+            if "returned" not in p.stdout:
+                problems.append("did not return: %r %r" % (p.stdout[-300:], p.stderr[-300:]))
+            for name, want in (files or {}).items():
+                got = slurp(name, out)
+                if want is None and got is not None:
+                    problems.append("%s should not be there" % name)
+                elif want is not None and (got is None or not (got.startswith(want[:-1]) if want.endswith("*") else got == want)):
+                    problems.append("%s is %r, wanted %r" % (name, got, want))
+            problems += ["missing call %r in %r" % (s, seen) for s in calls if s not in seen]
+            problems += ["should not have called %r in %r" % (s, seen) for s in no_calls if s in seen]
+            if ordered and not all(seen.find(a) != -1 and seen.find(a) < seen.find(b) for a, b in zip(ordered, ordered[1:])):
+                problems.append("the calls are not in the order %r: %r" % (ordered, seen))
+            if problems:
+                failures.append("%s: %s\n%s" % (label, "; ".join(problems), p.stderr[-400:]))
+            else:
+                print("ok: " + label)
+
+    # what counts as dpkg being in the middle of one of Docker's packages: a command line, as pgrep -f sees it
+    for line, want in (("/bin/sh /var/lib/dpkg/info/docker-ce.postinst configure 5:29.8.0-1~debian.11~bullseye", True),
+                       ("/bin/sh /var/lib/dpkg/info/containerd.io.prerm upgrade 2.1.4-1", True),
+                       ("/bin/sh /var/lib/dpkg/info/docker-ce-cli.preinst upgrade 5:28.0.4-1~debian.11~bullseye", True),
+                       ("/bin/sh /var/lib/dpkg/info/docker-ce-rootless-extras.postrm upgrade 5:28.0.4-1~debian.11~bullseye", True),
+                       ("/var/lib/dpkg/info/docker-ce.list", False),
+                       ("/bin/sh /var/lib/dpkg/info/containerdxio.postinst configure", False),
+                       ("/bin/sh /var/lib/dpkg/info/libc6.postinst configure 2.31-13", False),
+                       ("/bin/sh /var/lib/dpkg/info/docker-ce-cli.md5sums", False),
+                       ("bash docker-update-proof.sh minor", False)):
+        count[0] += 1
+        got = bash_run('printf "%s\\n" "$1" | grep -Eq "$MAINTAINER_RE"', line).returncode == 0
+        if got != want:
+            failures.append("MAINTAINER_RE %s %r" % ("misses" if want else "matches", line))
+        else:
+            print("ok: MAINTAINER_RE %s %s" % ("matches" if want else "leaves alone", line))
+
+    KILLCALL = "systemctl kill --signal=KILL casaos-docker-update.service"
+    catch = 'catch_maintainer "$OUT/kill-hit" %d'
+    kill_case("catch_maintainer kills the whole unit when dpkg runs a maintainer script of Docker's, after waiting for it", catch % 30,
+              dict(FAKE_PGREP_AT="5", FAKE_ACTIVE_CALLS="99"), files={"kill-hit": "caught *"}, calls=[KILLCALL, "pgrep -af /var/lib/dpkg/info/(docker-ce|docker-ce-cli|containerd\\.io|docker-ce-rootless-extras)"])
+    kill_case("catch_maintainer says which command it caught", 'catch_maintainer "$OUT/kill-hit" 30; cut -d" " -f1,3- "$OUT/kill-hit" >"$OUT/said"; true',
+              dict(FAKE_PGREP_AT="1", FAKE_ACTIVE_CALLS="99"), files={"said": "caught 4242 /bin/sh /var/lib/dpkg/info/containerd.io.prerm upgrade 1.7.27-1\n"})
+    kill_case("catch_maintainer does not kill a unit that has ended", catch % 30, dict(FAKE_PGREP_AT="0", FAKE_ACTIVE_CALLS="2"),
+              files={"kill-hit": "missed the unit ended (inactive) before dpkg ran a maintainer script of Docker's\n"}, no_calls=["systemctl kill"])
+    kill_case("catch_maintainer gives a unit that is not up yet time to appear", catch % 1, dict(FAKE_PGREP_AT="0", FAKE_ACTIVE_CALLS="0"),
+              files={"kill-hit": "missed no maintainer script of Docker's ran within 1 s\n"}, no_calls=["systemctl kill"])
+    kill_case("catch_maintainer counts a unit that never came up as gone, once its time to appear is over", catch % 20, dict(FAKE_PGREP_AT="0", FAKE_ACTIVE_CALLS="0", UNIT_GRACE="1"),
+              files={"kill-hit": "missed the unit ended (inactive) before dpkg ran a maintainer script of Docker's\n"}, no_calls=["systemctl kill"])
+    kill_case("catch_maintainer gives up when no maintainer script runs in time", catch % 1, dict(FAKE_PGREP_AT="0", FAKE_ACTIVE_CALLS="999"),
+              files={"kill-hit": "missed no maintainer script of Docker's ran within 1 s\n"}, no_calls=["systemctl kill"])
+    kill_case("catch_maintainer says when systemctl could not kill", catch % 30, dict(FAKE_PGREP_AT="1", FAKE_ACTIVE_CALLS="99", FAKE_KILL_RC="1"),
+              files={"kill-hit": "missed systemctl kill failed\n"}, calls=[KILLCALL])
+    kill_case("audit_dpkg records nothing wrong as an exit status and no text", 'audit_dpkg "$OUT/a"', files={"a": "exit 0\n"}, calls=["dpkg --audit"])
+    kill_case("audit_dpkg records what dpkg says of a package half installed", 'audit_dpkg "$OUT/a"', dict(FAKE_AUDIT=HALF), files={"a": "exit 0\n" + HALF + "\n"})
+    kill_case("audit_dpkg records an exit status that is not 0", 'audit_dpkg "$OUT/a"', dict(FAKE_AUDIT=HALF, FAKE_AUDIT_RC="1"), files={"a": "exit 1\n" + HALF + "\n"})
+    kill_case("repair_dpkg runs dpkg --configure -a, then apt-get -f install, and looks at dpkg after each", 'repair_dpkg kill',
+              dict(FAKE_AUDIT=HALF), files={"kill-repair-1.exit": "0\n", "kill-repair-2.exit": "0\n", "kill-audit-1.txt": "exit 0\n" + HALF + "\n", "kill-audit-after.txt": "exit 0\n" + HALF + "\n", "kill-docker": "yes, after *"},
+              ordered=["dpkg --configure -a --force-confold", "dpkg --audit", "apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 -f install -y -q -o Dpkg::Options::=--force-confold", "systemctl start containerd.service docker.socket docker.service"],
+              no_calls=["--allow-downgrades", "dpkg --remove", "dpkg --purge"])
+    kill_case("repair_dpkg records the exit status of each step, and carries on after a step that fails", 'repair_dpkg kill', dict(FAKE_CONFIGURE_RC="1", FAKE_APT_RC="100"),
+              files={"kill-repair-1.exit": "1\n", "kill-repair-2.exit": "100\n", "kill-audit-1.txt": "exit 0\n", "kill-audit-after.txt": "exit 0\n", "kill-docker": "yes, after *"},
+              calls=["apt-get -o DPkg::Lock::Timeout=300"])
+    kill_case("repair_dpkg says when Docker does not answer", 'wait_docker() { return 1; }; repair_dpkg kill', files={"kill-docker": "no\n"})
+
+    # the kill belongs to a minor leg, and the guest says so before it touches anything
+    for label, env_extra, leg, want_text in (
+            ("the guest script refuses a PROOF_KILL_INSTALL that is not 1", {"PROOF_KILL_INSTALL": "2"}, "minor", "PROOF_KILL_INSTALL is 1 or empty"),
+            ("the guest script refuses the kill injection on the major leg", {"PROOF_KILL_INSTALL": "1", "DOCKER_FROM": "28.0.4"}, "major", "belongs to a minor leg"),
+            ("the guest script takes PROOF_KILL_INSTALL=1 on a minor leg (and then refuses a machine that is not disposable)", {"PROOF_KILL_INSTALL": "1"}, "minor", "disposable machine"),
+            ("the guest script takes an empty PROOF_KILL_INSTALL on a minor leg", {"PROOF_KILL_INSTALL": ""}, "minor", "disposable machine")):
+        count[0] += 1
+        env = {k: v for k, v in os.environ.items() if k not in ("PROOF_DISPOSABLE", "PROOF_KILL_INSTALL")}
+        env.update(env_extra)
+        p = subprocess.run([BASH, SCRIPT.replace("\\", "/"), leg], capture_output=True, text=True, env=env)
+        if p.returncode != 2 or want_text not in p.stderr:
+            failures.append("%s: %d %r" % (label, p.returncode, p.stderr[-300:]))
+        else:
+            print("ok: " + label)
+
+
+# ---- the workflow ---------------------------------------------------------------------------------------------------------------
+
+WORKFLOW = os.environ.get("WORKFLOW") or os.path.join(HERE, "..", ".github", "workflows", "docker-update-proof.yml")
+
+
+def workflow_text():
+    with open(WORKFLOW, newline="") as f:
+        return f.read().replace("\r\n", "\n")
+
+
+def workflow_matrix(text):
+    """the cells of the matrix, [dict]: the plain reading of its `include:` list (a cell starts at a `- `, values lose their quotes)"""
+    lines = text.split("\n")
+    start = next(i for i, ln in enumerate(lines) if ln.strip() == "include:")
+    base = len(lines[start]) - len(lines[start].lstrip())
+    cells = []
+    for ln in lines[start + 1:]:
+        if not ln.strip() or ln.strip().startswith("#"):
+            continue
+        if len(ln) - len(ln.lstrip()) <= base:
+            break
+        m = re.match(r"^\s*(- )?(\w+): (.*)$", ln)
+        if m:
+            if m.group(1):
+                cells.append({})
+            cells[-1][m.group(2)] = m.group(3).strip().strip("'\"")
+    return cells
+
+
+def workflow_runs(text):
+    """{step name: the script of its `run: |` block, without the indentation of the YAML}"""
+    lines = text.split("\n")
+    runs, name, i = {}, None, 0
+    while i < len(lines):
+        m = re.match(r"^\s*- name: (.*)$", lines[i])
+        if m:
+            name = m.group(1).strip()
+        m = re.match(r"^(\s*)run: \|\s*$", lines[i])
+        if m:
+            base, block = len(m.group(1)), []
+            i += 1
+            while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > base):
+                block.append(lines[i])
+                i += 1
+            indent = min(len(b) - len(b.lstrip()) for b in block if b.strip())
+            runs[name] = "\n".join(b[indent:] if b.strip() else "" for b in block).rstrip("\n") + "\n"
+            continue
+        i += 1
+    return runs
+
+
+def check(label, ok, detail=""):
+    count[0] += 1
+    if ok:
+        print("ok: " + label)
+    else:
+        failures.append("%s: %s" % (label, detail))
+
+
+wf = workflow_text()
+wf_cells = workflow_matrix(wf)
+wf_runs = workflow_runs(wf)
+check("the workflow has its run steps, each under a name of its own", len(wf_runs) >= 6 and all(wf_runs), sorted(wf_runs))
+check("the workflow asks for no permission but to read the repository", re.search(r"^permissions:\n  contents: read\n", wf, re.M) is not None and ": write" not in wf)
+check("no run block has a ${{ }} in it: what the matrix and the inputs say reaches a script through env", all("${{" not in script for script in wf_runs.values()),
+      [n for n, s in wf_runs.items() if "${{" in s])
+if have_bash():
+    for step, script in sorted(wf_runs.items()):
+        count[0] += 1
+        p = subprocess.run([BASH, "-n"], input=script, capture_output=True, text=True)
+        if p.returncode != 0:
+            failures.append("the run block of %r does not parse as bash: %s" % (step, p.stderr[-300:]))
+        else:
+            print("ok: the run block of %r parses as bash" % step)
+by_id = {"debian": ("SHA512SUMS", "sha512sum"), "ubuntu": ("SHA256SUMS", "sha256sum")}
+for cell in wf_cells:
+    where = "%s on %s %s" % (cell.get("leg"), cell.get("id"), cell.get("version"))
+    check("the %s cell fetches the image it names, with the sums its distribution publishes" % where,
+          cell.get("id") in by_id and (cell.get("sums"), cell.get("algo")) == by_id[cell["id"]] and "%s-%s-" % (cell["id"], cell["version"]) in cell.get("image", "")
+          and cell.get("base", "").startswith("https://") and cell.get("leg") in ("major", "minor"), cell)
+kills = [c for c in wf_cells if c.get("kill_install")]
+check("one cell kills the unit in the middle of the install, and it is a minor one", len(kills) == 1 and kills[0].get("leg") == "minor" and kills[0].get("kill_install") == "1", kills)
+prove = next((s for n, s in wf_runs.items() if n == "Prove it"), "")
+report_step = next((s for n, s in wf_runs.items() if n == "Report"), "")
+check("the guest is told to kill the unit where the cell says so", "PROOF_KILL_INSTALL='${KILL_INSTALL}'" in prove and "KILL_INSTALL: ${{ matrix.kill_install }}" in wf)
+check("the report is told to expect the kill where the guest was", "${KILL_INSTALL:+kill}" in report_step)
+try:
+    import yaml
+except ImportError:
+    print("skip: PyYAML is not here, the workflow was read by the plain parser only")
+else:
+    doc = yaml.safe_load(wf)
+    steps = doc["jobs"]["vm"]["steps"]
+    check("PyYAML reads the workflow, with the matrix and the run blocks the plain parser found",
+          doc.get("permissions") == {"contents": "read"} and set(doc[True]) >= {"workflow_dispatch"} and [{k: str(v) for k, v in c.items()} for c in doc["jobs"]["vm"]["strategy"]["matrix"]["include"]] == wf_cells
+          and {s["name"]: s["run"] for s in steps if "run" in s} == wf_runs, "the two readings differ")
 
 if failures:
     print("\n".join(failures), file=sys.stderr)
