@@ -104,6 +104,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.20
+
+**The Docker line is honest about a Docker that is behind**: on hold or kept back by apt, it names the newer version that exists instead of saying "up to date".
+
 ## What is in v0.5.19
 
 **System packages leaves Docker alone** and shows it on a line of its own, with the command to update it yourself: updating Docker restarts it and stops every container until it is back, and that update used to do it without saying so.
