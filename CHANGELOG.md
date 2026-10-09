@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.20] - 2026-10-09
+
+Components: CasaOS `v0.4.66`, CasaOS-UI `v0.4.80`. Unchanged from v0.5.19: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The Docker line no longer says "up to date" of a Docker that is behind.** A `docker-ce` on hold (`apt-mark hold`), or kept back by apt, has no update listed, and v0.5.19 took that for "nothing to update" and said Docker was up to date though a newer version existed in its package sources. The check now reads the newest version apt knows of; when it is later than the installed one and no update is listed for it, the line says which version exists and whether the package is on hold, and the command to type carries `--allow-change-held-packages`, which apt needs to upgrade a held package. "Up to date" became "No newer Docker is offered by this machine's package sources", which is all apt can vouch for.
+
 ## [0.5.19] - 2026-10-08
 
 Components: CasaOS `v0.4.65`, CasaOS-UI `v0.4.79`. Unchanged from v0.5.18: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
