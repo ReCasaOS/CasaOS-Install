@@ -275,6 +275,32 @@ installed() { # <package>
     [[ "${st}" == ?i* ]]
 }
 
+# box_facts: the versions of what the update leans on, for the report to show: the apt whose `-s` the core reads, the systemd that rewrites the
+# command line of the unit, dpkg, and the utilities the unit's script calls (a distribution may ship others than GNU's: Ubuntu 26.04 may have
+# uutils' coreutils), and what /bin/sh is, which runs the script
+box_facts() {
+    local t
+    {
+        echo "apt $(apt-get --version 2>&1 | head -n1)"
+        echo "dpkg $(dpkg --version 2>&1 | head -n1)"
+        echo "systemd $(systemctl --version 2>&1 | head -n1)"
+        for t in timeout date sort sleep grep; do echo "${t} $("${t}" --version 2>&1 | head -n1)"; done
+        echo "sh $(readlink -f /bin/sh)"
+    } >"${OUT}/box-facts" 2>&1 || true
+}
+
+# apt_simulation: the simulation the core reads, as this system's apt prints it (LC_ALL=C, the installed packages of the engine only, as the
+# core names them), with its exit status on the last line. The report sets it against what apt offers; the file is also the fixture to give
+# the core's parser for this apt.
+apt_simulation() {
+    local rc=0 names=() n
+    for n in docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin docker-model-plugin; do
+        if installed "${n}"; then names+=("${n}"); fi
+    done
+    LC_ALL=C apt-get -s --no-remove -o Debug::NoLocking=true -o Dpkg::Use-Pty=0 install --only-upgrade --no-install-recommends "${names[@]}" >"${OUT}/apt-simulation.txt" 2>&1 || rc=$?
+    echo "# exit ${rc}" >>"${OUT}/apt-simulation.txt"
+}
+
 snapshot() { # <name>
     local f="${OUT}/snapshot-$1.txt" u ts ep
     {
@@ -745,6 +771,8 @@ main() {
         echo "candidate $(apt-cache policy docker-ce | awk '/Candidate:/ {print $2; exit}')"
     } >"${OUT}/apt-docker-ce.txt"
     cat "${OUT}/apt-docker-ce.txt"
+    box_facts
+    apt_simulation
     snapshot before
     images_dump before
 

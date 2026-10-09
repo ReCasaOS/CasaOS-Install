@@ -26,6 +26,9 @@ The legs:
             status says (failed, `no_result` or `install`), what dpkg --audit says, and that the repair the
             dashboard will name (dpkg --configure -a, then apt-get -f install) completes the install.
 
+The legs run on more than one system: the report shows the tools of the one it judges (apt, systemd, dpkg, the
+utilities the unit's script calls) and checks that this system's apt prints its simulation in the form the core reads.
+
 The plan may hold packages the box does not have (the dependencies of the new Docker). It is judged on
 what the box did with it: the packages dpkg had installed just before the POST and just after the run
 (dpkg-before.tsv, dpkg-after.tsv) must differ by exactly the plan's new packages (added) and its upgrades,
@@ -59,6 +62,7 @@ PIN_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")  
 EMPTY_ENV_RE = re.compile(r"environment variable name evaluates to an empty string", re.I)
 V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
 V_ROLLBACK = "rollback after the major jump"
+V_SIM = "apt's simulation exits 0 and names docker-ce from the installed version to the one on offer, in the form the core reads"
 K_POST = "kill -9: the POST starts the run"
 K_TERMINAL = "kill -9: the run reaches a terminal state"
 K_ANSWER = "kill -9: the status endpoint keeps answering while dpkg is half-finished"
@@ -368,9 +372,23 @@ for line in read("apt-docker-ce.txt").splitlines():
 installed_full, candidate_full = apt.get("installed"), apt.get("candidate")
 expected_to = engine(candidate_full)
 
-for need in ("start-version", "apt-docker-ce.txt", "timeline.tsv", "snapshot-before.txt", "snapshot-after.txt", "dpkg-before.tsv", "dpkg-after.tsv", "dependency-path"):
+for need in ("start-version", "apt-docker-ce.txt", "timeline.tsv", "snapshot-before.txt", "snapshot-after.txt", "dpkg-before.tsv", "dpkg-after.tsv", "dependency-path",
+             "box-facts", "apt-simulation.txt"):
     if not read(need).strip():
         invalid("%s is missing or empty: the run did not get that far" % need)
+# the tools of this system: the apt whose `-s` the core reads, the systemd that rewrites the unit's command line, and the utilities the unit's script calls
+facts = {}
+for line in read("box-facts").splitlines():
+    k_, _, v_ = line.partition(" ")
+    facts[k_] = v_.strip()
+if read("box-facts").strip():
+    for k_ in ("apt", "dpkg", "systemd", "timeout", "date", "sort", "sleep", "grep", "sh"):
+        if not facts.get(k_):
+            invalid("box-facts has no %s line: the tools of this system were not recorded" % k_)
+sim = read("apt-simulation.txt")
+sim_exit = re.search(r"^# exit (\d+)$", sim, re.M)
+if sim.strip() and not sim_exit:
+    invalid("apt-simulation.txt has no exit status line: the simulation was not recorded to its end")
 # a poll that left no sample (a file that is missing, empty, or holds nothing but lines that are not samples) judges nothing: the verdicts
 # that read it would be dropped without a word
 if not samples:
@@ -455,6 +473,9 @@ P("| system | %s |" % (read("os").strip() or "?"))
 P("| leg | %s: %s |" % (leg, "a major jump, the owner's case" if leg == "major" else "the previous patch to the current one, then a failure injected"))
 P("| docker-ce at the start | %s (daemon %s) |" % (installed_full or "?", before.get("docker", "?")))
 P("| docker-ce on offer | %s |" % (candidate_full or "?"))
+for key_, label_ in (("apt", "apt"), ("systemd", "systemd"), ("dpkg", "dpkg"), ("sh", "/bin/sh")):
+    P("| %s | %s |" % (label_, facts.get(key_, "?")))
+P("| the utilities the unit's script calls | %s |" % "; ".join("%s: %s" % (k_, facts.get(k_, "?")) for k_ in ("timeout", "date", "sort", "sleep", "grep")))
 P("| packages before | %s |" % before.get("packages", "?"))
 P("| packages after | %s |" % after.get("packages", "?"))
 P("| new packages the update installed | %s |" % (("; ".join("%s %s" % (n, after_pk[n]) for n in added) or "none (no new dependency was exercised)") if before_pk and after_pk else "?"))
@@ -478,6 +499,10 @@ verdict("every new package in the plan has a valid name and version, is not a di
         on(plan_seen, not bad_new and len(new_pk) <= MAX_NEW),
         "%d new package%s: %s%s" % (len(new_pk), "" if len(new_pk) == 1 else "s", ", ".join(fmt(p) for p in new_pk) or "none",
                                     "; not acceptable: " + ", ".join(fmt(p) for p in bad_new) if bad_new else ""))
+# apt's own words, in the form the core reads them (dockerpkg's planInstPattern): this system's apt may print them differently from the one the core was written against
+sim_inst = {m.group(1): (m.group(2), m.group(3)) for m in re.finditer(r"^Inst (\S+)(?:\s+\[([^\]]*)\])?(?:\s+\((\S+))?", sim, re.M)}
+verdict(V_SIM, on(sim.strip() and sim_exit and installed_full and candidate_full, bool(sim_exit) and sim_exit.group(1) == "0" and sim_inst.get("docker-ce") == (installed_full, candidate_full)),
+        "exit %s; Inst docker-ce: %s (wanted %s)" % (sim_exit.group(1) if sim_exit else "?", sim_inst.get("docker-ce"), (installed_full, candidate_full)))
 dce = next((p for p in plan if isinstance(p, dict) and p.get("name") == "docker-ce"), {})
 verdict("the plan's docker-ce is the one dpkg has and the one apt offers",
         on(code is not None, dce.get("current_version") == installed_full and dce.get("candidate_version") == candidate_full),

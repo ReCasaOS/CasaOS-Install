@@ -20,13 +20,18 @@ name: docker-update-proof
 #           the verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with
 #           the containers, the database's volume and the images intact. A FAIL there is meant to turn
 #           the leg red: it means that the core must not offer the rollback command after a major jump.
-#   minor   Ubuntu 24.04: the previous patch of the current Docker minor (found at run time,
-#           not written down), the current one on offer; then the unit killed with SIGKILL in the
-#           middle of the install (as soon as dpkg runs a maintainer script of Docker's): the status
-#           has to say failed (`no_result` or `install`), dpkg --audit has to show the half-finished
-#           install, and the repair the dashboard names (dpkg --configure -a, then apt-get -f install)
-#           has to complete it; and last, with the box put back on the previous patch and dockerd
-#           made unable to start, a second update that has to fail with `daemon`.
+#   minor   Ubuntu 24.04, Debian 12, Debian 13 and Ubuntu 26.04 (the images install-check.yml boots):
+#           the previous patch of the current Docker minor (found at run time, not written down), the
+#           current one on offer; and last, with the box put back on the previous patch and dockerd
+#           made unable to start, a second update that has to fail with `daemon`. Each system runs its
+#           own apt, systemd and coreutils: the report lists them, and says whether this apt prints
+#           its simulation in the form the core reads, which is where an apt of another generation
+#           (Debian 12's, Debian 13's, Ubuntu 26.04's) would show. The unit's script calls timeout,
+#           date, sort, sleep and grep, which Ubuntu 26.04 may take from uutils. Ubuntu 24.04 alone also
+#           kills the unit with SIGKILL in the middle of the install (as soon as dpkg runs a maintainer
+#           script of Docker's), before the last failure: the status has to say failed (`no_result` or
+#           `install`), dpkg --audit has to show the half-finished install, and the repair the
+#           dashboard names (dpkg --configure -a, then apt-get -f install) has to complete it.
 #
 # What each leg asserts (the report lists every verdict by name):
 #   the check offers the update (versions, major_jump, the plan and its plan_id); the plan
@@ -94,6 +99,33 @@ jobs:
             sums: SHA256SUMS
             algo: sha256sum
             kill_install: '1'
+          - leg: minor
+            name: Debian 12
+            label: the previous patch to the current one, then a Docker that cannot start
+            id: debian
+            version: '12'
+            base: https://cloud.debian.org/images/cloud/bookworm/latest
+            image: debian-12-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+          - leg: minor
+            name: Debian 13
+            label: the previous patch to the current one, then a Docker that cannot start
+            id: debian
+            version: '13'
+            base: https://cloud.debian.org/images/cloud/trixie/latest
+            image: debian-13-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+          - leg: minor
+            name: Ubuntu 26.04
+            label: the previous patch to the current one, then a Docker that cannot start
+            id: ubuntu
+            version: '26.04'
+            base: https://cloud-images.ubuntu.com/releases/26.04/release
+            image: ubuntu-26.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
@@ -215,7 +247,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: docker-update-proof-${{ matrix.leg }}
+          name: docker-update-proof-${{ matrix.leg }}-${{ matrix.id }}-${{ matrix.version }}
           path: |
             out
             serial.log

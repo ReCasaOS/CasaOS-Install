@@ -141,6 +141,18 @@ def marker(kind, rest=""):
 
 
 IMAGES = "sha256:1a2b3c busybox:latest\nsha256:4d5e6f nginx:alpine\n"
+BOX_FACTS = ("apt apt 2.2.4 (amd64)\ndpkg Debian 'dpkg' package management program version 1.20.13 (amd64).\nsystemd systemd 247 (247.3-7+deb11u6)\n"
+             "timeout timeout (GNU coreutils) 8.32\ndate date (GNU coreutils) 8.32\nsort sort (GNU coreutils) 8.32\nsleep sleep (GNU coreutils) 8.32\n"
+             "grep grep (GNU grep) 3.6\nsh /usr/bin/dash\n")
+
+
+def simulation_text(s):
+    """what `apt-get -s ... install --only-upgrade` prints for the plan, with the exit status the harness adds"""
+    lines = ["Reading package lists...", "Building dependency tree...", "The following packages will be upgraded:"]
+    lines += ["Inst %s [%s] (%s Docker CE:stable [amd64])" % (n, c, k) for n, c, k in s["plan"]]
+    lines += ["Inst %s (%s Debian:11.11/oldstable [amd64])" % (n, k) for n, k in s["new"]]
+    lines += ["Conf %s (%s Docker CE:stable [amd64])" % (n, k) for n, c, k in s["plan"]]
+    return "\n".join(lines) + "\n# exit 0\n"
 JOURNAL = ("Oct 09 10:02:01 box systemd[1]: Started CasaOS Docker update.\n"
            "Oct 09 10:04:11 box systemd[1]: casaos-docker-update.service: Deactivated successfully.\n")
 EMPTY_ENV = "Oct 09 10:02:01 box systemd[1]: casaos-docker-update.service: Invalid environment variable name evaluates to an empty string: Package\n"
@@ -274,6 +286,8 @@ def build(d, leg, s=None):
     put(d, "dependency-path", s["dependency"])
     put(d, "unit-journal.txt", JOURNAL)
     put(d, "unit-journal-end.txt", JOURNAL)
+    put(d, "box-facts", BOX_FACTS)
+    put(d, "apt-simulation.txt", simulation_text(s))
 
     if s.get("kill"):
         # the unit killed while dpkg ran a maintainer script of containerd.io's: no terminal marker, no INSTALLED, a package half installed
@@ -481,6 +495,23 @@ case("ten new packages are within the bound", 0, ["Docker update proof, major le
 fails("eleven new packages are not", V_NEW, None, spec=many_new(11))
 case("a package update in the way may be refused as `maintenance` or as `running`", 0, ["PASS"], ["**FAIL**"],
      mutate=lambda d: api(d, "unit-post", 409, refusal("maintenance")))
+
+# apt's own words: the form the core reads, on the apt of each system
+V_SIM = "apt's simulation exits 0 and names docker-ce from the installed version to the one on offer, in the form the core reads"
+fails("an apt simulation that fails", V_SIM, lambda d: replace(d, "apt-simulation.txt", "# exit 0", "# exit 100"), extra=["exit 100"])
+fails("an apt simulation that does not mention docker-ce", V_SIM, lambda d: ledit(d, "apt-simulation.txt", lambda ls: [ln for ln in ls if not ln.startswith("Inst docker-ce ")]))
+fails("an apt simulation that offers another version", V_SIM, lambda d: replace(d, "apt-simulation.txt", "(5:29.8.0-1~debian.11~bullseye Docker CE", "(5:29.9.9-1~debian.11~bullseye Docker CE", 1))
+fails("an apt simulation that replaces another version", V_SIM, lambda d: replace(d, "apt-simulation.txt", "Inst docker-ce [5:28.0.4-1~debian.11~bullseye]", "Inst docker-ce [5:28.0.3-1~debian.11~bullseye]"))
+fails("an apt that no longer prints the version it replaces in brackets", V_SIM, lambda d: replace(d, "apt-simulation.txt", "Inst docker-ce [5:28.0.4-1~debian.11~bullseye] (", "Inst docker-ce 5:28.0.4-1~debian.11~bullseye ("))
+fails("an apt that prints the candidate without its origin", V_SIM, lambda d: replace(d, "apt-simulation.txt", "(5:29.8.0-1~debian.11~bullseye Docker CE:stable [amd64])\nInst docker-ce-cli", "(5:29.8.0-1~debian.11~bullseye)\nInst docker-ce-cli"))
+invalid("an apt simulation with no exit status", "apt-simulation.txt has no exit status line", lambda d: replace(d, "apt-simulation.txt", "# exit 0\n", ""), silent=(V_SIM,))
+invalid("no apt simulation", "apt-simulation.txt is missing or empty", lambda d: remove(d, "apt-simulation.txt"), silent=(V_SIM,))
+invalid("no record of the tools of the system", "box-facts is missing or empty", lambda d: remove(d, "box-facts"))
+for tool in ("apt", "dpkg", "systemd", "timeout", "date", "sort", "sleep", "grep", "sh"):
+    invalid("no record of %s" % tool, "box-facts has no %s line" % tool, lambda d, tool=tool: ledit(d, "box-facts", lambda ls: [ln for ln in ls if not ln.startswith(tool + " ")]))
+case("the tools of the system are in the report, whatever coreutils the system has", 0, ["| apt | apt 2.2.4 (amd64) |", "| systemd | systemd 247 (247.3-7+deb11u6) |", "| /bin/sh | /usr/bin/dash |",
+     "timeout (uutils coreutils) 0.2.2", "sort (uutils coreutils) 0.2.2"], ["**FAIL**", "INVALID"],
+     mutate=lambda d: put(d, "box-facts", BOX_FACTS.replace("(GNU coreutils) 8.32", "(uutils coreutils) 0.2.2")))
 
 # the check
 fails("the check does not offer the update", "GET /v1/sys/packages offers the Docker update", lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(available=False, refusal="origin")))
@@ -1178,14 +1209,14 @@ else:
     }
     HALF = "The following packages are only half installed, due to problems during installation:\n containerd.io  Open Source Container Runtime"
 
-    def kill_case(label, snippet, env_extra=None, files=None, no_files=(), calls=(), no_calls=(), ordered=()):
+    def kill_case(label, snippet, env_extra=None, files=None, no_files=(), calls=(), no_calls=(), ordered=(), fakes=None):
         """runs a snippet in a bash that has sourced the guest script, with the stand-ins in front; files maps a file of $OUT to its exact content, None to its absence"""
         count[0] += 1
         with tempfile.TemporaryDirectory() as tmp:
             fake, out = os.path.join(tmp, "fake").replace("\\", "/"), os.path.join(tmp, "out").replace("\\", "/")
             os.mkdir(fake)
             os.mkdir(out)
-            for name, text in kfakes.items():
+            for name, text in dict(kfakes, **(fakes or {})).items():
                 with open(os.path.join(fake, name), "w", newline="\n") as f:
                     f.write(text)
                 os.chmod(os.path.join(fake, name), 0o755)
@@ -1263,6 +1294,44 @@ else:
               calls=["apt-get -o DPkg::Lock::Timeout=300"])
     kill_case("repair_dpkg says when Docker does not answer", 'wait_docker() { return 1; }; repair_dpkg kill', files={"kill-docker": "no\n"})
 
+    # the facts of the system and apt's own simulation, with stand-ins for apt-get, dpkg, dpkg-query and systemctl
+    ffakes = {
+        "apt-get": ("#!/bin/sh\necho \"apt-get $* LC_ALL=$LC_ALL\" >>\"$FAKE/calls\"\ncase \"$1\" in\n--version) echo 'apt 2.2.4 (amd64)'; echo 'Usage: apt-get'; exit 0 ;;\nesac\n"
+                    "echo 'Inst docker-ce [1] (2 Docker CE:stable [amd64])'\nexit \"${FAKE_APT_RC:-0}\"\n"),
+        "dpkg": "#!/bin/sh\ncase \"$1\" in\n--version) echo \"Debian 'dpkg' package management program version 1.20.13 (amd64).\"; echo 'This is free software'; exit 0 ;;\nesac\n",
+        "dpkg-query": "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\ncase \" $FAKE_INSTALLED \" in *\" $last \"*) printf 'ii '; exit 0 ;; esac\nexit 1\n",
+        "systemctl": "#!/bin/sh\ncase \"$1\" in\n--version) echo 'systemd 247 (247.3-7+deb11u6)'; echo '+PAM +AUDIT'; exit 0 ;;\nesac\n",
+    }
+    kill_case("box_facts records the versions of apt, dpkg and systemd, then the utilities the unit's script calls, then /bin/sh",
+              'box_facts; cut -d" " -f1 "$OUT/box-facts" | paste -sd, - >"$OUT/keys"; sed -n 1,3p "$OUT/box-facts" >"$OUT/first3"', fakes=ffakes,
+              files={"keys": "apt,dpkg,systemd,timeout,date,sort,sleep,grep,sh\n",
+                     "first3": "apt apt 2.2.4 (amd64)\ndpkg Debian 'dpkg' package management program version 1.20.13 (amd64).\nsystemd systemd 247 (247.3-7+deb11u6)\n"})
+    ENGINE_SIM = "apt-get -s --no-remove -o Debug::NoLocking=true -o Dpkg::Use-Pty=0 install --only-upgrade --no-install-recommends "
+    kill_case("apt_simulation runs the core's simulation on the engine packages that are installed, in the C locale, and records its exit status", 'apt_simulation',
+              dict(FAKE_INSTALLED="docker-ce docker-ce-cli containerd.io nftables"), fakes=ffakes,
+              files={"apt-simulation.txt": "Inst docker-ce [1] (2 Docker CE:stable [amd64])\n# exit 0\n"}, calls=[ENGINE_SIM + "docker-ce docker-ce-cli containerd.io LC_ALL=C"])
+    kill_case("apt_simulation records an exit status that is not 0", 'apt_simulation', dict(FAKE_INSTALLED="docker-ce", FAKE_APT_RC="100"), fakes=ffakes,
+              files={"apt-simulation.txt": "Inst docker-ce [1] (2 Docker CE:stable [amd64])\n# exit 100\n"})
+
+    # main() is what a machine runs and nothing here can: its steps are read in the order they stand, and the conditions of the ones that belong to one leg
+    with open(SCRIPT, newline="") as f:
+        main_body = re.search(r"^main\(\) \{\n(.*?)^\}", f.read().replace("\r\n", "\n"), re.M | re.S).group(1)
+    step_names = ["install_docker", "install_casaos", "prepare_dependency_path", "start_things", "box_facts", "apt_simulation", "snapshot before", "images_dump before",
+                  "refusals", "update_run", "rollback_run", "kill_run", "failure_run", "collect_journal unit-journal-end.txt"]
+    count[0] += 1
+    steps_in_order = re.findall(r"^\s+(?:if \[[^\]]*\]; then )?(%s)\b" % "|".join(re.escape(n) for n in step_names), main_body, re.M)
+    if steps_in_order != step_names:
+        failures.append("main() runs %r, wanted %r" % (steps_in_order, step_names))
+    else:
+        print("ok: main() runs the steps in the order of the work")
+    for step_, cond_ in (("rollback_run", '"${LEG}" = major'), ("kill_run", '"${KILL_INSTALL}" = 1'), ("failure_run", '"${LEG}" = minor')):
+        count[0] += 1
+        line_ = next((ln for ln in main_body.splitlines() if step_ in ln), "")
+        if cond_ not in line_ or "then " + step_ + "; fi" not in line_:
+            failures.append("main() does not run %s only where %s: %r" % (step_, cond_, line_))
+        else:
+            print("ok: main() runs %s only where %s" % (step_, cond_))
+
     # the kill belongs to a minor leg, and the guest says so before it touches anything
     for label, env_extra, leg, want_text in (
             ("the guest script refuses a PROOF_KILL_INSTALL that is not 1", {"PROOF_KILL_INSTALL": "2"}, "minor", "PROOF_KILL_INSTALL is 1 or empty"),
@@ -1289,10 +1358,12 @@ def workflow_text():
         return f.read().replace("\r\n", "\n")
 
 
-def workflow_matrix(text):
-    """the cells of the matrix, [dict]: the plain reading of its `include:` list (a cell starts at a `- `, values lose their quotes)"""
+def workflow_matrix(text, after=None):
+    """the cells of the matrix, [dict]: the plain reading of its `include:` list (a cell starts at a `- `, values lose their quotes);
+    after: the line of the job whose matrix it is, when the file has several"""
     lines = text.split("\n")
-    start = next(i for i, ln in enumerate(lines) if ln.strip() == "include:")
+    first = next(i for i, ln in enumerate(lines) if after is None or ln.rstrip() == after)
+    start = next(i for i in range(first, len(lines)) if lines[i].strip() == "include:")
     base = len(lines[start]) - len(lines[start].lstrip())
     cells = []
     for ln in lines[start + 1:]:
@@ -1359,6 +1430,22 @@ for cell in wf_cells:
     check("the %s cell fetches the image it names, with the sums its distribution publishes" % where,
           cell.get("id") in by_id and (cell.get("sums"), cell.get("algo")) == by_id[cell["id"]] and "%s-%s-" % (cell["id"], cell["version"]) in cell.get("image", "")
           and cell.get("base", "").startswith("https://") and cell.get("leg") in ("major", "minor"), cell)
+check("the matrix is Debian 11 for the major jump, and Debian 12, Debian 13, Ubuntu 24.04 and Ubuntu 26.04 for the minor update",
+      sorted((c.get("leg"), c.get("id"), c.get("version")) for c in wf_cells) ==
+      [("major", "debian", "11"), ("minor", "debian", "12"), ("minor", "debian", "13"), ("minor", "ubuntu", "24.04"), ("minor", "ubuntu", "26.04")],
+      [(c.get("leg"), c.get("id"), c.get("version")) for c in wf_cells])
+major_cells = [c for c in wf_cells if c.get("leg") == "major"]
+check("the major leg is the one that pins Docker and takes the Debian archive", len(major_cells) == 1 and major_cells[0].get("docker_from") == "28.0.4"
+      and major_cells[0].get("args") == "--use-debian-archive" and not any(c.get("docker_from") or c.get("args") for c in wf_cells if c.get("leg") == "minor"), major_cells)
+with open(os.path.join(HERE, "..", ".github", "workflows", "install-check.yml"), newline="") as f:
+    systems = workflow_matrix(f.read().replace("\r\n", "\n"), after="  vm:")
+for cell in wf_cells:
+    twin = next((c for c in systems if (c.get("id"), c.get("version")) == (cell.get("id"), cell.get("version"))), None)
+    check("the image and the sums of %s %s are the ones install-check.yml boots" % (cell.get("id"), cell.get("version")),
+          twin is not None and all(cell.get(k) == twin.get(k) for k in ("base", "image", "sums", "algo")), (cell, twin))
+artifact = re.search(r"^\s+name: (docker-update-proof-.+)$", wf, re.M)
+uploads = [re.sub(r"\$\{\{ matrix\.(\w+) \}\}", lambda m: c.get(m.group(1), ""), artifact.group(1)) for c in wf_cells] if artifact else []
+check("each cell uploads its evidence under a name of its own", bool(artifact) and len(set(uploads)) == len(wf_cells), uploads)
 kills = [c for c in wf_cells if c.get("kill_install")]
 check("one cell kills the unit in the middle of the install, and it is a minor one", len(kills) == 1 and kills[0].get("leg") == "minor" and kills[0].get("kill_install") == "1", kills)
 prove = next((s for n, s in wf_runs.items() if n == "Prove it"), "")
