@@ -39,6 +39,9 @@ jobs:
       - name: Check what the installer says when a dependency cannot be installed
         run: bash scripts/test-install-dependencies.sh
 
+      - name: Check how a pre-release is told from a release
+        run: bash scripts/test-release-prerelease.sh
+
       - name: Load component pins
         run: |
           set -euo pipefail
@@ -111,6 +114,18 @@ jobs:
             '(.published_at | fromdateiso8601) as $p | .version == $t and $p <= now and $p > now - 3600' \
             dist/version.json
 
+      # The release is published as a pre-release while release/PRERELEASE
+      # exists in the tagged commit. Boxes (the in-app updater) and the
+      # one-line install command read releases/latest, which GitHub works out
+      # without pre-releases, so the release can be installed by its tag and
+      # proven (docker-update-proof.yml, install-check.yml) before anybody is
+      # offered it. To promote it:
+      #   gh release edit <tag> -R ReCasaOS/CasaOS-Install --prerelease=false --latest
+      # and delete release/PRERELEASE in the next commit.
+      - name: Is this a pre-release
+        id: pre
+        run: echo "value=$(bash scripts/release-is-prerelease.sh)" >> "$GITHUB_OUTPUT"
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -126,7 +141,7 @@ jobs:
             dist/components.lock
             dist/checksums.txt
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.pre.outputs.value == 'true' }}
           fail_on_unmatched_files: true
 
   # Then install what was just published on a fresh machine and use it. Its own
