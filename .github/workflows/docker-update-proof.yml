@@ -1,0 +1,272 @@
+name: docker-update-proof
+
+# Proof that the dashboard's "Update Docker" button does what it says, on real machines.
+#
+# Each leg is a QEMU guest booted with KVM from the distribution's own cloud image (the way
+# install-check.yml boots its systems). scripts/docker-update-proof.sh installs Docker at a
+# version that has a newer one on offer, installs the published ReCasaOS release, starts
+# containers of every restart policy beside a database that acknowledges each write after a
+# sync and a container that publishes a port, then asks the core for the update the way the
+# dashboard does (through the gateway, with the loopback secret) and polls it to its end.
+# scripts/docker-update-proof-report.py judges what the guest recorded, or says the run is
+# invalid; it fails the job for both. Nothing is judged in the guest.
+#
+#   major   Debian 11, installed with --use-debian-archive: Docker 28.0.4 from Docker's own
+#           repository, containerd.io on the 1.7 line, a 29 on offer. The owner's box. Docker 29
+#           needs nftables and Docker 28 did not: when apt can take nftables out without taking
+#           anything but libraries with it, the leg does, before the first check, so that the update
+#           has a package to bring that the box did not have. When the update has succeeded the leg
+#           runs the rollback command (apt-get install --allow-downgrades of the PREVIOUS pins) and
+#           the verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with
+#           the containers, the database's volume and the images intact. A FAIL there is meant to turn
+#           the leg red: it means that the core must not offer the rollback command after a major jump.
+#   minor   Ubuntu 24.04, Debian 12, Debian 13 and Ubuntu 26.04 (the images install-check.yml boots):
+#           the previous patch of the current Docker minor (found at run time, not written down), the
+#           current one on offer; and last, with the box put back on the previous patch and dockerd
+#           made unable to start, a second update that has to fail with `daemon`. Each system runs its
+#           own apt, systemd and coreutils: the report lists them, and says whether this apt prints
+#           its simulation in the form the core reads, which is where an apt of another generation
+#           (Debian 12's, Debian 13's, Ubuntu 26.04's) would show. The unit's script calls timeout,
+#           date, sort, sleep and grep, which Ubuntu 26.04 may take from uutils. Ubuntu 24.04 alone also
+#           kills the unit with SIGKILL in the middle of the install (as soon as dpkg runs a maintainer
+#           script of Docker's), before the last failure: the status has to say failed (`no_result` or
+#           `install`), dpkg --audit has to show the half-finished install, the next check has to refuse
+#           with `dpkg` (and the one after the repair nothing), and the repair the dashboard names
+#           (dpkg --configure -a, then apt-get -f install) has to complete it.
+#
+# What each leg asserts (the report lists every verdict by name):
+#   the check offers the update (versions, major_jump, the plan and its plan_id); the plan
+#   is judged on what dpkg did with it: the upgrades are engine packages, the new packages
+#   (at most 10) have valid names, nothing is removed, and the packages dpkg added and
+#   upgraded are exactly the plan's (a run that brought no new package says "No new
+#   dependency was exercised"); the containers listing; the refusals, none of which changes the engine (a held docker-ce, a
+#   dpkg lock held by another process, a running package update, a plan that is not the plan,
+#   a body that is not a plan_id, a token in the query, a refresh token); the run (the POST is
+#   fast, a second press is refused, the status goes through running to succeeded and keeps
+#   answering, the log's markers are in the order of the work, everything was downloaded
+#   before dockerd restarted); and afterwards the new version, every always/unless-stopped
+#   container back, exactly the policy-`no` one listed in not_returned, the witness intact,
+#   AppManagement and the core not restarted and answering, the published port answering.
+#
+# One verdict depends on the system: the unit's journal must have no line saying that systemd emptied a variable of the
+# unit's command line (the $$ escaping of the script). systemd writes that line from v254 on (Ubuntu 24.04, Debian 13,
+# Ubuntu 26.04) and never before (Debian 11's 247, Debian 12's 252): there the verdict is reported NOT APPLICABLE, which is
+# neither a pass nor a fail, and the verdict on the pins of the PREVIOUS marker is what catches an emptied variable.
+#
+# It installs a release that has the feature (a release before it fails on the first check, by
+# name), and it is meant to be run on a candidate before that release becomes the latest one:
+#   1. publish the installer release as a pre-release (gh release create vX.Y.Z --prerelease ...):
+#      GitHub does not call a pre-release the latest release, so nothing installs it by itself;
+#   2. dispatch this workflow with tag=vX.Y.Z (a push run takes the tag from the repository
+#      variable DOCKER_PROOF_TAG instead, and stops at once when there is none);
+#   3. every leg green: promote it (gh release edit vX.Y.Z --prerelease=false --latest).
+# release.yml publishes a release as the latest one at once (prerelease: false), so a candidate has
+# to be made a pre-release by hand, or release.yml has to be told to; nothing here changes that.
+# Left empty, the tag is the latest published release: the same proof, after the fact.
+# By hand only; it publishes nothing and changes nothing outside the guests. The minor legs are
+# the longer ones: their failure injection waits for the unit's own timeouts, which can add up
+# to ten minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The installer release to install, a tag of this repository, a pre-release when it is a candidate; empty for the repository variable DOCKER_PROOF_TAG when there is one, else the latest published release
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  vm:
+    name: ${{ matrix.name }}, ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: major
+            name: Debian 11
+            label: Docker 28.0.4 to the newest 29
+            id: debian
+            version: '11'
+            base: https://cloud.debian.org/images/cloud/bullseye/latest
+            image: debian-11-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+            args: --use-debian-archive
+            docker_from: 28.0.4
+          - leg: minor
+            name: Ubuntu 24.04
+            label: the previous patch to the current one, a unit killed during the install, then a Docker that cannot start
+            id: ubuntu
+            version: '24.04'
+            base: https://cloud-images.ubuntu.com/releases/24.04/release
+            image: ubuntu-24.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+            kill_install: '1'
+          - leg: minor
+            name: Debian 12
+            label: the previous patch to the current one, then a Docker that cannot start
+            id: debian
+            version: '12'
+            base: https://cloud.debian.org/images/cloud/bookworm/latest
+            image: debian-12-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+          - leg: minor
+            name: Debian 13
+            label: the previous patch to the current one, then a Docker that cannot start
+            id: debian
+            version: '13'
+            base: https://cloud.debian.org/images/cloud/trixie/latest
+            image: debian-13-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+          - leg: minor
+            name: Ubuntu 26.04
+            label: the previous patch to the current one, then a Docker that cannot start
+            id: ubuntu
+            version: '26.04'
+            base: https://cloud-images.ubuntu.com/releases/26.04/release
+            image: ubuntu-26.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      TAG: ${{ inputs.tag || vars.DOCKER_PROOF_TAG }}
+      EVENT: ${{ github.event_name }}
+      LEG: ${{ matrix.leg }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      EXPECT_ID: ${{ matrix.id }}
+      EXPECT_VERSION_ID: ${{ matrix.version }}
+      INSTALLER_ARGS: ${{ matrix.args }}
+      DOCKER_FROM: ${{ matrix.docker_from }}
+      KILL_INSTALL: ${{ matrix.kill_install }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The proof can say no
+        run: |
+          set -euo pipefail
+          python3 scripts/test-docker-update-proof.py
+          bash -n scripts/docker-update-proof.sh
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG}" ]; then
+            # a run nobody dispatched has no input to take a tag from: the repository variable names the release it proves
+            if [ "${EVENT}" != workflow_dispatch ]; then
+              echo "a ${EVENT} run needs the repository variable DOCKER_PROOF_TAG: a release tag, or the tag of a pre-release for a candidate. The latest release is not what such a run is here to prove."
+              exit 1
+            fi
+            TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          fi
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
+          # a candidate is a pre-release: GitHub does not call it the latest release, so nothing installs it by itself, and it is promoted when every leg is green
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
+          mkdir published
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          # The runner's apt sometimes stalls without a word (it has taken a whole job
+          # before): a few bounded tries, for that and for nothing else.
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize disk.img 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      # The values reach the guest through the environment of this step, which the matrix of
+      # this file sets; none of them is typed by whoever dispatches the run.
+      - name: Prove it
+        timeout-minutes: 75
+        run: |
+          set -euo pipefail
+          scp -F ssh_config published/install.sh scripts/docker-update-proof.sh vm:
+          ssh -F ssh_config vm "sudo env PROOF_DISPOSABLE=1 EXPECT_ID='${EXPECT_ID}' EXPECT_VERSION_ID='${EXPECT_VERSION_ID}' INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' PROOF_KILL_INSTALL='${KILL_INSTALL}' OUT=/home/casa/proof bash docker-update-proof.sh ${LEG}"
+
+      # Red for a verdict that fails and for a run that proves nothing alike.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ssh -F ssh_config vm 'sudo tar -C /home/casa/proof -cf - .' | tar -xf - -C out || true
+          test -s out/timeline.tsv || { echo "the run left no evidence: nothing to report" | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
+          # `kill` when this leg also killed the unit in the middle of the install: the report then demands the evidence of it
+          python3 scripts/docker-update-proof-report.py out "${LEG}" ${KILL_INSTALL:+kill} | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: What the machine says when it is not well
+        if: always()
+        run: |
+          ssh -F ssh_config vm 'systemctl --failed --no-pager; sudo journalctl -u casaos.service -u docker.service -u containerd.service -u casaos-docker-update.service --no-pager -o short-iso | tail -150' || true
+          tail -30 serial.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-update-proof-${{ matrix.leg }}-${{ matrix.id }}-${{ matrix.version }}
+          path: |
+            out
+            serial.log
+          if-no-files-found: ignore
