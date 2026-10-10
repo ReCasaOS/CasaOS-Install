@@ -265,6 +265,9 @@ def build(d, leg, s=None):
     api(d, "query-post", 401, {"message": "missing or malformed jwt"})
     api(d, "refresh-post", 401, {"message": "invalid token"})
     api(d, "jwt-post", 409, refusal("changed"))
+    api(d, "packages-journal", 200, packages_body(s, available=False, refusal_code="dpkg"))   # the guest made an unfinished dpkg journal: the check refuses it
+    api(d, "journal-post", 409, refusal("dpkg"))                                              # and so does the POST of the plan that is on offer
+    api(d, "packages-journal-gone", 200, packages_body(s))                                    # the file gone: the same plan is on offer again
     api(d, "update-post", 200, ok(status_data("running")), secs=3.1)
     api(d, "running-post", 409, refusal("running"))
     put(d, "docker-update.log", success_log(s, t_dl))
@@ -601,6 +604,44 @@ fails("a refresh token that is accepted", "POST with a refresh token", lambda d:
 fails("the dashboard's own token refused", "POST with the dashboard's own token", lambda d: api(d, "jwt-post", 401, {"message": "nope"}))
 fails("a plan that is not offered again after the hold", "after the hold is lifted", lambda d: jedit(d, "packages-2.json", lambda j: update(j).update(plan_id="b" * 64)))
 
+# an unfinished dpkg journal: the guest makes a file of digits only in /var/lib/dpkg/updates while the update is on offer, on every leg; the check and the POST refuse it with
+# `dpkg`, and with the file gone the same plan is on offer again
+V_DPKG_CHECK = "an unfinished dpkg journal is refused by the check with `dpkg`, with no button"
+V_DPKG_POST = "POST while dpkg has an unfinished journal: 409 `dpkg`"
+V_DPKG_GONE = "after the unfinished journal is gone the update is offered again, with the same plan"
+for leg_ in ("major", "minor"):
+    case("a healthy %s leg refuses an unfinished dpkg journal, and offers the update again once it is gone" % leg_, 0,
+         ["**PASS** " + V_DPKG_CHECK, "**PASS** " + V_DPKG_POST, "**PASS** " + V_DPKG_GONE, "PASS"], ["**FAIL**", "INVALID"], leg=leg_)
+
+
+def journal_update(name, fn):
+    return lambda d: jedit(d, name + ".json", lambda j: fn(update(j)))
+
+
+for leg_ in ("major", "minor"):
+    fails("a check with an unfinished dpkg journal that does not refuse (%s)" % leg_, V_DPKG_CHECK, journal_update("packages-journal", lambda u: u.update(refusal="", available=True)), leg=leg_)
+    fails("a POST with an unfinished dpkg journal that goes through (%s)" % leg_, V_DPKG_POST, lambda d: api(d, "journal-post", 200, ok(status_data("running"))), leg=leg_)
+    fails("an update that is not offered again once the journal is gone (%s)" % leg_, V_DPKG_GONE, journal_update("packages-journal-gone", lambda u: u.update(available=False, refusal="dpkg")), leg=leg_)
+fails("a check with an unfinished dpkg journal that refuses for another reason", V_DPKG_CHECK, journal_update("packages-journal", lambda u: u.update(refusal="held")))
+fails("a check with an unfinished dpkg journal that refuses with `dpkg` and still has a button", V_DPKG_CHECK, journal_update("packages-journal", lambda u: u.update(available=True)))
+fails("a check with an unfinished dpkg journal that offers nothing about Docker's update", V_DPKG_CHECK, lambda d: jedit(d, "packages-journal.json", lambda j: j["data"]["docker"].pop("update")))
+fails("a check with an unfinished dpkg journal that fails", V_DPKG_CHECK, lambda d: api(d, "packages-journal", 500, {"success": 500, "message": "boom"}))
+fails("a POST with an unfinished dpkg journal refused as a plan that changed (the plan was the right one)", V_DPKG_POST, lambda d: api(d, "journal-post", 409, refusal("changed")))
+fails("a POST with an unfinished dpkg journal refused as a hold", V_DPKG_POST, lambda d: api(d, "journal-post", 409, refusal("held")))
+fails("a POST with an unfinished dpkg journal refused with another status", V_DPKG_POST, lambda d: api(d, "journal-post", 400, refusal("dpkg")))
+fails("a POST with an unfinished dpkg journal refused with no code", V_DPKG_POST, lambda d: jedit(d, "journal-post.json", lambda j: j["data"].pop("error_code")))
+fails("a POST with an unfinished dpkg journal refused with a message that is not the error", V_DPKG_POST, lambda d: jedit(d, "journal-post.json", lambda j: j.update(message="Conflict")))
+fails("a check once the journal is gone that still refuses with `dpkg`", V_DPKG_GONE, journal_update("packages-journal-gone", lambda u: u.update(refusal="dpkg")))
+fails("a check once the journal is gone that offers another plan", V_DPKG_GONE, journal_update("packages-journal-gone", lambda u: u.update(plan_id="c" * 64)))
+fails("a check once the journal is gone that says nothing of Docker's update", V_DPKG_GONE, lambda d: jedit(d, "packages-journal-gone.json", lambda j: j["data"]["docker"].pop("update")))
+fails("a check once the journal is gone that fails", V_DPKG_GONE, lambda d: api(d, "packages-journal-gone", 500, {"success": 500, "message": "boom"}))
+fails("a check once the journal is gone that offers nothing: not available, and nothing refused", V_DPKG_GONE, journal_update("packages-journal-gone", lambda u: u.update(available=False)))
+for step_, silent_ in (("packages-journal", V_DPKG_CHECK), ("journal-post", V_DPKG_POST), ("packages-journal-gone", V_DPKG_GONE)):
+    invalid("no answer for %s: the journal step did not run" % step_, "no answer was recorded for %s: that step did not run" % step_,
+            lambda d, step_=step_: remove(d, step_ + ".code", step_ + ".json"), silent=(silent_,))
+    invalid("%s that curl could not send" % step_, "curl could not reach the core for %s" % step_,
+            lambda d, step_=step_: (api(d, step_, 0, curl=7), remove(d, step_ + ".json")), silent=(silent_,))
+
 # the run
 fails("a POST that is refused", "POST /v1/sys/docker/update with the right plan_id starts the run", lambda d: api(d, "update-post", 409, refusal("changed")))
 fails("a POST that blocks through apt", "the POST returns fast", lambda d: api(d, "update-post", 200, ok(status_data("running")), secs=45.0))
@@ -768,10 +809,11 @@ K_LOG = "kill -9: the log agrees with the status"
 K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
 K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
-K_DIRTY = "kill -9: the next check after the kill refuses with `dpkg`, before the repair"
+K_DIRTY = "kill -9: the next check after the kill, before the repair, offers no update (docker-ce is at the candidate version) or refuses with `dpkg`"
 K_CLEAN = "kill -9: after the repair the check refuses nothing"
 KILL_HEALTHY = ["Docker update proof, minor leg: PASS", "caught", "no_result", "dpkg --audit said", "kill -9: the log agrees with the status",
-                "The next check after the kill said refusal `dpkg`; after the repair it said no refusal (the update is not on offer)", "**PASS** " + K_DIRTY, "**PASS** " + K_CLEAN]
+                "The next check after the kill: it refused with `dpkg` (an update was pending, and dpkg was in the middle of a package). After the repair it said no refusal "
+                "(the update is not on offer)", "outcome: refused with `dpkg`", "**PASS** " + K_DIRTY, "**PASS** " + K_CLEAN]
 
 
 def kfails(name, verdict, mutate, extra=()):
@@ -827,8 +869,9 @@ kfails("a repair after which Docker does not answer", K_REPAIR, lambda d: put(d,
 kfails("a repair that fails twice and leaves dpkg unhappy", K_REPAIR, lambda d: (put(d, "kill-repair-2.exit", "100\n"), put(d, "kill-audit-after.txt", "exit 0\nsomething is still half configured\n"))[0],
        extra=["exit 100, dpkg --audit then something is still half configured"])
 
-# the check the dashboard runs after the kill, with dpkg in the middle of a package: the core refuses it with `dpkg` (its journal in /var/lib/dpkg/updates and
-# `dpkg --audit` say so), and once the repair has completed the install it refuses nothing
+# the check the dashboard runs after the kill, with dpkg in the middle of a package, has two true outcomes: an update is pending and the core refuses it with `dpkg` (its
+# journal in /var/lib/dpkg/updates and `dpkg --audit` say so), or nothing is pending because docker-ce is already at the candidate version (the kill came after dpkg had
+# unpacked it: what a real Ubuntu 24.04 gave) and the core omits docker.update. Which one it was is recorded. Once the repair has completed the install it refuses nothing
 def dirty_update(fn):
     return lambda d: jedit(d, "kill-packages-dirty.json", lambda j: fn(update(j)))
 
@@ -838,10 +881,27 @@ kfails("a check after the kill that refuses for another reason", K_DIRTY, dirty_
 kfails("a check after the kill that refuses with `dpkg` and still offers the update", K_DIRTY, dirty_update(lambda u: u.update(available=True)))
 kfails("a check after the kill that says nothing of Docker", K_DIRTY, lambda d: jedit(d, "kill-packages-dirty.json", lambda j: j["data"]["docker"].pop("update")))
 kfails("a check after the kill that fails", K_DIRTY, lambda d: api(d, "kill-packages-dirty", 500, {"success": 500, "message": "boom"}))
+
+
+def no_update_check(version=None, installed=True):
+    """the check after the kill as a real Ubuntu 24.04 gave it: docker-ce is at the candidate version, there is nothing to update, and there is no docker.update"""
+    return lambda d: api(d, "kill-packages-dirty", 200, ok({"supported": True, "docker": {"installed": installed, "version": version or KILL_MINOR["to"], "updates": []}}))
+
+
+case("a kill after which docker-ce is already at the candidate: the check offers no update, which is accepted, and the report says which it was", 0,
+     ["PASS", "**PASS** " + K_DIRTY, "outcome: no update on offer, docker-ce at the candidate", "The next check after the kill: it offered no update: docker-ce was already at the candidate 29.8.2",
+      "the `dpkg` refusal, which only a pending update can show, had nothing to show", "**PASS** " + K_CLEAN], ["**FAIL**", "INVALID", "it refused with `dpkg`"],
+     leg="minor", spec=KILL_MINOR, mutate=no_update_check())
+kfails("a check after the kill that shows no update while docker-ce is not at the candidate: a pending update the check hid", K_DIRTY, no_update_check(version=KILL_MINOR["start"]))
+kfails("a check after the kill that shows no update and no installed Docker", K_DIRTY, no_update_check(installed=False))
+kfails("a check after the kill whose docker.update says nothing: not available, no refusal", K_DIRTY, dirty_update(lambda u: u.update(refusal="", available=False)))
+kfails("a check after the kill that offers the update although docker-ce is at the candidate", K_DIRTY,
+       lambda d: (no_update_check()(d), jedit(d, "kill-packages-dirty.json", lambda j: j["data"]["docker"].update(update=dict(available=True, refusal=""))))[0])
+kfails("a check after the kill that says nothing of Docker at all", K_DIRTY, lambda d: jedit(d, "kill-packages-dirty.json", lambda j: j["data"].pop("docker")))
 kfails("a check after the repair that still refuses with `dpkg`", K_CLEAN, lambda d: jedit(d, "kill-packages-clean.json", lambda j: j["data"]["docker"].update(update=dict(available=False, refusal="dpkg"))))
 kfails("a check after the repair that refuses for another reason", K_CLEAN, lambda d: jedit(d, "kill-packages-clean.json", lambda j: j["data"]["docker"].update(update=dict(available=False, refusal="daemon"))))
 kfails("a check after the repair that fails", K_CLEAN, lambda d: api(d, "kill-packages-clean", 500, {"success": 500, "message": "boom"}))
-case("a check after the repair that offers the update again refuses nothing", 0, ["PASS", "**PASS** " + K_CLEAN, "after the repair it said no refusal (the update is on offer)"], ["**FAIL**", "INVALID"],
+case("a check after the repair that offers the update again refuses nothing", 0, ["PASS", "**PASS** " + K_CLEAN, "After the repair it said no refusal (the update is on offer)"], ["**FAIL**", "INVALID"],
      leg="minor", spec=KILL_MINOR, mutate=lambda d: api(d, "kill-packages-clean", 200, packages_body(KILL_MINOR)))
 invalid("no check after the kill", "no answer was recorded for kill-packages-dirty", lambda d: remove(d, "kill-packages-dirty.code", "kill-packages-dirty.json"), leg="minor",
         silent=("kill -9: the next check",), spec=KILL_MINOR)
@@ -946,7 +1006,7 @@ V_CHECK = "GET /v1/sys/packages offers the Docker update"
 V_POST = "POST /v1/sys/docker/update with the right plan_id starts the run"
 for status in (6, 7):
     invalid("a first check that curl could not send (exit %d)" % status, "curl could not reach the core for packages-1", lambda d, status=status: (api(d, "packages-1", 0, curl=status), remove(d, "packages-1.json")),
-            silent=(V_CHECK, "after the hold is lifted"))
+            silent=(V_CHECK, "after the hold is lifted", "after the unfinished journal is gone"))
 invalid("a POST that curl could not send", "curl could not reach the core for update-post", lambda d: (api(d, "update-post", 0, curl=7), remove(d, "update-post.json")), silent=(V_POST,))
 for status in (28, 52, 56):
     fails("a POST that curl reached the core with and got no answer to (exit %d)" % status, V_POST, lambda d, status=status: (api(d, "update-post", 0, secs=60.0, curl=status), remove(d, "update-post.json")))
@@ -1055,6 +1115,16 @@ case("a feature that is missing and a run that stopped says FAIL and INVALID", 1
 
 
 # ---- the text-only functions of the guest script ------------------------------------------------------------------------
+
+def early_quitters(script):
+    """what in a shell script leaves a producer writing into a pipe nobody reads any more, the class that ended the Debian 11 leg (under pipefail the producer's SIGPIPE is
+    status 141 and set -e ends the run): a consumer that quits at its first match. `| head`, `| grep -q` or `-m`, `| sed ... q`, an awk that exits outside its END block.
+    Comment lines are left out. [what was found]"""
+    code = "\n".join(ln for ln in script.replace("\r\n", "\n").split("\n") if not ln.lstrip().startswith("#"))
+    found = re.findall(r"\|\s*head\b[^|\n]*|\|\s*grep\s+-[A-Za-z]*[qm][^|\n]*|\|\s*sed\s[^|\n]*?(?<![A-Za-z])q\b[^|\n]*", code)
+    found += ["awk '%s'" % prog.strip()[:60] for prog in re.findall(r"\bawk\b[^'\n]*'([^']*)'", code) if re.search(r"\bexit\b", re.sub(r"END\s*\{[^}]*\}", "", prog))]
+    return found
+
 
 BASH = os.environ.get("TEST_BASH") or "bash"   # on Windows, plain `bash` may be WSL's launcher: TEST_BASH names Git's
 
@@ -1451,6 +1521,25 @@ else:
     kill_case("apt_simulation records an exit status that is not 0", 'apt_simulation', dict(FAKE_INSTALLED="docker-ce", FAKE_APT_RC="100"), fakes=ffakes,
               files={"apt-simulation.txt": "Inst docker-ce [1] (2 Docker CE:stable [amd64])\n# exit 100\n"})
 
+    # The class that ended the Debian 11 leg: apt-cache's listing read by a consumer that quits at its first match, under pipefail (the script runs with it, and set -e). The
+    # stand-in writes about 250 KB, a line at a time: more than a pipe holds, so the first match is far from the end. The old forms are run first, as a control: they have to
+    # die of SIGPIPE here (status 141), or this stand-in proves nothing about the helpers that replace them.
+    APT_CACHE = r"""#!/bin/sh
+case "$1" in
+madison) awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | https://download.docker.com/linux/debian bullseye/stable amd64 Packages\n", ((i < 3 && ENVIRON["NO17"] == "") ? "7" : "6"), 100 - i }' ;;
+policy) awk 'BEGIN { print "docker-ce:"; print "  Installed: 5:28.0.4-1"; print "  Candidate: 5:29.8.0-1"; print "  Version table:"; for (i = 0; i < 2500; i++) printf "     5:29.%d.0-1 500\n        500 https://download.docker.com/linux/debian bullseye/stable amd64 Packages\n", i }' ;;
+esac
+"""
+    kill_case("control: the old forms of the two pipelines die of SIGPIPE under pipefail with a producer that writes a lot (status 141)",
+              r"""rc1=0; rc2=0; apt-cache madison containerd.io | awk '$3 ~ /^1\.7\./ {print $3; exit}' >/dev/null || rc1=$?; """
+              r"""apt-cache policy docker-ce | awk '/Candidate:/ {print $2; exit}' >/dev/null || rc2=$?; echo "$rc1 $rc2" >"$OUT/old"; true""",
+              fakes={"apt-cache": APT_CACHE}, files={"old": "141 141\n"})
+    for label, snippet, env_extra, want in (
+            ("containerd_17 reads all of apt-cache's listing, and says the newest containerd.io of the 1.7 line", 'v="$(containerd_17)"; echo "$v" >"$OUT/said"', {}, "1.7.100-1\n"),
+            ("containerd_17 succeeds and says nothing when apt has no 1.7", 'v="$(containerd_17)"; echo "$v" >"$OUT/said"', {"NO17": "1"}, "\n"),
+            ("candidate_of reads all of apt-cache's listing, and says the candidate", 'v="$(candidate_of docker-ce)"; echo "$v" >"$OUT/said"', {}, "5:29.8.0-1\n")):
+        kill_case(label, snippet, env_extra, files={"said": want}, fakes={"apt-cache": APT_CACHE})
+
     # the guest's own tools, and what they leave behind when they fail: told apart from what the feature does
     SNAP = 'timeout() { shift 3; "$@"; }; docker() { echo 28.0.4; }; dpkg() { :; }; '
 
@@ -1484,7 +1573,7 @@ else:
     kill_case("post_plan sends the plan_id when jq makes the body", 'jq() { echo "{\\"plan_id\\":\\"$4\\"}"; }; call_as() { echo "call_as $1 $2 $3 $4 body=$5" >>"$FAKE/calls"; }; post_plan p abc',
               files={"aborted": None}, calls=['call_as internal p POST /v1/sys/docker/update body={"plan_id":"abc"}'])
 
-    def guard_case(label, body, want_rc, aborted=None, out_has=(), out_lacks=()):
+    def guard_case(label, body, want_rc, aborted=None, out_has=(), out_lacks=(), files=None):
         """guard_run, then the body: the exit status of the whole, and what the report is told in $OUT/aborted (None: nothing)"""
         count[0] += 1
         with tempfile.TemporaryDirectory() as tmp:
@@ -1506,6 +1595,14 @@ else:
                 problems.append("aborted says %r, wanted one line with %r" % (said, aborted))
             problems += ["stdout lacks %r: %r" % (s, p.stdout) for s in out_has if s not in p.stdout]
             problems += ["stdout has %r: %r" % (s, p.stdout) for s in out_lacks if s in p.stdout]
+            for name_, want_ in (files or {}).items():     # a file of $OUT after the run: its exact content, None for not there
+                try:
+                    with open(os.path.join(out, name_)) as f:
+                        got_ = f.read().replace("\r", "")
+                except OSError:
+                    got_ = None
+                if got_ != want_:
+                    problems.append("%s is %r, wanted %r" % (name_, got_, want_))
             if problems:
                 failures.append("guard_run, %s: %s\n%s" % (label, "; ".join(problems), p.stderr[-400:]))
             else:
@@ -1519,6 +1616,26 @@ else:
     guard_case("a run that ends well says nothing", "true", 0)
     guard_case("a run that stops on purpose says what it said, once", 'abort "NOT PROVEN: no older release"', 0, aborted=["NOT PROVEN: no older release"], out_lacks=["failing command"])
     guard_case("what was said before the failure stays, and nothing is added to it", 'echo "NOT PROVEN: first" >"$OUT/aborted"; false', 1, aborted=["NOT PROVEN: first"], out_lacks=["failing command"])
+
+    guard_case("a run that ends while the proof's own dpkg journal is there takes it away", 'DPKG_JOURNAL="$OUT/journal"; : >"$DPKG_JOURNAL"; DPKG_JOURNAL_FAKED=1; false', 1,
+               aborted=["the guest script ended on a failing command (exit 1)"], files={"journal": None})
+    guard_case("a dpkg journal the proof did not make is left where it is", 'DPKG_JOURNAL="$OUT/journal"; echo theirs >"$DPKG_JOURNAL"; false', 1,
+               aborted=["the guest script ended on a failing command (exit 1)"], files={"journal": "theirs\n"})
+
+    # the unfinished dpkg journal: a file of digits only in /var/lib/dpkg/updates, there while the check and the POST of the plan on offer are asked, gone before the next check
+    count[0] += 1
+    p = bash_run('printf "%s" "$DPKG_JOURNAL"')
+    if not re.fullmatch(r"/var/lib/dpkg/updates/[0-9]+", p.stdout):
+        failures.append("the file the proof makes for an unfinished dpkg journal is %r: apt only counts a file of digits only in /var/lib/dpkg/updates" % p.stdout)
+    else:
+        print("ok: the unfinished dpkg journal is a file of digits only in /var/lib/dpkg/updates")
+    JOURNAL_STUBS = ('DPKG_JOURNAL="$OUT/updates-0001"; PLAN_ID=abc; here() { if [ -e "$DPKG_JOURNAL" ]; then echo here; else echo gone; fi; }; '
+               'call_as() { echo "call_as $2 $3 $4 file=$(here)" >>"$FAKE/calls"; }; post_plan() { echo "post_plan $1 $2 file=$(here)" >>"$FAKE/calls"; }; ')
+    kill_case("dpkg_journal_refusal makes the journal, asks the check and the POST of the plan on offer while it is there, takes it away, and asks again", JOURNAL_STUBS +
+              'dpkg_journal_refusal; here >"$OUT/after"', files={"after": "gone\n", "updates-0001": None},
+              ordered=["call_as packages-journal GET /v1/sys/packages file=here", "post_plan journal-post abc file=here", "call_as packages-journal-gone GET /v1/sys/packages file=gone"])
+    kill_case("dpkg_journal_refusal leaves a journal that is not its own alone, and asks nothing", JOURNAL_STUBS + 'echo theirs >"$DPKG_JOURNAL"; ( dpkg_journal_refusal ); true',
+              files={"aborted": "dpkg already has a journal*", "updates-0001": "theirs\n"}, no_calls=["call_as", "post_plan"])
 
     # main() is what a machine runs and nothing here can: its steps are read in the order they stand, and the conditions of the ones that belong to one leg
     with open(SCRIPT, newline="") as f:
@@ -1616,6 +1733,23 @@ def check(label, ok, detail=""):
         failures.append("%s: %s" % (label, detail))
 
 
+with open(SCRIPT, newline="") as f:
+    guest_text = f.read().replace("\r\n", "\n")
+OLD_FORMS = ("cprev=\"$(apt-cache madison containerd.io | awk '$3 ~ /^1\\.7\\./ {print $3; exit}')\"", "apt-cache policy docker-ce | awk '/Candidate:/ {print $2; exit}'", "dpkg --version 2>&1 | head -n1",
+             "pgrep -af x | head -n1", "ps | grep -q x", "ps | grep -m1 x", "seq 1 9 | sed 1q", "seq 1 9 | sed -n '1q'", "awk '$1 == 1 {print; exit}' f")
+READS_ALL = ("apt-cache madison containerd.io | awk '$3 ~ /^1\\.7\\./ && !found {print $3; found = 1}'", "dpkg --version 2>&1 | sed -n 1p", "# x | head -n1\ntrue", "awk 'END { exit 1 }' f",
+             "awk '{ n++ } END { if (n) exit 0; exit 1 }' f", "grep -q x f", "grep -q x <<<\"$y\"")
+check("the lint of pipelines whose consumer quits early sees the forms that ended the Debian 11 leg, and not the ones that read everything",
+      all(early_quitters(s) for s in OLD_FORMS) and not any(early_quitters(s) for s in READS_ALL),
+      [s for s in OLD_FORMS if not early_quitters(s)] + [s for s in READS_ALL if early_quitters(s)])
+check("no pipeline of the guest script has a consumer that quits before its producer is done (head, grep -q, sed q, an awk that exits outside END)", not early_quitters(guest_text),
+      early_quitters(guest_text))
+check("the guest script runs the helpers that read all of apt-cache's listing", 'cprev="$(containerd_17)"' in guest_text and 'echo "candidate $(candidate_of docker-ce)"' in guest_text)
+refusals_text = re.search(r"^refusals\(\) \{\n(.*?)^\}", guest_text, re.M | re.S)
+positions = [refusals_text.group(1).find(s) if refusals_text else -1 for s in ("post_plan unit-post", "\n    dpkg_journal_refusal\n", "post_plan wrong-post")]
+check("refusals() asks for the unfinished dpkg journal after the package update stand-in and before the wrong plans, once", -1 not in positions and positions == sorted(positions)
+      and refusals_text.group(1).count("dpkg_journal_refusal") == 1, positions)
+
 wf = workflow_text()
 wf_cells = workflow_matrix(wf)
 wf_runs = workflow_runs(wf)
@@ -1623,6 +1757,8 @@ check("the workflow has its run steps, each under a name of its own", len(wf_run
 check("the workflow asks for no permission but to read the repository", re.search(r"^permissions:\n  contents: read\n", wf, re.M) is not None and ": write" not in wf)
 check("no run block has a ${{ }} in it: what the matrix and the inputs say reaches a script through env", all("${{" not in script for script in wf_runs.values()),
       [n for n, s in wf_runs.items() if "${{" in s])
+check("no run block of the workflow has a pipeline whose consumer quits before its producer is done", all(not early_quitters(s) for s in wf_runs.values()),
+      {n: early_quitters(s) for n, s in wf_runs.items() if early_quitters(s)})
 if have_bash():
     for step, script in sorted(wf_runs.items()):
         count[0] += 1

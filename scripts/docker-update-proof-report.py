@@ -26,8 +26,15 @@ The legs:
             leg: it kills the unit with SIGKILL in the middle of the install (as soon as dpkg runs a maintainer
             script of Docker's), before that last failure. The report then wants the evidence of it: what the
             status says (failed, `no_result` or `install`), what dpkg --audit says, that the next check after
-            the kill refuses with `dpkg` (and the one after the repair refuses nothing), and that the repair the
-            dashboard will name (dpkg --configure -a, then apt-get -f install) completes the install.
+            the kill offers no update (docker-ce is already at the candidate: the kill came after dpkg had
+            unpacked it) or refuses with `dpkg` (an update is pending), and which of the two it was (the check
+            after the repair refuses nothing), and that the repair the dashboard will name (dpkg --configure -a,
+            then apt-get -f install) completes the install.
+
+On every leg, before the first update, while it is on offer, the guest makes a file of digits only in
+/var/lib/dpkg/updates (apt's own rule for an unfinished dpkg journal) and removes it again: the check has to
+refuse with `dpkg` and show no button, the POST of the plan on offer has to answer 409 `dpkg`, and with the file
+gone the check has to offer the same plan again.
 
 The legs run on more than one system: the report shows the tools of the one it judges (apt, systemd, dpkg, the
 utilities the unit's script calls) and checks that this system's apt prints its simulation in the form the core reads.
@@ -82,8 +89,11 @@ K_LOG = "kill -9: the log agrees with the status"
 K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
 K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
-K_DIRTY = "kill -9: the next check after the kill refuses with `dpkg`, before the repair"
+K_DIRTY = "kill -9: the next check after the kill, before the repair, offers no update (docker-ce is at the candidate version) or refuses with `dpkg`"
 K_CLEAN = "kill -9: after the repair the check refuses nothing"
+V_DPKG_CHECK = "an unfinished dpkg journal is refused by the check with `dpkg`, with no button"
+V_DPKG_POST = "POST while dpkg has an unfinished journal: 409 `dpkg`"
+V_DPKG_GONE = "after the unfinished journal is gone the update is offered again, with the same plan"
 V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable of the command line to an empty string"
 # a curl that got no HTTP status is the feature's silence when it reached the core and waited for nothing (it timed out, was cut off), and the
 # harness's failure in any other case (it could not resolve, could not connect, could not even start)
@@ -619,6 +629,17 @@ refused("POST while docker-ce is held: 409 `held`", "held-post", ("held",))
 refused("POST while dpkg is locked: 409 `maintenance`", "lock-post", ("maintenance",))
 # the spec files "a generic package update is running" under `running` and under `maintenance`
 refused("POST while the generic package update runs: 409 `running` or `maintenance`", "unit-post", ("running", "maintenance"))
+# an unfinished dpkg journal, made by the guest while the update is on offer: the check and the POST refuse it with `dpkg` (the POST has the plan_id that is right, so the
+# refusal is not `changed`), and with the file gone the same plan is on offer again
+code, body = resp("packages-journal")
+ju = dobj(body, "docker", "update")
+verdict(V_DPKG_CHECK, on(code is not None, code == 200 and ju.get("refusal") == "dpkg" and ju.get("available") is False),
+        "HTTP %s, refusal %r, available %r" % (code, ju.get("refusal"), ju.get("available")))
+refused(V_DPKG_POST, "journal-post", ("dpkg",))
+code, body = resp("packages-journal-gone")
+gu = dobj(body, "docker", "update")
+verdict(V_DPKG_GONE, on(code is not None and plan_seen, code == 200 and gu.get("available") is True and not gu.get("refusal") and gu.get("plan_id") == plan_id),
+        "HTTP %s, available %r, refusal %r, plan_id %r (first %r)" % (code, gu.get("available"), gu.get("refusal"), gu.get("plan_id"), plan_id))
 refused("POST with a plan_id that is not the plan: 409 `changed`", "wrong-post", ("changed",))
 code, _ = resp("bad-post")
 verdict("POST with a body that is not a plan_id: 400", on(code is not None, code == 400), "HTTP %s" % code)
@@ -983,12 +1004,19 @@ if leg == "minor" and kill_expected:
         verdict(K_ROLLBACK, on(kdd, rollback_command_ok(krb)), "rollback_command %r" % krb)
         audit = audit_of("kill-audit.txt")
         verdict(K_AUDIT, on(audit, bool(HALF_FINISHED.search(audit[1])) if audit else False), "dpkg --audit said: %s" % ((audit[1][:300] if audit else "") or "nothing"))
-        # the core refuses what dpkg's own journal and `dpkg --audit` call unfinished, before the repair: a check that offers the update there would run apt into the
-        # error that the unit reports as a failed download
+        # the next check, before the repair, has two true outcomes, and the second is what a real Ubuntu 24.04 gave: an update is pending (the kill came before dpkg had unpacked
+        # every package of the plan) and the core refuses it with `dpkg`, which its journal in /var/lib/dpkg/updates and `dpkg --audit` say; or nothing is pending (the kill came
+        # while dpkg configured packages it had already unpacked at the candidate version, so apt's candidate is what is installed) and the core omits docker.update altogether,
+        # the `dpkg` refusal living in the preflight of a pending update. Nothing else is accepted: an update offered as available would run apt into the error that the unit
+        # reports as a failed download, and no update shown while the installed version is not the candidate is a pending update that the check hid. Which one it was is recorded.
         code, body = resp("kill-packages-dirty")
-        du, code_dirty = dobj(body, "docker", "update"), code
-        verdict(K_DIRTY, on(code is not None, code == 200 and du.get("refusal") == "dpkg" and du.get("available") is False),
-                "HTTP %s, refusal %r, available %r%s" % (code, du.get("refusal"), du.get("available"), "" if du else " (the check returned no docker.update)"))
+        dk_, du, code_dirty = dobj(body, "docker"), dobj(body, "docker", "update"), code
+        dirty_refused = code == 200 and du.get("refusal") == "dpkg" and du.get("available") is False
+        dirty_none = code == 200 and dk_.get("installed") is True and dk_.get("update") is None and dk_.get("version") == expected_to
+        verdict(K_DIRTY, on(code is not None, dirty_refused or dirty_none),
+                "HTTP %s, outcome: %s (refusal %r, available %r, docker.version %r, wanted %r when no update is on offer)%s" %
+                (code, "refused with `dpkg`" if dirty_refused else "no update on offer, docker-ce at the candidate" if dirty_none else "neither",
+                 du.get("refusal"), du.get("available"), dk_.get("version"), expected_to, "" if du else " (the check returned no docker.update)"))
         audit1, audit2 = audit_of("kill-audit-1.txt"), audit_of("kill-audit-after.txt")
         r1, r2, back = read("kill-repair-1.exit").strip(), read("kill-repair-2.exit").strip(), read("kill-docker").strip()
         if not (r1.isdigit() and r2.isdigit() and back):
@@ -1013,7 +1041,14 @@ if leg == "minor" and kill_expected:
         P("The killed unit left dpkg saying: %s" % ((audit[1][:300].replace("\n", " ") if audit else "") or "nothing"))
         if code is not None and code_dirty is not None:
             said = lambda u: "refusal `%s`" % u["refusal"] if u.get("refusal") else "no refusal (the update is %s)" % ("on offer" if u.get("available") else "not on offer")
-            P("The next check after the kill said %s; after the repair it said %s." % (said(du), said(cu)))
+            if dirty_refused:
+                first = "it refused with `dpkg` (an update was pending, and dpkg was in the middle of a package)"
+            elif dirty_none:
+                first = ("it offered no update: docker-ce was already at the candidate %s (the kill came after dpkg had unpacked it, so nothing was pending, and the `dpkg` "
+                         "refusal, which only a pending update can show, had nothing to show)" % expected_to)
+            else:
+                first = said(du)
+            P("The next check after the kill: %s. After the repair it said %s." % (first, said(cu)))
         if audit1:
             P("The repair the dashboard will name: dpkg --configure -a (exit %s) left dpkg --audit %s, so apt-get -f install was %s." %
               (r1 or "?", "saying nothing" if not audit1[1] else "still unhappy", "not needed" if not audit1[1] else "needed (exit %s)" % (r2 or "?")))
