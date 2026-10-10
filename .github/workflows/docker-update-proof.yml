@@ -75,13 +75,6 @@ on:
         required: false
         default: ''
         type: string
-  # TODO-REMOVE-BEFORE-MERGE: a workflow that has only workflow_dispatch cannot be run from a branch that is not the
-  # default one, so the proof runs on each push to this branch while it is being proven. A push has no input to take
-  # a tag from: the repository variable DOCKER_PROOF_TAG names the (pre-)release it proves, and a push with no such
-  # variable stops before it spends a minute on a guest. Delete this comment and the push: stanza below it before the
-  # branch is merged (the variable and the EVENT check in the Fetch step then serve no purpose, and can go with it).
-  push:
-    branches: [ci/docker-update-proof]
 
 permissions:
   contents: read
