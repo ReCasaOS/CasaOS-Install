@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.21] - 2026-10-10
+
+Components: CasaOS `v0.4.67`, CasaOS-UI `v0.4.81`. Unchanged from v0.5.20: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **System packages can update Docker.** Where the Docker line shows a newer Docker, an **Update Docker** button runs the update from the dashboard, without a terminal. It is for docker-ce from Docker's own repository, on Debian and Ubuntu, and it goes through a confirmation that lists what will be installed (the new version, a stronger warning for a major version such as 28 to 29, and the packages Docker 29 newly depends on, `nftables` among them), and which of your containers will not come back by themselves (the ones with no restart policy), and which publish port 53, 80 or 443 or use the host network or the Docker socket. It stops every container while Docker restarts, a few seconds on a quiet box. It downloads first while your apps run, installs only the confirmed list, waits for Docker, and tells you which containers did not return. It starts nothing and rolls nothing back by itself; after a failed run it shows the command that puts the previous versions back, and says that this has not been tested after a major version change.
+- **When it refuses, it says why**: the Docker is not docker-ce from Docker's repository (Debian's `docker.io`, a snap), its package is on hold (a hold is your decision, it is not lifted for you), a package operation was left unfinished (`sudo dpkg --configure -a`), Docker does not answer or is a Swarm, the update would also upgrade or remove packages that are not Docker's, there is less than 1 GiB free, or the box is busy (another update, dpkg's lock, an app being installed or backed up, or AppManagement not answering).
+- **A proof of that button on real machines** (workflow `docker-update-proof`, run by hand against a release before it is offered): a Debian 11 guest with Docker 28.0.4 updated to 29, and Ubuntu 24.04, Debian 12, Debian 13 and Ubuntu 26.04 guests updated from the previous patch of their Docker, each with containers of every restart policy and a database that acknowledges each write.
+- **The installer release can be published as a pre-release** (a `release/PRERELEASE` file in the tagged commit): the in-app updater and the one-line install command read the latest release, which GitHub works out without pre-releases, so a release can be installed by its tag and proven before anybody is offered it.
+
+### Fixed
+
+- **The Docker line no longer says that no newer Docker is offered on a box that is not in English.** `apt-cache policy` prints its words in the box's language ("Installé :", "Candidat :"), and the check looked for the English ones, found nothing, and said there was nothing newer. The package tools now run with `LC_ALL=C`.
+
 ## [0.5.20] - 2026-10-09
 
 Components: CasaOS `v0.4.66`, CasaOS-UI `v0.4.80`. Unchanged from v0.5.19: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
