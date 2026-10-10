@@ -717,6 +717,9 @@ phase_prepare() {
     CASA_PORT=80
     write_config
     guard_run
+    # the markers and the poller lean on bash's own clock and on /dev/tcp (the bash of Debian and Ubuntu has both): a bash without them measures nothing, and says so now
+    [ -n "${EPOCHREALTIME:-}" ] || abort "this bash has no EPOCHREALTIME (bash 5 is needed)"
+    tcp_open 22 || abort "this bash cannot open /dev/tcp (or sshd is not listening on 22): the poller would measure nothing"
     init_apt
     note_boot
     marker prepare_start

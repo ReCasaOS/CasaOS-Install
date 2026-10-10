@@ -1275,6 +1275,8 @@ esac
     baseline_body = function_body(guest_text, "phase_baseline") or ""
     check("the baseline starts again the two witnesses whose policy does not start them after the reboots that came before, and says which", "docker start" in baseline_body and "baseline-started" in baseline_body and "p-no p-on-failure" in baseline_body)
     check("the container on the host network is served a file: its port answers 200", "index.html" in (function_body(guest_text, "start_things") or ""))
+    prepare_body = function_body(guest_text, "phase_prepare") or ""
+    check("prepare says at once that its bash has no clock of its own or no /dev/tcp, instead of measuring nothing", "EPOCHREALTIME" in prepare_body and "tcp_open 22" in prepare_body and prepare_body.find("tcp_open 22") < prepare_body.find("marker prepare_start"))
     check("the after phase reads the units before it asks anything", after_body.find("units_dump boot") != -1 and after_body.find("units_dump boot") < after_body.find("http_code") and after_body.find("units_dump boot") < after_body.find("wait_docker"))
     unit_bodies = "\n".join(function_body(guest_text, n) or "" for n in ("hop_unit_debian", "hop_unit_ubuntu", "hop_unit"))
     check("the unit never reboots the box (the harness does)", unit_bodies != "" and not re.search(r"\b(reboot|shutdown|poweroff|halt)\b", re.sub(r"#[^\n]*", "", unit_bodies)), re.findall(r"[^\n]*reboot[^\n]*", unit_bodies))
