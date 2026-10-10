@@ -1,0 +1,283 @@
+name: os-upgrade-measure
+
+# What an in-place upgrade of the operating system does to a running ReCasaOS box, measured on real guests before any product code exists
+# (the first rung of the OS upgrade work: PR 0 of the design, section 8). Nothing here is offered to a user, and nothing is published.
+#
+# Each leg is a QEMU guest booted with KVM from the cloud image of the OLD release (the way install-check.yml and docker-update-proof.yml boot
+# theirs). scripts/os-upgrade-measure.sh installs Docker and the published ReCasaOS release on it, starts the witnesses (a container of each restart
+# policy, a database that acknowledges every write after a sync, a container that publishes a port), and makes ONE hop to the next release, the
+# documented way and the way the future button would run it: in a transient unit (systemd-run --no-block --collect
+# --unit=casaos-os-upgrade-measure) with DEBIAN_FRONTEND=noninteractive, the apt options of the design, Docker's source paused, and no reboot by the
+# unit: this workflow reboots the guest afterwards. scripts/os-upgrade-measure-report.py reads what the guest recorded and prints the facts and the
+# go/no-go table of the design, or says INVALID RUN (and fails the job); the guest judges nothing.
+#
+#   d11-12  Debian 11, installed with --use-debian-archive (its security line is the archive's) and Docker 28.0.4 with a 29 on offer (the owner's
+#           box), to Debian 12: apt 2.2.4 reading bookworm's InRelease in a read-only sandbox (does the plan work, how close is it to the transaction,
+#           is /etc/apt untouched), does the docker-ce built for bullseye survive, how --allow-releaseinfo-change-{suite,version,label} behave.
+#   d12-13  Debian 12 to 13: the same, with apt 2.6.1.
+#   u22-24  Ubuntu 22.04 to 24.04 with `do-release-upgrade -f DistUpgradeViewNonInteractive` run from the unit (does it need a terminal, does it start
+#           screen or an sshd on 1022), Docker's source paused. Guarded by `do-release-upgrade -c`: when it does not offer the release (exit 0 AND the
+#           version) the leg says NOT_OFFERED, which is neutral and visible and is never a pass.
+#   u24-26  Ubuntu 24.04 to 26.04, the same.
+#
+# Every leg also asks: does root's `systemctl reboot` (and --force) get refused under `systemd-inhibit --what=shutdown --mode=block` (the guest goes
+# down when it is not); does the unit survive the upgrade of systemd, dbus and libc6; which services bounce while dpkg runs (and which ones libc6's
+# postinst restarts); what the witnesses see (the database's silence, the port's, which containers come back by their policy); whether the core, the
+# gateway and AppManagement come back after the reboot without help, and whether an API token issued before the hop is still accepted; dpkg --audit,
+# apt-get check and the failed units before and after; the kernel and /boot; the durations of every step.
+#
+# The Ubuntu legs also ask what the tool does to Docker once its source is paused. ubuntu_variant hold holds docker-ce, docker-ce-cli and
+# containerd.io (the rest of Docker's packages and a package that no repository has are the controls); keep leaves nothing held and writes
+# RemoveObsoletes=no in /etc/update-manager/release-upgrades.d: run it twice to have both answers.
+#
+# A hosted runner has about 14 GB of disk: df is printed first, the guest's disk is a sparse 30 GB on the larger of the two disks of the runner, and
+# the report says whether the guest's disk was short. By hand only; it installs and removes things on throwaway machines and changes nothing else.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ubuntu_variant:
+        description: Ubuntu legs, what protects Docker from the tool, hold (apt-mark hold on docker-ce, docker-ce-cli, containerd.io) or keep (RemoveObsoletes=no in release-upgrades.d)
+        required: false
+        default: hold
+        type: choice
+        options:
+          - hold
+          - keep
+
+permissions:
+  contents: read
+
+jobs:
+  vm:
+    name: ${{ matrix.name }}, ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: d11-12
+            name: Debian 11
+            label: to Debian 12, Docker 28.0.4
+            id: debian
+            version: '11'
+            base: https://cloud.debian.org/images/cloud/bullseye/latest
+            image: debian-11-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+            args: --use-debian-archive
+            docker_from: 28.0.4
+          - leg: d12-13
+            name: Debian 12
+            label: to Debian 13
+            id: debian
+            version: '12'
+            base: https://cloud.debian.org/images/cloud/bookworm/latest
+            image: debian-12-genericcloud-amd64.qcow2
+            sums: SHA512SUMS
+            algo: sha512sum
+          - leg: u22-24
+            name: Ubuntu 22.04
+            label: to Ubuntu 24.04
+            id: ubuntu
+            version: '22.04'
+            base: https://cloud-images.ubuntu.com/releases/22.04/release
+            image: ubuntu-22.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+          - leg: u24-26
+            name: Ubuntu 24.04
+            label: to Ubuntu 26.04
+            id: ubuntu
+            version: '24.04'
+            base: https://cloud-images.ubuntu.com/releases/24.04/release
+            image: ubuntu-24.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      LEG: ${{ matrix.leg }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      INSTALLER_ARGS: ${{ matrix.args }}
+      DOCKER_FROM: ${{ matrix.docker_from }}
+      UBUNTU_VARIANT: ${{ inputs.ubuntu_variant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The measurement can say no
+        run: |
+          set -euo pipefail
+          python3 scripts/test-os-upgrade-measure.py
+          bash -n scripts/os-upgrade-measure.sh
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          # the published latest release is the ReCasaOS this proves the OS upgrade under
+          tag="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          echo "installer release: ${tag}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          mkdir published
+          gh release download "${tag}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          # the guest's disk goes where there is more room: a hosted runner has about 14 GB (the report says whether the guest's own disk was short)
+          df -h . /mnt | tee host-df-start.txt
+          here="$(df -Pm . | awk 'NR == 2 {print $4}')"
+          there="$(df -Pm /mnt | awk 'NR == 2 {print $4}')"
+          disk_dir="${PWD}"
+          if [ "${there}" -gt "${here}" ]; then
+            sudo mkdir -p /mnt/osm
+            sudo chown "$(id -u):$(id -g)" /mnt/osm
+            disk_dir=/mnt/osm
+          fi
+          echo "DISK_DIR=${disk_dir}" >>"${GITHUB_ENV}"
+          echo "the guest's disk is in ${disk_dir}: ${here} MB free here, ${there} MB on /mnt"
+          curl -fsSL -o "${disk_dir}/disk.img" "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | (cd "${disk_dir}" && "${ALGO}" --check)
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          # The runner's apt sometimes stalls without a word (it has taken a whole job before): a few bounded tries, for that and for nothing else.
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize "${DISK_DIR}/disk.img" 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -drive file="${DISK_DIR}/disk.img",if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+          scp -F ssh_config published/install.sh scripts/os-upgrade-measure.sh vm:
+
+      # The values reach the guest through the environment of the job, which the matrix of this file sets; none of them is typed by whoever dispatches the run
+      # (ubuntu_variant is a choice of two).
+      - name: Prepare the old release
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          ssh -F ssh_config vm "sudo env MEASURE_DISPOSABLE=1 LEG='${LEG}' INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' UBUNTU_VARIANT='${UBUNTU_VARIANT}' OUT=/home/casa/osm-out bash os-upgrade-measure.sh prepare"
+
+      - name: Root's reboot under an inhibitor
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_inhibit reboot
+
+      - name: Root's forced reboot under an inhibitor
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_inhibit force
+
+      - name: Reboot before the hop
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_reboot pre
+
+      - name: Baseline and read-only probes
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_guest baseline
+          runner_guest probe
+
+      - name: The hop
+        timeout-minutes: 90
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_hop
+
+      - name: Reboot after the hop
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_reboot post
+
+      - name: After the reboot
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_guest after
+
+      # Red for a run that proves nothing (INVALID RUN); a hop that fails, or a refusal that is not one, is a finding and not a broken harness. An Ubuntu hop
+      # Canonical has not opened (NOT_OFFERED) is neutral: the job stays green, with a warning that says so.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ssh -F ssh_config vm 'sudo tar -C /home/casa/osm-out -cf - .' | tar -xf - -C out || true
+          cp host-df-start.txt out/ 2>/dev/null || true
+          df -h . /mnt >out/host-df-end.txt 2>&1 || true
+          test -s out/timeline.tsv || { { echo "the run left no evidence: nothing to report"; cat out/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
+          python3 scripts/os-upgrade-measure-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          if grep -q 'NOT_OFFERED' out/report.md; then echo "::warning title=NOT_OFFERED::Canonical does not offer this Ubuntu upgrade on the guest: nothing of the hop was measured"; fi
+
+      - name: What the machine says when it is not well
+        if: always()
+        run: |
+          ssh -F ssh_config vm 'systemctl --failed --no-pager; sudo journalctl -u casaos.service -u docker.service -u containerd.service -u casaos-os-upgrade-measure.service --no-pager -o short-iso | tail -150' || true
+          tail -30 serial.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: os-upgrade-measure-${{ matrix.leg }}
+          path: |
+            out
+            serial.log
+          if-no-files-found: ignore
