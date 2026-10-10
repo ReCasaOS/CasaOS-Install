@@ -16,10 +16,16 @@ name: docker-update-proof
 #           needs nftables and Docker 28 did not. The Debian 11 cloud image has no nftables, so the
 #           update brings it (with libnftables1 and libjansson4); on an image that does have it, when apt
 #           can take it out without taking anything but libraries with it, the leg does, before the first check. When the update has succeeded the leg
-#           runs the rollback command (apt-get install --allow-downgrades of the PREVIOUS pins) and
-#           the verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with
-#           the containers, the database's volume and the images intact. A FAIL there is meant to turn
-#           the leg red: it means that the core must not offer the rollback command after a major jump.
+#           runs the command that used to be the way back (apt-get install --allow-downgrades of the
+#           PREVIOUS pins) and RECORDS what is left in the report: Docker's version, the containers,
+#           the database's volume, the images, the published port. That is an observation ("recorded,
+#           not judged"), never a verdict, and it never turns the leg red: on Debian 11 the packages went
+#           back and Docker started, but the containers did not start again by themselves, so the core
+#           offers no rollback command after a major jump. A rollback that could not be run, or whose
+#           evidence is missing, makes the run invalid. Then, as the minor legs do, the leg puts the box
+#           back on 28.0.4, makes dockerd unable to start and asks for the update again: it has to fail
+#           with `daemon`, the status has to say major_jump true, from 28.0.4, to the 29 on offer, and
+#           there has to be no rollback command.
 #   minor   Ubuntu 24.04, Debian 12, Debian 13 and Ubuntu 26.04 (the images install-check.yml boots):
 #           the previous patch of the current Docker minor (found at run time, not written down), the
 #           current one on offer; and last, with the box put back on the previous patch and dockerd
@@ -67,9 +73,9 @@ name: docker-update-proof
 # release.yml publishes a release as the latest one at once (prerelease: false), so a candidate has
 # to be made a pre-release by hand, or release.yml has to be told to; nothing here changes that.
 # Left empty, the tag is the latest published release: the same proof, after the fact.
-# By hand only; it publishes nothing and changes nothing outside the guests. The minor legs are
-# the longer ones: their failure injection waits for the unit's own timeouts, which can add up
-# to ten minutes.
+# By hand only; it publishes nothing and changes nothing outside the guests. Every leg ends with
+# a failure injection (the major leg after its rollback), which waits for the unit's own timeouts,
+# which can add up to ten minutes.
 
 on:
   workflow_dispatch:

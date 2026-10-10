@@ -15,9 +15,13 @@
 #                                  installer does not bring it in, so the update has a package to bring that the box
 #                                  did not have, as on the owner's box. On an image that does have it, when apt can take
 #                                  it out and nothing but libraries with it, the leg does, before the first check. What it did, or why not, is in
-#                                  $OUT/dependency-path. After the success the rollback command the core prints after a
-#                                  failure is run for real (rollback_run), and what is left of Docker 28.0.4, the containers,
-#                                  the volume and the images is recorded.
+#                                  $OUT/dependency-path. After the success the command the core used to print as the way back after a
+#                                  failure (apt-get install --allow-downgrades of the PREVIOUS pins) is run for real (rollback_run), and what is
+#                                  left of Docker 28.0.4, the containers, the volume and the images is recorded: an observation, never a verdict
+#                                  (on Debian 11 the packages went back and Docker started, but the containers did not start again by themselves,
+#                                  which is why the core offers no rollback command after a major jump). Last, with the box put back on 28.0.4 and
+#                                  dockerd made unable to start, a second update (failure_run, the one the minor legs end with): the run has to fail
+#                                  with `daemon`, and the status has to say major_jump, from 28.0.4, to the 29 on offer, and give no rollback command.
 #   docker-update-proof.sh minor   the previous patch of the current Docker minor (found with apt-cache
 #                                  madison, never written down), the current one on offer; and last, once
 #                                  the box is put back there, a second update with dockerd made unable to
@@ -591,11 +595,12 @@ runtime_log() {
 
 # ---- the way back, major leg: the rollback command, run for real --------------------------------------------------------
 
-# rollback_run: after the success, the command the core prints after a failure (sudo apt-get install --allow-downgrades <the pins of the
+# rollback_run: after the success, the command the core used to print after a failure (sudo apt-get install --allow-downgrades <the pins of the
 # PREVIOUS marker>) is run, on the box that has just gone from Docker 28 to 29 and has run the apps on it since; then what is left is
 # recorded: Docker's version, the containers, the volume's content, the images. -y and --force-confold are the only things added to the
 # command, so that it can run with nobody to answer. A PREVIOUS without a pin leaves no command: rollback-exit says not-run, which the
-# report counts as the rollback failing (the core had nothing to give). Nothing is judged here.
+# report counts as a rollback that could not be run (an invalid run). Nothing is judged here, and the report only records what was seen:
+# the core offers no such command after a major jump any more, because on Debian 11 it did not bring the containers back.
 rollback_run() {
     local pins=() rc=0
     marker rollback_start
@@ -722,7 +727,7 @@ kill_run() {
     fi
 }
 
-# ---- the failure, last ---------------------------------------------------------------------------------------------
+# ---- the failure, last, on every leg -------------------------------------------------------------------------------
 
 mend_daemon_json() {
     if [ -e "${AUTH_DIR}/daemon.json.orig" ]; then
@@ -746,6 +751,9 @@ put_back() {
     "${APT[@]}" update -qq
 }
 
+# failure_run: the box is put back on the version it started on (after the rollback of the major leg there is nothing left to put back when
+# the rollback held, and the same call makes up for one that did not), the update is asked for again with dockerd made unable to start, and
+# what the status says of the failure (error_code, major_jump, from, to, the rollback command) is recorded for the report to judge.
 failure_run() {
     local fail_id start
     put_back putback
@@ -763,7 +771,7 @@ failure_run() {
     [ "$(cat "${OUT}/fail-post.code")" = 200 ] || { mend_daemon_json; abort "the POST of the failure run was not accepted (HTTP $(cat "${OUT}/fail-post.code"))"; }
     poll_status fail-status 1500
     marker fail_terminal
-    log "the failing update ended: $(jq -c '.data | {state, outcome, error_code, rollback_command}' "${OUT}/fail-status-final.json" 2>/dev/null || echo unreadable)"
+    log "the failing update ended: $(jq -c '.data | {state, outcome, error_code, major_jump, from, to, rollback_command}' "${OUT}/fail-status-final.json" 2>/dev/null || echo unreadable)"
     cp "$(runtime_log)" "${OUT}/docker-update-fail.log" 2>/dev/null || true
     journalctl -u docker.service --no-pager -n 60 >"${OUT}/docker-journal-fail.txt" 2>&1 || true
 
@@ -856,7 +864,7 @@ main() {
     update_run
     if [ "${LEG}" = major ]; then rollback_run; fi
     if [ "${KILL_INSTALL}" = 1 ]; then kill_run; fi
-    if [ "${LEG}" = minor ]; then failure_run; fi
+    failure_run
     collect_journal unit-journal-end.txt
     kill "${POLL_PID}" 2>/dev/null || true
     POLL_PID=""
