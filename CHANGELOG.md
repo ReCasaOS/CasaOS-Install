@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.22] - 2026-10-10
+
+Components: CasaOS `v0.4.68`, CasaOS-UI `v0.4.82`. Unchanged from v0.5.21: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+v0.5.21 was published as a pre-release only, and never offered to a box: the first real run of its proof found the problem below. This release carries everything v0.5.21 did, below.
+
+### Fixed
+
+- **After an update of Docker that crossed a major version and failed, the dashboard no longer offers a way back.** The first real run of the Docker update proof, on a Debian 11 guest going from Docker 28.0.4 to 29.8.0 (the update itself worked, `nftables` brought in as a new package, Docker away for six seconds, every container back at once), also ran the command that v0.5.21 printed after a failed run to go back. It put Docker 28 and containerd 1.7 back, with the images, and Docker started, but no container started again afterwards, restart policy or not. The log of a run now records its plan, the status says `major_jump`, and the dashboard says that there is no way back that has been shown to work, in the place of the command; the confirmation of a major version says it too. A failed update inside the same major keeps its command.
+
+### Changed
+
+- **The proof of the Docker update records that rollback instead of judging it, and every leg now ends with a failed update**: on the Debian 11 leg a major jump whose Docker cannot start must end failed, say `major_jump`, and offer no command.
+
 ## [0.5.21] - 2026-10-10
 
 Components: CasaOS `v0.4.67`, CasaOS-UI `v0.4.81`. Unchanged from v0.5.20: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

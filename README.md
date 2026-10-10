@@ -104,6 +104,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.22
+
+**After a failed update of Docker across a major version, the dashboard no longer offers a way back that does not work**: tested, the packages went back and the containers did not.
+
 ## What is in v0.5.21
 
 **The dashboard can update Docker**: an Update Docker button in System packages, with a confirmation that lists what will be installed and which containers will not come back, and a refusal that says why when it cannot.
