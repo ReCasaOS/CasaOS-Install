@@ -14,20 +14,31 @@ date that cannot read a time, a curl that reaches nothing, an apt that cannot fe
 value the feature produced, and what the harness's own tools leave behind when they fail says nothing about the button.
 
 The legs:
-    major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box. The
-            harness takes nftables out first when apt can do that cleanly, because Docker 29 needs it
-            and Docker 28 did not: the update then has a package to bring that the box does not have. When it has
-            succeeded the harness runs the rollback command (apt-get install --allow-downgrades of the PREVIOUS pins) and the
-            verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with the containers, the database's
-            volume and the images intact. A FAIL there is meant to turn the leg red: it means that the core must not offer the
-            rollback command after a major jump.
+    major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box. Docker 29 needs
+            nftables and Docker 28 did not: the Debian 11 cloud image has none, so the update has a package to bring that the
+            box does not have; on an image that has it, the harness takes it out first when apt can do that cleanly. When it has
+            succeeded the harness runs the command that used to be the way back (apt-get install --allow-downgrades of the PREVIOUS
+            pins) and RECORDS what is left: Docker's version, the containers, the database's volume, the images, the published port.
+            That is an observation, recorded and not judged, and it never fails the leg: on Debian 11 the packages went back and Docker
+            started, but the containers did not start again by themselves, which is why the core offers no rollback command after a
+            major jump. A rollback that could not be run, or whose evidence is missing, is an invalid run. Last the box is put back on
+            28.0.4, dockerd is made unable to start, and the update is asked for again: it has to fail with `daemon`, and the status
+            has to say major_jump true, from 28.0.4, to the 29 on offer, and give no rollback command. What the box does once the
+            file is mended is recorded and not judged here: it has been through the rollback, whatever that did.
     minor   Ubuntu 24.04, the previous patch of the current Docker minor, then a second update with
             dockerd made unable to start (failure injection, last). One minor leg is also given `kill` after the
             leg: it kills the unit with SIGKILL in the middle of the install (as soon as dpkg runs a maintainer
             script of Docker's), before that last failure. The report then wants the evidence of it: what the
             status says (failed, `no_result` or `install`), what dpkg --audit says, that the next check after
-            the kill refuses with `dpkg` (and the one after the repair refuses nothing), and that the repair the
-            dashboard will name (dpkg --configure -a, then apt-get -f install) completes the install.
+            the kill offers no update (docker-ce is already at the candidate: the kill came after dpkg had
+            unpacked it) or refuses with `dpkg` (an update is pending), and which of the two it was (the check
+            after the repair refuses nothing), and that the repair the dashboard will name (dpkg --configure -a,
+            then apt-get -f install) completes the install.
+
+On every leg, before the first update, while it is on offer, the guest makes a file of digits only in
+/var/lib/dpkg/updates (apt's own rule for an unfinished dpkg journal) and removes it again: the check has to
+refuse with `dpkg` and show no button, the POST of the plan on offer has to answer 409 `dpkg`, and with the file
+gone the check has to offer the same plan again.
 
 The legs run on more than one system: the report shows the tools of the one it judges (apt, systemd, dpkg, the
 utilities the unit's script calls) and checks that this system's apt prints its simulation in the form the core reads.
@@ -72,7 +83,8 @@ PIN_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")  
 EMPTY_ENV_RE = re.compile(r"(Referenced but unset|Invalid) environment variable( name)? evaluates to an empty string", re.I)
 JOURNAL_FROM = 254     # the first systemd that writes either line
 V_PINS = "the PREVIOUS marker carries a pin for every package the update upgraded, at the version it had, and only pins"
-V_ROLLBACK = "rollback after the major jump"
+V_MJ_STATUS = "failure: the status says major_jump true, from the version the leg started on, to the one on offer"
+V_MJ_NOCMD = "failure: the status offers no rollback command after a major jump"
 V_SIM = "apt's simulation exits 0 and names docker-ce from the installed version to the one on offer, in the form the core reads"
 K_POST = "kill -9: the POST starts the run"
 K_TERMINAL = "kill -9: the run reaches a terminal state"
@@ -82,8 +94,11 @@ K_LOG = "kill -9: the log agrees with the status"
 K_ROLLBACK = "kill -9: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version"
 K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --configure -a` and `apt-get -f install` are for"
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
-K_DIRTY = "kill -9: the next check after the kill refuses with `dpkg`, before the repair"
+K_DIRTY = "kill -9: the next check after the kill, before the repair, offers no update (docker-ce is at the candidate version) or refuses with `dpkg`"
 K_CLEAN = "kill -9: after the repair the check refuses nothing"
+V_DPKG_CHECK = "an unfinished dpkg journal is refused by the check with `dpkg`, with no button"
+V_DPKG_POST = "POST while dpkg has an unfinished journal: 409 `dpkg`"
+V_DPKG_GONE = "after the unfinished journal is gone the update is offered again, with the same plan"
 V_JOURNAL = "the unit's journal has no line saying that systemd evaluated an environment variable of the command line to an empty string"
 # a curl that got no HTTP status is the feature's silence when it reached the core and waited for nothing (it timed out, was cut off), and the
 # harness's failure in any other case (it could not resolve, could not connect, could not even start)
@@ -619,6 +634,17 @@ refused("POST while docker-ce is held: 409 `held`", "held-post", ("held",))
 refused("POST while dpkg is locked: 409 `maintenance`", "lock-post", ("maintenance",))
 # the spec files "a generic package update is running" under `running` and under `maintenance`
 refused("POST while the generic package update runs: 409 `running` or `maintenance`", "unit-post", ("running", "maintenance"))
+# an unfinished dpkg journal, made by the guest while the update is on offer: the check and the POST refuse it with `dpkg` (the POST has the plan_id that is right, so the
+# refusal is not `changed`), and with the file gone the same plan is on offer again
+code, body = resp("packages-journal")
+ju = dobj(body, "docker", "update")
+verdict(V_DPKG_CHECK, on(code is not None, code == 200 and ju.get("refusal") == "dpkg" and ju.get("available") is False),
+        "HTTP %s, refusal %r, available %r" % (code, ju.get("refusal"), ju.get("available")))
+refused(V_DPKG_POST, "journal-post", ("dpkg",))
+code, body = resp("packages-journal-gone")
+gu = dobj(body, "docker", "update")
+verdict(V_DPKG_GONE, on(code is not None and plan_seen, code == 200 and gu.get("available") is True and not gu.get("refusal") and gu.get("plan_id") == plan_id),
+        "HTTP %s, available %r, refusal %r, plan_id %r (first %r)" % (code, gu.get("available"), gu.get("refusal"), gu.get("plan_id"), plan_id))
 refused("POST with a plan_id that is not the plan: 409 `changed`", "wrong-post", ("changed",))
 code, _ = resp("bad-post")
 verdict("POST with a body that is not a plan_id: 400", on(code is not None, code == 400), "HTTP %s" % code)
@@ -761,26 +787,28 @@ verdict("GET /v1/sys/docker/containers lists the containers that are running aga
         on(code is not None, code == 200 and dget(body, "running") is True and {n for n, p in CONTAINERS.items() if p in COMES_BACK} <= after_names and "p-no" not in after_names),
         "HTTP %s, listed: %s" % (code, ", ".join(sorted(after_names - {None})) or "none"))
 
-# ---- the way back after the major jump: major leg only -----------------------------------------------------------------
+# ---- the way back after the major jump: major leg only, an observation --------------------------------------------------
 
+# What the command that used to be offered as the way back does, recorded and never judged: in the proof on Debian 11 the packages went back and Docker started, and the
+# containers did not start again by themselves, so the core offers no rollback command after a major jump. A result is not a verdict, whatever it is. What stays an invalid run
+# is a rollback that could not be run, or whose evidence is missing or was not read to its end.
 rollback_seconds = None
 if leg == "major":
     P("## Rolling back")
     P("")
+    observed = None   # what was seen, when there is evidence to trust of it
     rb_exit, rb_cmd = read("rollback-exit").strip(), read("rollback-command").strip()
-    rb_name = "%s: Docker %s starts again with the containers, the volume's content and the images intact" % (V_ROLLBACK, start_version or "?")
     if "rollback_start" not in markers:
         invalid("marker rollback_start is missing from the timeline: the rollback did not get that far")
     if not rb_exit or not rb_cmd:
         invalid("rollback-exit or rollback-command is missing: the rollback step did not run")
     elif rb_exit == "not-run":
-        verdict(rb_name, False, "the PREVIOUS marker carries no pin, so the core could print no rollback command and there is nothing to run")
-        P("The PREVIOUS marker held no pin: no rollback command could be made, and none was run.")
+        invalid("the rollback could not be run: the PREVIOUS marker carries no pin, so there was no command to run (the verdict on the pins says why)")
     elif not rb_exit.isdigit():
         invalid("rollback-exit says %r, which is not an exit status" % rb_exit)
     else:
-        # the command is the one the core prints after a failure, made here of the pins of the PREVIOUS marker: set against the log, so that a
-        # harness that built it from anything else is an invalid run, not a rollback that passed
+        # the command is the one the core used to print after a failure, made here of the pins of the PREVIOUS marker: set against the log, so that a
+        # harness that built it from anything else is an invalid run, not a rollback that was observed
         rb_pins = rb_cmd.split()[4:] if rb_cmd.startswith("sudo apt-get install --allow-downgrades ") else []
         prev_pins = [w for w in prev_field.split() if PIN_RE.match(w)]
         if marks and (not rb_pins or not all(bare(p.split("=")[0]) in ALLOWLIST for p in rb_pins) or sorted(rb_pins) != sorted(prev_pins)):   # prev_pins are pins
@@ -798,38 +826,31 @@ if leg == "major":
         rb_trouble = tool_trouble(int(rb_exit), read("rollback.log")) if rb_exit != "0" else None   # a failure that is apt's or the shell's, not the rollback's
         if rb_trouble:
             invalid("the rollback's apt-get did not get to try the rollback: %s (see rollback.log)" % rb_trouble)
-        down = sorted(n for n, pol in CONTAINERS.items() if pol in COMES_BACK and n not in running(rb_snap))
-        gone_images = sorted(images_before - images_after)
-        why = []
-        if rb_exit != "0":
-            why.append("apt-get exited %s (see rollback.log)" % rb_exit)
-        if rb_snap.get("docker") != start_version:
-            why.append("the daemon says %r, not %s" % (rb_snap.get("docker"), start_version))
-        if package_version(rb_snap, "docker-ce") != installed_full:
-            why.append("dpkg has docker-ce %r, not %s" % (package_version(rb_snap, "docker-ce"), installed_full))
-        if down:
-            why.append("not running: %s" % ", ".join(down))
-        if not rb_settle.isdigit():
-            why.append("the containers that start by themselves were not back after 150 s")
-        if gone_images:
-            why.append("images gone: %s" % ", ".join(gone_images))
-        if not rb_acked or not rb_filed:
-            why.append("no acknowledged write could be read back (%d in the log, %d in the file)" % (len(rb_acked), len(rb_filed)))
-        elif rb_lost:
-            why.append("%d acknowledged writes missing from the volume" % len(rb_lost))
-        if rb_code != 200:
-            why.append("the published port answers HTTP %s" % rb_code)
         trusted = not any(p.startswith(("the rollback command the harness", "the rollback's apt-get", "marker rollback_", "snapshot-rollback", "images-", "rollback-",
                                         "no answer was recorded for rollback-web")) for p in problems)
-        verdict(rb_name, on(trusted, not why), "; ".join(why) or "the command %r ran, exit %s; %d images, %d acknowledged writes, the containers back after %s s" %
-                (rb_cmd, rb_exit, len(images_after), len(rb_acked), rb_settle))
-        if why and trusted:
-            P("**The rollback did not hold: %s.** The core must not offer the rollback command after a major jump (hide it when `major_jump` is true, and tell the owner to copy "
-              "/var/lib/containerd and /var/lib/docker before the update)." % "; ".join(why))
-        elif trusted:
-            P("`%s` ran (exit %s; the harness adds -y and --force-confold so that it can run unattended). Docker %s started again, the containers that start by themselves "
-              "were back after %s s, %d images were still there, and every one of the %d writes the database acknowledged was on the volume." %
-              (rb_cmd, rb_exit, start_version, rb_settle, len(images_after), len(rb_acked)))
+        if trusted:
+            up_now = sorted(n for n in CONTAINERS if n in running(rb_snap))
+            down_now = sorted(n for n in CONTAINERS if n not in running(rb_snap))
+            gone_images = sorted(images_before - images_after)
+            observed = [
+                "apt-get exited %s%s" % (rb_exit, "" if rb_exit == "0" else " (see rollback.log)"),
+                "the daemon says %s; dpkg has docker-ce %s" % (rb_snap.get("docker") or "?", package_version(rb_snap, "docker-ce") or "?"),
+                "containers running: %s; not running: %s" % (", ".join(up_now) or "none", ", ".join("%s (%s)" % (n, CONTAINERS[n]) for n in down_now) or "none"),
+                "the containers that start by themselves: %s" % ("back after %s s" % rb_settle if rb_settle.isdigit() else "not back after 150 s"),
+                "images: %d of the %d the box had before are still there%s" % (len(images_before & images_after), len(images_before),
+                                                                                "; gone: " + ", ".join(gone_images) if gone_images else ""),
+                "the volume: %d writes acknowledged by the database, %d in its file, %d missing" % (len(rb_acked), len(rb_filed), len(rb_lost)),
+                "the published port (nginx, 18081) answers HTTP %s" % rb_code,
+            ]
+    if observed is None:
+        P("The rollback was not observed: its evidence is missing or cannot be trusted (see the invalid run above).")
+    else:
+        P("**Recorded, not judged.** `%s` was run after the successful update (-y and --force-confold are the only things added, so that it can run with nobody to answer), on the box "
+          "that had just gone from Docker %s to %s and had run the apps since. The core offers no rollback command after a major jump, so what it did is kept here as evidence "
+          "and never turns the leg red:" % (rb_cmd, start_version or "?", expected_to or "?"))
+        P("")
+        for line_ in observed:
+            P("- " + line_)
         if "rollback_start" in markers and "rollback_settled" in markers:
             rollback_seconds = markers["rollback_settled"] - markers["rollback_start"]
     P("")
@@ -875,54 +896,77 @@ if len(stamps) > 2:
         P("- the database stopped writing for %.1f s at the longest (between two acknowledged writes)." % max(gaps))
 P("- the status endpoint was asked %d times and failed %d." % (len(samples), sum(1 for _, h, _ in samples if h != "200")))
 if rollback_seconds is not None:
-    P("- the rollback, from its command to the containers that start by themselves being back: %.0f s." % rollback_seconds)
+    P("- the rollback, from its command to the end of the wait for the containers that start by themselves: %.0f s." % rollback_seconds)
 P("")
 
-# ---- the failure injection: minor leg only, last ------------------------------------------------------------------
+# ---- the failure injection: last, on both legs --------------------------------------------------------------------
 
+P("## Failure injection")
+P("")
 if leg == "minor":
-    P("## Failure injection")
-    P("")
     P("After the success the box was put back on docker-ce %s, /etc/docker/daemon.json was made invalid so that dockerd cannot start, and the button was pressed again." % start_version)
-    P("")
-    code, body = resp("fail-packages")
-    fu = dobj(body, "docker", "update")
-    if code is not None and not (code == 200 and fu.get("available") is True and fu.get("from") == start_version):
-        invalid("after the box was put back on %s the check does not offer the update again (HTTP %s, available %r, from %r): the failure injection cannot run" % (start_version, code, fu.get("available"), fu.get("from")))
-    code, body = resp("fail-post")
-    verdict("failure: the POST starts the run although dockerd will be unable to start", on(code is not None, code == 200 and dget(body, "state") in ("running", "finalizing")),
-            "HTTP %s, state %r" % (code, dget(body, "state")))
-    fsamples = load_samples("fail-status.jsonl")
-    if not fsamples:
-        invalid("fail-status.jsonl is missing or holds no status sample: the failure run was not polled")
-    verdict("failure: the run reaches a terminal state", on(fsamples, any(d and d.get("state") in TERMINAL for _, _, d in fsamples)),
-            "%d status samples%s" % (len(fsamples), "; gave up after " + read("fail-status.timeout").strip() if read("fail-status.timeout").strip() else ""))
-    verdict("failure: the status endpoint keeps answering while dockerd cannot start", on(fsamples, not status_runs(fsamples)),
-            "%d samples, %d failed" % (len(fsamples), sum(1 for _, h, _ in fsamples if h != "200")))
-    try:
-        ff = json.loads(read("fail-status-final.json") or "null")
-    except ValueError:
-        ff = None
-    fdd = ff.get("data") if isinstance(ff, dict) and isinstance(ff.get("data"), dict) else {}
-    if not fdd:
-        invalid("fail-status-final.json holds no status")
-    verdict("failure: the run failed with error_code `daemon`", on(fdd, fdd.get("state") == "failed" and fdd.get("outcome") == "failed" and fdd.get("error_code") == "daemon" and fdd.get("error")),
-            "state %r, outcome %r, error_code %r, error %r" % (fdd.get("state"), fdd.get("outcome"), fdd.get("error_code"), fdd.get("error")))
-    rb = fdd.get("rollback_command") or ""
+else:
+    P("After the success and the rollback the box was put back on docker-ce %s (there is nothing to put back when the rollback held), /etc/docker/daemon.json was made invalid "
+      "so that dockerd cannot start, and the button was pressed again: a major jump that fails." % start_version)
+P("")
+code, body = resp("fail-packages")
+fu = dobj(body, "docker", "update")
+# the major leg asks the same question again, the box being where it started: the same jump (docker-ce from what dpkg had to what apt offered, as the first check did), though not the
+# same plan_id, the packages the first run brought (nftables) being installed now
+fail_dce = next((p for p in (fu.get("packages") if isinstance(fu.get("packages"), list) else []) if isinstance(p, dict) and p.get("name") == "docker-ce"), {})
+offered = code == 200 and fu.get("available") is True and fu.get("from") == start_version
+if leg == "major":
+    offered = offered and fu.get("major_jump") is True and fu.get("to") == expected_to and fail_dce.get("current_version") == installed_full and fail_dce.get("candidate_version") == candidate_full
+if code is not None and not offered:
+    invalid("after the box was put back on %s the check does not offer the update again (HTTP %s, available %r, from %r%s): the failure injection cannot run" %
+            (start_version, code, fu.get("available"), fu.get("from"),
+             ", major_jump %r, to %r (wanted %r), docker-ce %r -> %r (wanted %r -> %r)" % (fu.get("major_jump"), fu.get("to"), expected_to, fail_dce.get("current_version"),
+                                                                                       fail_dce.get("candidate_version"), installed_full, candidate_full) if leg == "major" else ""))
+code, body = resp("fail-post")
+verdict("failure: the POST starts the run although dockerd will be unable to start", on(code is not None, code == 200 and dget(body, "state") in ("running", "finalizing")),
+        "HTTP %s, state %r" % (code, dget(body, "state")))
+fsamples = load_samples("fail-status.jsonl")
+if not fsamples:
+    invalid("fail-status.jsonl is missing or holds no status sample: the failure run was not polled")
+verdict("failure: the run reaches a terminal state", on(fsamples, any(d and d.get("state") in TERMINAL for _, _, d in fsamples)),
+        "%d status samples%s" % (len(fsamples), "; gave up after " + read("fail-status.timeout").strip() if read("fail-status.timeout").strip() else ""))
+verdict("failure: the status endpoint keeps answering while dockerd cannot start", on(fsamples, not status_runs(fsamples)),
+        "%d samples, %d failed" % (len(fsamples), sum(1 for _, h, _ in fsamples if h != "200")))
+try:
+    ff = json.loads(read("fail-status-final.json") or "null")
+except ValueError:
+    ff = None
+fdd = ff.get("data") if isinstance(ff, dict) and isinstance(ff.get("data"), dict) else {}
+if not fdd:
+    invalid("fail-status-final.json holds no status")
+verdict("failure: the run failed with error_code `daemon`", on(fdd, fdd.get("state") == "failed" and fdd.get("outcome") == "failed" and fdd.get("error_code") == "daemon" and fdd.get("error")),
+        "state %r, outcome %r, error_code %r, error %r" % (fdd.get("state"), fdd.get("outcome"), fdd.get("error_code"), fdd.get("error")))
+rb = fdd.get("rollback_command") or ""
+if leg == "minor":
     verdict("failure: the rollback command is a fixed-shape apt command with validated pins that goes back to the start version", on(fdd, rollback_command_ok(rb)),
             "rollback_command %r" % rb)
-    flog = read("docker-update-fail.log")
-    if not flog.strip():
-        invalid("docker-update-fail.log was not collected")
-    fmarks = check_log(flog, "failure", "FAILED", ["QUEUED", "STARTED", "PREVIOUS"]) if flog.strip() else []
-    verdict("failure: the FAILED marker names the reason `daemon`", on(fmarks, any(m[0] == "FAILED" and m[2].split()[-1:] == ["daemon"] for m in fmarks)),
-            "FAILED markers: %r" % [m[2] for m in fmarks if m[0] == "FAILED"])
-    repaired, settle = read("fail-repaired").strip(), read("fail-settle").strip()
-    if not repaired or not settle:
-        invalid("the repair after the failure injection was not recorded")
+else:
+    # a major jump has no way back that is known to work (in the proof on Debian 11 the containers did not start again): the status says what jump it was, and gives no command
+    verdict(V_MJ_STATUS, on(fdd, fdd.get("major_jump") is True and fdd.get("from") == start_version and fdd.get("to") == expected_to),
+            "major_jump %r, from %r (wanted %r), to %r (wanted %r)" % (fdd.get("major_jump"), fdd.get("from"), start_version, fdd.get("to"), expected_to))
+    verdict(V_MJ_NOCMD, on(fdd, not rb), "rollback_command %r" % rb)
+flog = read("docker-update-fail.log")
+if not flog.strip():
+    invalid("docker-update-fail.log was not collected")
+fmarks = check_log(flog, "failure", "FAILED", ["QUEUED", "STARTED", "PREVIOUS"]) if flog.strip() else []
+verdict("failure: the FAILED marker names the reason `daemon`", on(fmarks, any(m[0] == "FAILED" and m[2].split()[-1:] == ["daemon"] for m in fmarks)),
+        "FAILED markers: %r" % [m[2] for m in fmarks if m[0] == "FAILED"])
+repaired, settle = read("fail-repaired").strip(), read("fail-settle").strip()
+if not repaired or not settle:
+    invalid("the repair after the failure injection was not recorded")
+if leg == "minor":
     verdict("failure: with the file mended Docker starts again and the containers come back", on(repaired and settle, repaired.startswith("yes") and settle.isdigit()),
             "repair: %r, containers back after: %r" % (repaired, settle))
-    P("")
+elif repaired and settle:
+    # the major leg's box has been through the rollback above, whatever it did: what it does once the file is mended is recorded, and says nothing about the button
+    P("Recorded, not judged: with the file mended, Docker started again: %s; the containers that start by themselves: %s." %
+      (repaired, "back after %s s" % settle if settle.isdigit() else "not back after 150 s"))
+P("")
 
 # ---- the kill -9 injection: the one minor leg that does it ---------------------------------------------------------------
 
@@ -983,12 +1027,19 @@ if leg == "minor" and kill_expected:
         verdict(K_ROLLBACK, on(kdd, rollback_command_ok(krb)), "rollback_command %r" % krb)
         audit = audit_of("kill-audit.txt")
         verdict(K_AUDIT, on(audit, bool(HALF_FINISHED.search(audit[1])) if audit else False), "dpkg --audit said: %s" % ((audit[1][:300] if audit else "") or "nothing"))
-        # the core refuses what dpkg's own journal and `dpkg --audit` call unfinished, before the repair: a check that offers the update there would run apt into the
-        # error that the unit reports as a failed download
+        # the next check, before the repair, has two true outcomes, and the second is what a real Ubuntu 24.04 gave: an update is pending (the kill came before dpkg had unpacked
+        # every package of the plan) and the core refuses it with `dpkg`, which its journal in /var/lib/dpkg/updates and `dpkg --audit` say; or nothing is pending (the kill came
+        # while dpkg configured packages it had already unpacked at the candidate version, so apt's candidate is what is installed) and the core omits docker.update altogether,
+        # the `dpkg` refusal living in the preflight of a pending update. Nothing else is accepted: an update offered as available would run apt into the error that the unit
+        # reports as a failed download, and no update shown while the installed version is not the candidate is a pending update that the check hid. Which one it was is recorded.
         code, body = resp("kill-packages-dirty")
-        du, code_dirty = dobj(body, "docker", "update"), code
-        verdict(K_DIRTY, on(code is not None, code == 200 and du.get("refusal") == "dpkg" and du.get("available") is False),
-                "HTTP %s, refusal %r, available %r%s" % (code, du.get("refusal"), du.get("available"), "" if du else " (the check returned no docker.update)"))
+        dk_, du, code_dirty = dobj(body, "docker"), dobj(body, "docker", "update"), code
+        dirty_refused = code == 200 and du.get("refusal") == "dpkg" and du.get("available") is False
+        dirty_none = code == 200 and dk_.get("installed") is True and dk_.get("update") is None and dk_.get("version") == expected_to
+        verdict(K_DIRTY, on(code is not None, dirty_refused or dirty_none),
+                "HTTP %s, outcome: %s (refusal %r, available %r, docker.version %r, wanted %r when no update is on offer)%s" %
+                (code, "refused with `dpkg`" if dirty_refused else "no update on offer, docker-ce at the candidate" if dirty_none else "neither",
+                 du.get("refusal"), du.get("available"), dk_.get("version"), expected_to, "" if du else " (the check returned no docker.update)"))
         audit1, audit2 = audit_of("kill-audit-1.txt"), audit_of("kill-audit-after.txt")
         r1, r2, back = read("kill-repair-1.exit").strip(), read("kill-repair-2.exit").strip(), read("kill-docker").strip()
         if not (r1.isdigit() and r2.isdigit() and back):
@@ -1013,7 +1064,14 @@ if leg == "minor" and kill_expected:
         P("The killed unit left dpkg saying: %s" % ((audit[1][:300].replace("\n", " ") if audit else "") or "nothing"))
         if code is not None and code_dirty is not None:
             said = lambda u: "refusal `%s`" % u["refusal"] if u.get("refusal") else "no refusal (the update is %s)" % ("on offer" if u.get("available") else "not on offer")
-            P("The next check after the kill said %s; after the repair it said %s." % (said(du), said(cu)))
+            if dirty_refused:
+                first = "it refused with `dpkg` (an update was pending, and dpkg was in the middle of a package)"
+            elif dirty_none:
+                first = ("it offered no update: docker-ce was already at the candidate %s (the kill came after dpkg had unpacked it, so nothing was pending, and the `dpkg` "
+                         "refusal, which only a pending update can show, had nothing to show)" % expected_to)
+            else:
+                first = said(du)
+            P("The next check after the kill: %s. After the repair it said %s." % (first, said(cu)))
         if audit1:
             P("The repair the dashboard will name: dpkg --configure -a (exit %s) left dpkg --audit %s, so apt-get -f install was %s." %
               (r1 or "?", "saying nothing" if not audit1[1] else "still unhappy", "not needed" if not audit1[1] else "needed (exit %s)" % (r2 or "?")))

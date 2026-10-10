@@ -11,13 +11,17 @@
 #
 #   docker-update-proof.sh major   Docker pinned to DOCKER_FROM (28.0.4) from Docker's repo, containerd.io
 #                                  on the 1.7 line when the repo has one, a 29 on offer: the owner's box. Docker 29
-#                                  needs nftables and Docker 28 did not, and Docker's installer brings nftables in
-#                                  (iptables recommends it): when apt can take it out and nothing but libraries with it,
-#                                  the leg does, before the first check, so that the update has a package to bring that
-#                                  the box did not have, as on the owner's box. What it did, or why not, is in
-#                                  $OUT/dependency-path. After the success the rollback command the core prints after a
-#                                  failure is run for real (rollback_run), and what is left of Docker 28.0.4, the containers,
-#                                  the volume and the images is recorded.
+#                                  needs nftables and Docker 28 did not. The Debian 11 cloud image has no nftables and Docker's
+#                                  installer does not bring it in, so the update has a package to bring that the box
+#                                  did not have, as on the owner's box. On an image that does have it, when apt can take
+#                                  it out and nothing but libraries with it, the leg does, before the first check. What it did, or why not, is in
+#                                  $OUT/dependency-path. After the success the command the core used to print as the way back after a
+#                                  failure (apt-get install --allow-downgrades of the PREVIOUS pins) is run for real (rollback_run), and what is
+#                                  left of Docker 28.0.4, the containers, the volume and the images is recorded: an observation, never a verdict
+#                                  (on Debian 11 the packages went back and Docker started, but the containers did not start again by themselves,
+#                                  which is why the core offers no rollback command after a major jump). Last, with the box put back on 28.0.4 and
+#                                  dockerd made unable to start, a second update (failure_run, the one the minor legs end with): the run has to fail
+#                                  with `daemon`, and the status has to say major_jump, from 28.0.4, to the 29 on offer, and give no rollback command.
 #   docker-update-proof.sh minor   the previous patch of the current Docker minor (found with apt-cache
 #                                  madison, never written down), the current one on offer; and last, once
 #                                  the box is put back there, a second update with dockerd made unable to
@@ -26,12 +30,14 @@
 #                                  leg) the unit is first killed with SIGKILL in the middle of the install,
 #                                  as soon as dpkg runs a maintainer script of Docker's (kill_run): the status
 #                                  has to find out by itself; the next check, asked for before the repair, has to
-#                                  refuse with `dpkg` (dpkg is in the middle of a package); and the repair the
+#                                  offer no update (docker-ce is already at the candidate: the kill came after dpkg
+#                                  had unpacked it) or refuse with `dpkg` (an update is pending and dpkg is in the
+#                                  middle of a package), and which of the two it was is recorded; and the repair the
 #                                  dashboard names (dpkg --configure -a, then apt-get -f install) is run, after
 #                                  which the check has to refuse nothing.
 #
-# In both: the refusals first (a hold, dpkg's lock, a running package update, a plan that is not
-# the plan, a body that is not a plan_id, a token in the query, a refresh token), none of which
+# In both: the refusals first (a hold, dpkg's lock, a running package update, an unfinished dpkg journal, a plan
+# that is not the plan, a body that is not a plan_id, a token in the query, a refresh token), none of which
 # changes anything of the engine; then the update, polled to its end; then what is left of the
 # box: versions, containers, the witness, AppManagement.
 #
@@ -105,11 +111,23 @@ previous_pins() {
         END { exit !(n > 0) }' "$1"
 }
 
+# The whole script runs under `set -o pipefail`: a consumer that quits at its first match (awk '... {print; exit}', head, grep -q) leaves its producer writing
+# into a pipe nobody reads any more, which kills it with SIGPIPE, and the pipeline ends with status 141 whatever the consumer printed (and `set -e` ends the run:
+# the Debian 11 leg died so, on the containerd.io line below). apt-cache writes its listing a line at a time, so every line after the match is such a write.
+# These read everything the producer writes and print the first match only.
+# containerd_17: the first (newest, as apt-cache madison lists them) containerd.io of the 1.7 line, nothing when apt has none
+containerd_17() { apt-cache madison containerd.io | awk '$3 ~ /^1\.7\./ && !found {print $3; found = 1}'; }
+# candidate_of <package>: apt's candidate version of a package
+candidate_of() { apt-cache policy "$1" | awk '/Candidate:/ && !found {print $2; found = 1}'; }
+
 # ---- the machine --------------------------------------------------------------------------------
 
 COME_BACK=(p-always p-unless-stopped p-db p-web p-host)
 # a maintainer script of one of Docker's packages: while it runs, dpkg is in the middle of a package
 MAINTAINER_RE='/var/lib/dpkg/info/(docker-ce|docker-ce-cli|containerd\.io|docker-ce-rootless-extras)\.(preinst|prerm|postinst|postrm)'
+# the file the proof makes to stand for an unfinished dpkg journal: by apt's own rule (debSystem::CheckUpdates) a file of digits only in
+# /var/lib/dpkg/updates is one, and "dpkg was interrupted" is what apt says of it
+DPKG_JOURNAL=/var/lib/dpkg/updates/0001
 
 now() { date -u +%s.%N; }
 log() { echo "[proof $(date -u +%H:%M:%S)] $*" | tee -a "${OUT}/steps.log"; }
@@ -136,6 +154,7 @@ cleanup() {
     apt-mark unhold docker-ce >/dev/null 2>&1 || true
     systemctl stop casaos-package-update.service >/dev/null 2>&1 || true
     if [ "${DAEMON_JSON_BROKEN:-0}" = 1 ]; then mend_daemon_json || true; fi
+    if [ "${DPKG_JOURNAL_FAKED:-0}" = 1 ]; then rm -f "${DPKG_JOURNAL}" || true; fi
     # a command that failed under set -e ended the run with nothing said, and the report would judge what is left as if it were a run
     if [ "${rc}" -ne 0 ] && [ ! -s "${OUT}/aborted" ]; then
         echo "the guest script ended on a failing command (exit ${rc}): ${FAILED_AT:-no command recorded}" >>"${OUT}/aborted"
@@ -162,8 +181,10 @@ install_docker() {
         # a box on 28.0.4 has the containerd.io of that day, which is on the 1.7 line: the
         # update then moves containerd.io across a major too, as it will on the owner's box
         cur="$(dpkg-query -W -f='${Version}' containerd.io)"
-        cprev="$(apt-cache madison containerd.io | awk '$3 ~ /^1\.7\./ {print $3; exit}')"
-        if [ -n "${cprev}" ] && [ "$(major_of "${cur}")" -ge 2 ]; then
+        cprev="$(containerd_17)"
+        if [ "$(major_of "${cur}")" -ge 2 ]; then
+            # without a 1.7 to start from the leg would go on as a plain 28 -> 29 and say nothing of it
+            [ -n "${cprev}" ] || not_proven "Docker's repository has no containerd.io 1.7 to start the major leg from"
             systemctl stop docker.socket docker.service containerd.service
             "${APT[@]}" install -y -q --allow-downgrades "containerd.io=${cprev}"
             systemctl stop docker.socket docker.service containerd.service
@@ -226,7 +247,8 @@ install_casaos() {
 }
 
 # Docker 29 needs nftables and Docker 28 did not, so a box that is updated from 28 has packages to be brought that it
-# did not have. Docker's installer puts nftables on the box (iptables recommends it): on the major leg it is taken
+# did not have. The Debian 11 cloud image has no nftables and Docker's installer does not bring it in, so there is
+# usually nothing to take out; on an image that does have it, on the major leg it is taken
 # out here, after Docker and ReCasaOS are installed and before the first check reads the plan, when apt says that it
 # takes nothing but libraries with it (first with the libraries nothing else needs, then nftables alone). Docker is
 # restarted after: nftables.service flushes the whole ruleset when it stops, Docker's rules included, and dockerd
@@ -308,10 +330,10 @@ installed() { # <package>
 box_facts() {
     local t
     {
-        echo "apt $(apt-get --version 2>&1 | head -n1)"
-        echo "dpkg $(dpkg --version 2>&1 | head -n1)"
-        echo "systemd $(systemctl --version 2>&1 | head -n1)"
-        for t in timeout date sort sleep grep; do echo "${t} $("${t}" --version 2>&1 | head -n1)"; done
+        echo "apt $(apt-get --version 2>&1 | sed -n 1p)"
+        echo "dpkg $(dpkg --version 2>&1 | sed -n 1p)"
+        echo "systemd $(systemctl --version 2>&1 | sed -n 1p)"
+        for t in timeout date sort sleep grep; do echo "${t} $("${t}" --version 2>&1 | sed -n 1p)"; done
         echo "sh $(readlink -f /bin/sh)"
     } >"${OUT}/box-facts" 2>&1 || true
 }
@@ -454,6 +476,21 @@ poll_timeline() {
 
 # ---- the refusals: nothing of the engine changes -----------------------------------------------------------
 
+# dpkg_journal_refusal: an unfinished dpkg journal (DPKG_JOURNAL) while an update is on offer: the check has to refuse it with `dpkg`, and so has the POST of the plan
+# that is on offer, and with the file gone that same plan is on offer again. Needs PLAN_ID, the first check's. The file is the proof's own: it is removed here, and
+# by cleanup when the run ends in between.
+dpkg_journal_refusal() {
+    [ ! -e "${DPKG_JOURNAL}" ] || abort "dpkg already has a journal (${DPKG_JOURNAL}): not a box to make an unfinished one on"
+    : >"${DPKG_JOURNAL}"
+    DPKG_JOURNAL_FAKED=1
+    call_as internal packages-journal GET /v1/sys/packages
+    post_plan journal-post "${PLAN_ID}"
+    rm -f "${DPKG_JOURNAL}"
+    DPKG_JOURNAL_FAKED=0
+    [ ! -e "${DPKG_JOURNAL}" ] || abort "could not remove the journal the proof made (${DPKG_JOURNAL})"
+    call_as internal packages-journal-gone GET /v1/sys/packages
+}
+
 refusals() {
     local held_id wrong body
     wrong="$(printf '0%.0s' $(seq 1 64))"
@@ -495,6 +532,9 @@ PY
     [ "$(systemctl is-active casaos-package-update.service)" = active ] || abort "could not start the stand-in for the package update"
     post_plan unit-post "${PLAN_ID}"
     systemctl stop casaos-package-update.service
+
+    # an unfinished dpkg journal: refused with `dpkg` by the check and by the POST of the plan that is on offer, and offered again once it is gone
+    dpkg_journal_refusal
 
     # a plan that is not the plan, a body that is not a plan_id, and how the credentials may arrive
     post_plan wrong-post "${wrong}"
@@ -555,11 +595,12 @@ runtime_log() {
 
 # ---- the way back, major leg: the rollback command, run for real --------------------------------------------------------
 
-# rollback_run: after the success, the command the core prints after a failure (sudo apt-get install --allow-downgrades <the pins of the
+# rollback_run: after the success, the command the core used to print after a failure (sudo apt-get install --allow-downgrades <the pins of the
 # PREVIOUS marker>) is run, on the box that has just gone from Docker 28 to 29 and has run the apps on it since; then what is left is
 # recorded: Docker's version, the containers, the volume's content, the images. -y and --force-confold are the only things added to the
 # command, so that it can run with nobody to answer. A PREVIOUS without a pin leaves no command: rollback-exit says not-run, which the
-# report counts as the rollback failing (the core had nothing to give). Nothing is judged here.
+# report counts as a rollback that could not be run (an invalid run). Nothing is judged here, and the report only records what was seen:
+# the core offers no such command after a major jump any more, because on Debian 11 it did not bring the containers back.
 rollback_run() {
     local pins=() rc=0
     marker rollback_start
@@ -592,7 +633,7 @@ rollback_run() {
 catch_maintainer() {
     local end=$((SECONDS + $2)) begun=${SECONDS} seen=0 hit="" state
     while :; do
-        hit="$(pgrep -af "${MAINTAINER_RE}" | head -n1 || true)"
+        hit="$(pgrep -af "${MAINTAINER_RE}" | sed -n 1p || true)"
         if [ -n "${hit}" ]; then break; fi
         state="$(systemctl is-active casaos-docker-update.service 2>/dev/null || true)"
         case "${state}" in
@@ -649,7 +690,7 @@ repair_dpkg() {
 
 # kill_run: the box is put back, the update asked for the way the dashboard does, and as soon as dpkg runs a maintainer script of Docker's
 # the unit gets SIGKILL. What the status says (it has to find that out by itself, from a log with no end), what dpkg --audit says, what the
-# next check says while dpkg is half-finished (kill-packages-dirty: the core must refuse it with `dpkg`), the repair the dashboard names, and
+# next check says while dpkg is half-finished (kill-packages-dirty: no update when docker-ce is already at the candidate, else a refusal with `dpkg`), the repair the dashboard names, and
 # what the check says once it is done (kill-packages-clean: nothing to refuse) are recorded. A run that cannot get as far leaves `missed <why>` in kill-hit, which the report counts as a run
 # that proved nothing, and goes on: the failure that follows still has its turn. Nothing is judged here.
 kill_run() {
@@ -679,14 +720,14 @@ kill_run() {
     cp "$(runtime_log)" "${OUT}/docker-update-kill.log" 2>/dev/null || true
     log "the killed update ended: $(jq -c '.data | {state, outcome, error_code, rollback_command}' "${OUT}/kill-status-final.json" 2>/dev/null || echo unreadable)"
     if grep -q '^caught ' "${OUT}/kill-hit"; then
-        # dpkg is in the middle of a package: the next check has to refuse with `dpkg`; once the repair has completed the install, it refuses nothing
+        # dpkg is in the middle of a package: the next check offers no update (docker-ce is at the candidate) or refuses with `dpkg`; once the repair has completed the install, it refuses nothing
         call_as internal kill-packages-dirty GET /v1/sys/packages
         repair_dpkg kill
         call_as internal kill-packages-clean GET /v1/sys/packages
     fi
 }
 
-# ---- the failure, last ---------------------------------------------------------------------------------------------
+# ---- the failure, last, on every leg -------------------------------------------------------------------------------
 
 mend_daemon_json() {
     if [ -e "${AUTH_DIR}/daemon.json.orig" ]; then
@@ -710,6 +751,9 @@ put_back() {
     "${APT[@]}" update -qq
 }
 
+# failure_run: the box is put back on the version it started on (after the rollback of the major leg there is nothing left to put back when
+# the rollback held, and the same call makes up for one that did not), the update is asked for again with dockerd made unable to start, and
+# what the status says of the failure (error_code, major_jump, from, to, the rollback command) is recorded for the report to judge.
 failure_run() {
     local fail_id start
     put_back putback
@@ -727,7 +771,7 @@ failure_run() {
     [ "$(cat "${OUT}/fail-post.code")" = 200 ] || { mend_daemon_json; abort "the POST of the failure run was not accepted (HTTP $(cat "${OUT}/fail-post.code"))"; }
     poll_status fail-status 1500
     marker fail_terminal
-    log "the failing update ended: $(jq -c '.data | {state, outcome, error_code, rollback_command}' "${OUT}/fail-status-final.json" 2>/dev/null || echo unreadable)"
+    log "the failing update ended: $(jq -c '.data | {state, outcome, error_code, major_jump, from, to, rollback_command}' "${OUT}/fail-status-final.json" 2>/dev/null || echo unreadable)"
     cp "$(runtime_log)" "${OUT}/docker-update-fail.log" 2>/dev/null || true
     journalctl -u docker.service --no-pager -n 60 >"${OUT}/docker-journal-fail.txt" 2>&1 || true
 
@@ -805,7 +849,7 @@ main() {
     "${APT[@]}" update -qq
     {
         echo "installed $(dpkg-query -W -f='${Version}' docker-ce)"
-        echo "candidate $(apt-cache policy docker-ce | awk '/Candidate:/ {print $2; exit}')"
+        echo "candidate $(candidate_of docker-ce)"
     } >"${OUT}/apt-docker-ce.txt"
     cat "${OUT}/apt-docker-ce.txt"
     box_facts
@@ -820,7 +864,7 @@ main() {
     update_run
     if [ "${LEG}" = major ]; then rollback_run; fi
     if [ "${KILL_INSTALL}" = 1 ]; then kill_run; fi
-    if [ "${LEG}" = minor ]; then failure_run; fi
+    failure_run
     collect_journal unit-journal-end.txt
     kill "${POLL_PID}" 2>/dev/null || true
     POLL_PID=""
