@@ -11,10 +11,10 @@
 #
 #   docker-update-proof.sh major   Docker pinned to DOCKER_FROM (28.0.4) from Docker's repo, containerd.io
 #                                  on the 1.7 line when the repo has one, a 29 on offer: the owner's box. Docker 29
-#                                  needs nftables and Docker 28 did not, and Docker's installer brings nftables in
-#                                  (iptables recommends it): when apt can take it out and nothing but libraries with it,
-#                                  the leg does, before the first check, so that the update has a package to bring that
-#                                  the box did not have, as on the owner's box. What it did, or why not, is in
+#                                  needs nftables and Docker 28 did not. The Debian 11 cloud image has no nftables and Docker's
+#                                  installer does not bring it in, so the update has a package to bring that the box
+#                                  did not have, as on the owner's box. On an image that does have it, when apt can take
+#                                  it out and nothing but libraries with it, the leg does, before the first check. What it did, or why not, is in
 #                                  $OUT/dependency-path. After the success the rollback command the core prints after a
 #                                  failure is run for real (rollback_run), and what is left of Docker 28.0.4, the containers,
 #                                  the volume and the images is recorded.
@@ -178,7 +178,9 @@ install_docker() {
         # update then moves containerd.io across a major too, as it will on the owner's box
         cur="$(dpkg-query -W -f='${Version}' containerd.io)"
         cprev="$(containerd_17)"
-        if [ -n "${cprev}" ] && [ "$(major_of "${cur}")" -ge 2 ]; then
+        if [ "$(major_of "${cur}")" -ge 2 ]; then
+            # without a 1.7 to start from the leg would go on as a plain 28 -> 29 and say nothing of it
+            [ -n "${cprev}" ] || not_proven "Docker's repository has no containerd.io 1.7 to start the major leg from"
             systemctl stop docker.socket docker.service containerd.service
             "${APT[@]}" install -y -q --allow-downgrades "containerd.io=${cprev}"
             systemctl stop docker.socket docker.service containerd.service
@@ -241,7 +243,8 @@ install_casaos() {
 }
 
 # Docker 29 needs nftables and Docker 28 did not, so a box that is updated from 28 has packages to be brought that it
-# did not have. Docker's installer puts nftables on the box (iptables recommends it): on the major leg it is taken
+# did not have. The Debian 11 cloud image has no nftables and Docker's installer does not bring it in, so there is
+# usually nothing to take out; on an image that does have it, on the major leg it is taken
 # out here, after Docker and ReCasaOS are installed and before the first check reads the plan, when apt says that it
 # takes nothing but libraries with it (first with the libraries nothing else needs, then nftables alone). Docker is
 # restarted after: nftables.service flushes the whole ruleset when it stops, Docker's rules included, and dockerd

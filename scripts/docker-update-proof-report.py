@@ -14,9 +14,9 @@ date that cannot read a time, a curl that reaches nothing, an apt that cannot fe
 value the feature produced, and what the harness's own tools leave behind when they fail says nothing about the button.
 
 The legs:
-    major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box. The
-            harness takes nftables out first when apt can do that cleanly, because Docker 29 needs it
-            and Docker 28 did not: the update then has a package to bring that the box does not have. When it has
+    major   Debian 11, Docker pinned to 28.0.4 from Docker's repo, a 29 on offer: the owner's box. Docker 29 needs
+            nftables and Docker 28 did not: the Debian 11 cloud image has none, so the update has a package to bring that the
+            box does not have; on an image that has it, the harness takes it out first when apt can do that cleanly. When it has
             succeeded the harness runs the rollback command (apt-get install --allow-downgrades of the PREVIOUS pins) and the
             verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with the containers, the database's
             volume and the images intact. A FAIL there is meant to turn the leg red: it means that the core must not offer the

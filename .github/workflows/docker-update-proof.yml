@@ -13,9 +13,9 @@ name: docker-update-proof
 #
 #   major   Debian 11, installed with --use-debian-archive: Docker 28.0.4 from Docker's own
 #           repository, containerd.io on the 1.7 line, a 29 on offer. The owner's box. Docker 29
-#           needs nftables and Docker 28 did not: when apt can take nftables out without taking
-#           anything but libraries with it, the leg does, before the first check, so that the update
-#           has a package to bring that the box did not have. When the update has succeeded the leg
+#           needs nftables and Docker 28 did not. The Debian 11 cloud image has no nftables, so the
+#           update brings it (with libnftables1 and libjansson4); on an image that does have it, when apt
+#           can take it out without taking anything but libraries with it, the leg does, before the first check. When the update has succeeded the leg
 #           runs the rollback command (apt-get install --allow-downgrades of the PREVIOUS pins) and
 #           the verdict "rollback after the major jump" says whether Docker 28.0.4 starts again with
 #           the containers, the database's volume and the images intact. A FAIL there is meant to turn
@@ -256,7 +256,7 @@ jobs:
           set -euo pipefail
           mkdir -p out
           ssh -F ssh_config vm 'sudo tar -C /home/casa/proof -cf - .' | tar -xf - -C out || true
-          test -s out/timeline.tsv || { echo "the run left no evidence: nothing to report" | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
+          test -s out/timeline.tsv || { { echo "the run left no evidence: nothing to report"; cat out/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
           # `kill` when this leg also killed the unit in the middle of the install: the report then demands the evidence of it
           python3 scripts/docker-update-proof-report.py out "${LEG}" ${KILL_INSTALL:+kill} | tee -a "${GITHUB_STEP_SUMMARY}"
 
