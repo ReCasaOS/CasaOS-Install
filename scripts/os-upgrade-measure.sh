@@ -26,12 +26,12 @@
 #                 t=post: the reboot after the hop, which the unit never does. Status 7 when the hop was skipped.
 #   refresh       the old release is brought to its last state, as the product's own refresh step will do it before any hop (apt update and a
 #                 full upgrade of the CURRENT release, Docker's source paused): its own durations and package lists, and whether it needs a reboot
-#   baseline      the state of the box before the hop (units, packages, containers, health, a token of the API)
+#   baseline      the state of the box before the hop (units, packages, containers, health, a token of the API, and what the core says the system is: GET /v1/sys/os)
 #   probe         read-only experiments on the old release: Debian, the sandbox plan and --allow-releaseinfo-change-*;
 #                 Ubuntu, what `do-release-upgrade -c` says and what Canonical's metadata says
 #   hop           starts the unit (an Ubuntu hop Canonical has not opened is skipped and says so)
 #   hop-wait      waits for the unit to end (status 0), or for HOP_LIMIT seconds (status 3); safe to call again
-#   after         after the reboot: nothing is started by hand; what came back, what did not
+#   after         after the reboot: nothing is started by hand; what came back, what did not, and what the core now says the system is (GET /v1/sys/os again)
 #
 # Needs: MEASURE_DISPOSABLE=1 and LEG (d11-12, d12-13, u22-24 or u24-26) for prepare; INSTALLER_ARGS (options for install.sh,
 # unquoted on purpose: a list); DOCKER_FROM (the Docker the box starts on, d11-12 only); UBUNTU_VARIANT (hold or keep, Ubuntu
@@ -216,6 +216,7 @@ BOOT_ID_FILE="${BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}"
 DPKG_LOG="${DPKG_LOG:-/var/log/dpkg.log}"
 OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
 REBOOT_REQUIRED="${REBOOT_REQUIRED:-/var/run/reboot-required}"
+INTERNAL_SECRET_FILE="${INTERNAL_SECRET_FILE:-/var/run/casaos/internal.secret}"
 APT_LOG_DIR="${APT_LOG_DIR:-/var/log/apt}"
 DISTUP_LOG_DIR="${DISTUP_LOG_DIR:-/var/log/dist-upgrade}"
 AUTH_DIR=/root/.osm-auth
@@ -475,7 +476,7 @@ tcp_open() { (exec 2>/dev/null; exec 3<>"/dev/tcp/127.0.0.1/$1"); }
 
 internal_header() { # the gateway rewrites the secret at each start: read it again before every call
     local s=""
-    IFS= read -r s 2>/dev/null </var/run/casaos/internal.secret || true
+    IFS= read -r s 2>/dev/null <"${INTERNAL_SECRET_FILE}" || true
     printf 'Authorization: Internal %s' "${s}"
 }
 
@@ -497,6 +498,20 @@ login() {
     (umask 077; printf 'Authorization: %s\n' "${tok}" >"${AUTH_DIR}/$1")
     claims="$(jwt_claims "${tok}")"
     printf '{"issued":%s,"claims":%s}\n' "$(now)" "${claims:-null}" >"${OUT}/jwt-claims-$1.json"
+}
+
+# sys_os <tag>: GET /v1/sys/os, asked the way the probes above ask the core: through the gateway, with the loopback secret. What is kept, for the report to judge (this judges
+# nothing): the answer as the core gave it (sysos-<tag>.json), the HTTP status (.code, 000 when nothing answered), curl's own status (.rc, written last: a file that is not
+# there says the call did not run), what curl said on stderr (.err), the guest's os-release at that moment (.os-release) and the time of the call (.time, the report works
+# out the day from it: the end-of-support table depends on the day). A call that fails is a result and not an error of the phase. The core reads /etc/os-release at each call,
+# so the call after the hop is the proof that it follows the new release. curl is the guest's own here: before the hop and after the reboot nothing is replacing it.
+sys_os() {
+    local tag="$1" rc=0 code
+    cp "${OS_RELEASE}" "${OUT}/sysos-${tag}.os-release"
+    printf '%s\n' "${EPOCHREALTIME}" >"${OUT}/sysos-${tag}.time"
+    code="$(curl -sS --max-time 30 -o "${OUT}/sysos-${tag}.json" -w '%{http_code}' -H "$(internal_header)" "http://127.0.0.1:${CASA_PORT}/v1/sys/os" 2>"${OUT}/sysos-${tag}.err")" || rc=$?
+    printf '%s\n' "${code:-000}" >"${OUT}/sysos-${tag}.code"
+    printf '%s\n' "${rc}" >"${OUT}/sysos-${tag}.rc"
 }
 
 # ---- the poller: about once a second, the probes in parallel -------------------------------------------------
@@ -876,6 +891,8 @@ phase_baseline() {
     http_code "${CASA_PORT}" /v1/sys/version/current >"${OUT}/core-before.code"
     http_code "${CASA_PORT}" / >"${OUT}/gateway-before.code"
     http_code "${CASA_PORT}" /v2/app_management/categories "$(jwt_header jwt)" >"${OUT}/am-before.code"
+    # what the core says the system is, on the old release (the first of the two calls of GET /v1/sys/os)
+    sys_os before
     db_dump before
     marker baseline_done
 }
@@ -1267,6 +1284,8 @@ phase_after() {
     http_code "${CASA_PORT}" /v1/sys/version/current >"${OUT}/core-after.code"
     http_code "${CASA_PORT}" /v1/sys/utilization "$(internal_header)" >"${OUT}/internal-after.code"
     http_code "${CASA_PORT}" /v2/app_management/categories "$(jwt_header jwt)" >"${OUT}/am-after.code"
+    # ... and again after the reboot of the hop: the core has to say the new release, with nothing started by hand
+    sys_os after
     # the token of the baseline, and a new one: is a session that was open before the hop still a session?
     http_code "${CASA_PORT}" /v1/sys/utilization "$(jwt_header jwt-before)" >"${OUT}/jwt-after.code"
     if login jwt-after; then

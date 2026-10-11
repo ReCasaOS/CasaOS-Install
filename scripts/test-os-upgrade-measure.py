@@ -1502,6 +1502,54 @@ exit 0
     check("hop-wait: a unit that failed is an ended unit (twice in a row), and what it left is collected", "status 0" in p.stdout and "hop_unit_end" in get(w, "out/timeline.tsv") and "hop_done" in get(w, "out/timeline.tsv"), (p.stdout, get(w, "out/timeline.tsv")))
     shutil.rmtree(w, ignore_errors=True)
 
+    # GET /v1/sys/os, asked by the guest before the hop and after the reboot: through the gateway, with the loopback secret, and what is kept of the call
+    SYSOS_BODY = '{"success":200,"message":"ok","data":{"id":"debian","version_id":"11","codename":"bullseye","known":true}}'
+
+    def sysos_call(tag="before", **extra):
+        w_, env_ = world("debian")
+        put(w_, "secret", "s3cret-of-the-run\n")
+        fake(os.path.join(w_, "bin"), "curl", r"""echo "curl $*" >>"$FAKE_LOG"
+out=""; prev=""
+for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; done
+if [ "${FAKE_CURL_RC:-0}" != 0 ]; then echo "curl: (7) Failed to connect to 127.0.0.1 port 80" >&2; [ -n "$FAKE_CURL_SILENT" ] || printf 000; exit "$FAKE_CURL_RC"; fi
+case " $* " in *" -f"*|*" --fail"*) if [ "${FAKE_CODE:-200}" -ge 400 ]; then echo "curl: (22) The requested URL returned error: $FAKE_CODE" >&2; printf '%s' "$FAKE_CODE"; exit 22; fi ;; esac
+[ -n "$out" ] && printf '%s' "$FAKE_BODY" >"$out"
+printf '%s' "${FAKE_CODE:-200}"
+""")
+        env_.update(INTERNAL_SECRET_FILE=posix(w_) + "/secret", FAKE_BODY=SYSOS_BODY)
+        env_.update(extra)
+        return w_, in_world(w_, env_, 'set -Eeuo pipefail; sys_os %s; echo "status $?"' % tag, timeout=60)
+
+    w, p = sysos_call()
+    c = [x for x in calls(w) if x.startswith("curl")]
+    check("sys_os: GET /v1/sys/os on the gateway's port with the loopback secret as the other probes send it, one call, and nothing else in the request",
+          "status 0" in p.stdout and len(c) == 1 and "-H Authorization: Internal s3cret-of-the-run" in c[0] and c[0].rstrip().endswith(" http://127.0.0.1:80/v1/sys/os") and " -X " not in c[0] and " -d " not in c[0], (c, p.stdout, p.stderr[-300:]))
+    check("sys_os: the answer as the core gave it, the HTTP status, curl's status, the guest's os-release and the time of the call are each kept in a file of their own",
+          get(w, "out/sysos-before.json") == SYSOS_BODY and get(w, "out/sysos-before.code").strip() == "200" and get(w, "out/sysos-before.rc").strip() == "0"
+          and get(w, "out/sysos-before.os-release") == get(w, "os-release") != "" and re.match(r"^[0-9]+\.[0-9]+$", get(w, "out/sysos-before.time").strip()) is not None, os.listdir(os.path.join(w, "out")))
+    check("sys_os: the loopback secret is in the request and nowhere in the evidence", not any("s3cret-of-the-run" in get(w, "out/" + n) for n in os.listdir(os.path.join(w, "out"))), os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call("after")
+    check("sys_os: the tag names every file (after the reboot, sysos-after.*, and none of sysos-before.*)",
+          all(os.path.exists(os.path.join(w, "out/sysos-after." + e)) and not os.path.exists(os.path.join(w, "out/sysos-before." + e)) for e in ("json", "code", "rc", "err", "os-release", "time")), os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(FAKE_CURL_RC="7")
+    check("sys_os: a call that gets no answer is a result and not an error of the phase (set -e): the status is 000, curl's own status is kept, there is no answer file, and the phase goes on",
+          "status 0" in p.stdout and get(w, "out/sysos-before.code").strip() == "000" and get(w, "out/sysos-before.rc").strip() == "7" and not os.path.exists(os.path.join(w, "out/sysos-before.json"))
+          and "Failed to connect" in get(w, "out/sysos-before.err"), (p.stdout, p.stderr[-300:], os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(CASA_PORT="8123")
+    c = [x for x in calls(w) if x.startswith("curl")]
+    check("sys_os: the port is the gateway's own (CASA_PORT, read from gateway.ini by prepare), not a fixed one", len(c) == 1 and c[0].rstrip().endswith(" http://127.0.0.1:8123/v1/sys/os"), c)
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(FAKE_CURL_RC="127", FAKE_CURL_SILENT="1")
+    check("sys_os: a curl that prints no status at all (killed, not there) still leaves status 000 and its own exit", "status 0" in p.stdout and get(w, "out/sysos-before.code").strip() == "000" and get(w, "out/sysos-before.rc").strip() == "127", (p.stdout, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(FAKE_CODE="404", FAKE_BODY="404 page not found")
+    check("sys_os: an HTTP error keeps its status and its body, and curl's status is 0 (the report decides what it means)",
+          "status 0" in p.stdout and get(w, "out/sysos-before.code").strip() == "404" and get(w, "out/sysos-before.rc").strip() == "0" and get(w, "out/sysos-before.json") == "404 page not found", (p.stdout, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+
     # the reboot, the inhibitor, a hop that was skipped
     w, env = world("debian")
     p = in_world(w, env, '(phase_reboot pre); echo "status $?"')
@@ -1556,6 +1604,13 @@ exit 0
           bool(after_body) and not re.search(r"\bsystemctl\b[^\n]*\b(start|restart|reload|enable|stop|kill|reset-failed|try-restart|isolate)\b", after_body), re.findall(r"[^\n]*systemctl[^\n]*", after_body))
     baseline_body = function_body(guest_text, "phase_baseline") or ""
     check("the baseline starts again the two witnesses whose policy does not start them after the reboots that came before, and says which", "docker start" in baseline_body and "baseline-started" in baseline_body and "p-no p-on-failure" in baseline_body)
+    sysos_body = function_body(guest_text, "sys_os") or ""
+    check("sys_os asks the one route with the loopback secret (internal_header) and not with a token of the harness, and writes its files under the tag it is given",
+          'internal_header' in sysos_body and "jwt_header" not in sysos_body and "/v1/sys/os" in sysos_body and "${OUT}/sysos-${tag}.json" in sysos_body and "-w '%{http_code}'" in sysos_body, sysos_body)
+    check("the baseline asks the core what it says about the system once the core has been asked its version and before the baseline is done, so that it is the old release that answers",
+          0 < baseline_body.find("core-before.code") < baseline_body.find("sys_os before") < baseline_body.find("marker baseline_done"), baseline_body)
+    check("the after phase asks it again once the containers have settled and the other answers were asked, and starts nothing for it",
+          0 < after_body.find("marker after_settled") < after_body.find("am-after.code") < after_body.find("sys_os after") and "sys_os after" in after_body, after_body)
     check("the container on the host network is served a file: its port answers 200", "index.html" in (function_body(guest_text, "start_things") or ""))
     refresh_body = function_body(guest_text, "phase_refresh") or ""
     check("prepare does not upgrade the old release any more (the refresh phase does, after Docker and ReCasaOS are on it, as the product's refresh step will)",
