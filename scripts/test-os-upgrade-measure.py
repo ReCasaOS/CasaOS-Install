@@ -1994,8 +1994,9 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 """)
 
-    def services_run(am_wait, limit, up=True):
-        """wait_services against a server whose AppManagement path refuses its first am_wait calls (503) and answers 401 to a call with no token; up=False: nothing listens at all"""
+    def services_run(am_wait, limit, up=True, tag=""):
+        """wait_services against a server whose AppManagement path refuses its first am_wait calls (503) and answers 401 to a call with no token; up=False: nothing listens at all; tag: the
+        record it writes (baseline, the default, or after)"""
         port_ = free_port()
         counter = os.path.join(tool_dir, "svc-count-%d" % port_)
         srv_ = subprocess.Popen([sys.executable, os.path.join(tool_dir, "svc.py"), str(port_), str(am_wait), counter]) if up else None
@@ -2003,7 +2004,7 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
         w_, env_ = world("debian")
         put(w_, "auth/jwt", "Authorization: tok\n")
         try:
-            p_ = in_world(w_, env_, 'AUTH_DIR="%s/auth"; CASA_PORT=%d; wait_services %d; echo "status $?"; echo "said: $WAIT_SAID"' % (posix(w_), port_, limit), timeout=90)
+            p_ = in_world(w_, env_, 'AUTH_DIR="%s/auth"; CASA_PORT=%d; wait_services %d %s; echo "status $?"; echo "said: $WAIT_SAID"' % (posix(w_), port_, limit, tag), timeout=90)
         finally:
             if srv_:
                 srv_.kill()
@@ -2011,7 +2012,7 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
             asked = int(open(counter).read())
         except (OSError, ValueError):
             asked = 0
-        return w_, p_, kv_of(get(w_, "out/baseline-wait")), asked
+        return w_, p_, kv_of(get(w_, "out/%s-wait" % (tag or "baseline"))), asked
 
     def kv_of(text):
         return dict(ln.split(" ", 1) for ln in text.splitlines() if " " in ln)
@@ -2030,6 +2031,66 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
     shutil.rmtree(w, ignore_errors=True)
     w, p, bw, asked = services_run(0, 1, up=False)
     check("wait_services: nothing listening at all (000 three times) gives up the same way", "status 1" in p.stdout and bw.get("result") == "gave_up" and (bw.get("gateway"), bw.get("core"), bw.get("am")) == ("000", "000", "000"), (p.stdout, bw))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(3, 60, tag="after")
+    check("wait_services after: the wait of the after phase is the same wait with a record of its own (after-wait), and the baseline's record is not written over",
+          "status 0" in p.stdout and asked == 4 and bw.get("result") == "ok" and bw.get("am") == "200" and not os.path.exists(os.path.join(w, "out/baseline-wait")), (p.stdout, p.stderr[-200:], bw, asked, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(10 ** 9, 1, tag="after")
+    check("wait_services after: AppManagement that never answers gives up the same way in after-wait", "status 1" in p.stdout and bw.get("result") == "gave_up" and bw.get("am") == "503" and not os.path.exists(os.path.join(w, "out/baseline-wait")), (p.stdout, bw))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the after phase against stand-ins: the services are waited for before anything asks them, and a service that never answers is a finding and not the end of the phase
+    def after_run(am_wait, limit, **extra):
+        """phase_after against the server of the wait_services cases (AppManagement refuses its first am_wait calls with 503) and a docker that lists the witnesses; the wait is `limit` s at the most"""
+        port_ = free_port()
+        counter = os.path.join(tool_dir, "svc-count-%d" % port_)
+        srv_ = subprocess.Popen([sys.executable, os.path.join(tool_dir, "svc.py"), str(port_), str(am_wait), counter])
+        time.sleep(1.2)
+        w_, env_ = world("debian")
+        put(w_, "auth/jwt", "Authorization: tok\n")
+        put(w_, "auth/pw", "not-a-secret\n")
+        fake(os.path.join(w_, "bin"), "docker", r"""echo "docker $*" >>"$FAKE_LOG"
+case "$1" in
+ps) case "$2" in -aq) echo abc ;; *) printf 'p-always\np-unless-stopped\np-db\np-web\np-host\n' ;; esac ;;
+inspect) echo "/p-always policy=always state=running started=x restarts=0" ;;
+version) echo 29.9.0 ;;
+info) echo overlay2 ;;
+logs) echo "2026-10-11T00:00:00Z ack 1-1" ;;
+run) echo 1-1 ;;
+esac
+exit 0
+""")
+        fake(os.path.join(w_, "bin"), "curl", "exit 7\n")
+        env_.update(CASA_PORT=str(port_), SERVICES_WAIT=str(limit), **extra)
+        try:
+            p_ = in_world(w_, env_, 'AUTH_DIR="%s/auth"; (phase_after); echo "status $?"' % posix(w_), timeout=240)
+        finally:
+            srv_.kill()
+        try:
+            asked_ = int(open(counter).read())
+        except (OSError, ValueError):
+            asked_ = 0
+        return w_, p_, kv_of(get(w_, "out/after-wait")), asked_
+
+    w, p, aw, asked = after_run(3, 60)
+    out_ = os.path.join(w, "out")
+    check("after: AppManagement that refuses its first three calls is waited for before anything is asked of it: the wait is recorded (ok), and the answer asked once it ended is 200, not the 503 of the first look",
+          "status 0" in p.stdout and aw.get("result") == "ok" and aw.get("am") == "200" and asked == 5 and get(w, "out/am-after.code").strip() == "200" and get(w, "out/gateway-after.code").strip() == "200"
+          and get(w, "out/core-after.code").strip() == "200" and not os.path.exists(os.path.join(out_, "aborted")), (p.stdout[-400:], p.stderr[-300:], aw, asked, os.listdir(out_)))
+    tl = get(w, "out/timeline.tsv")
+    check("after: the markers come in order and every file of the phase is written", all(m_ in tl for m_ in ("after_start", "after_settled", "after_done")) and tl.index("after_start") < tl.index("after_settled") < tl.index("after_done")
+          and all(os.path.exists(os.path.join(out_, n)) for n in ("units-boot.tsv", "units-after.tsv", "containers-boot.txt", "sysos-after.rc", "jwt-fresh.code", "db-after-file.exit", "settle-after", "os-after")), (tl, os.listdir(out_)))
+    check("after: nothing is started, restarted or stopped by the phase (no systemctl but the reads, no docker but the reads and the database's own dump)",
+          not [x for x in calls(w) if re.match(r"^systemctl (start|restart|reload|enable|stop|kill|reset-failed|try-restart|isolate)", x) or x.startswith(("docker start", "docker restart", "docker stop", "docker kill"))], calls(w))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, aw, asked = after_run(10 ** 9, 1)
+    out_ = os.path.join(w, "out")
+    tl = get(w, "out/timeline.tsv")
+    check("after: AppManagement that never answers within the wait is a finding and not the end of the phase: the wait says gave_up, nothing aborts, the rest is collected, and what was asked once it ended is what AppManagement said",
+          "status 0" in p.stdout and aw.get("result") == "gave_up" and aw.get("am") == "503" and aw.get("gateway") == "200" and aw.get("core") == "200" and not os.path.exists(os.path.join(out_, "aborted"))
+          and get(w, "out/am-after.code").strip() == "503" and "after_settled" in tl and "after_done" in tl and os.path.exists(os.path.join(out_, "units-after.tsv")) and os.path.exists(os.path.join(out_, "db-after-file.exit")),
+          (p.stdout[-400:], p.stderr[-300:], aw, asked, os.listdir(out_)))
     shutil.rmtree(w, ignore_errors=True)
 
     # the helper container that dumps the database's file has a name, and a leftover of that name is removed before it starts (a docker run without a name made `musing_lamarr`, seen in a sample of the poller)
@@ -2165,6 +2226,11 @@ printf '%s' "${FAKE_CODE:-200}"
     prepare_body = function_body(guest_text, "phase_prepare") or ""
     check("prepare says at once that its bash has no clock of its own or no /dev/tcp, instead of measuring nothing", "EPOCHREALTIME" in prepare_body and "tcp_open 22" in prepare_body and prepare_body.find("tcp_open 22") < prepare_body.find("marker prepare_start"))
     check("the after phase reads the units before it asks anything", after_body.find("units_dump boot") != -1 and after_body.find("units_dump boot") < after_body.find("http_code") and after_body.find("units_dump boot") < after_body.find("wait_docker"))
+    after_code = "\n".join(ln for ln in after_body.split("\n") if not ln.lstrip().startswith("#"))
+    check("the after phase waits for the gateway, the core and AppManagement (the baseline's own wait, 180 s) once the containers have settled, before the marker that says it is settled and before anything asks them, the units "
+          "are looked at again or a token is tried; a wait that gave up is told and does not end the phase",
+          0 < after_code.find("units_dump boot") < after_code.find("settle settle-after") < after_code.find('wait_services "${SERVICES_WAIT:-180}" after || log ') < after_code.find("marker after_settled")
+          < after_code.find("http_code") < after_code.find("sys_os after") < after_code.find("jwt-before") < after_code.find("login jwt-after") < after_code.find("units_dump after") and not re.search(r"\babort\b", after_code), after_code)
     guest_code = "\n".join(ln for ln in guest_text.split("\n") if not ln.lstrip().startswith("#"))
     docker_runs = re.findall(r"\bdocker run\b[^\n]*", guest_code)
     check("every container the guest script starts has a name (one that Docker names at random, like the musing_lamarr of a poller's sample, cannot be told from the box's own)", len(docker_runs) >= 5 and all(" --name " in r_ for r_ in docker_runs), docker_runs)

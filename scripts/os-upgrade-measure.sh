@@ -31,7 +31,8 @@
 #                 Ubuntu, what `do-release-upgrade -c` says and what Canonical's metadata says
 #   hop           starts the unit (an Ubuntu hop Canonical has not opened is skipped and says so)
 #   hop-wait      waits for the unit to end (status 0), or for HOP_LIMIT seconds (status 3); safe to call again
-#   after         after the reboot: nothing is started by hand; what came back, what did not, and what the core now says the system is (GET /v1/sys/os again)
+#   after         after the reboot: nothing is started by hand; it waits (180 s at the most, as the baseline does) for the gateway, the core and AppManagement to answer 200, and says how long that took
+#                 (after-wait); what came back, what did not, and what the core now says the system is (GET /v1/sys/os again)
 #
 # Needs: MEASURE_DISPOSABLE=1 and LEG (d11-12, d12-13, u22-24 or u24-26) for prepare; INSTALLER_ARGS (options for install.sh,
 # unquoted on purpose: a list); DOCKER_FROM (the Docker the box starts on, d11-12 only); UBUNTU_VARIANT (hold or keep, Ubuntu
@@ -739,12 +740,13 @@ settle() { # <file>: seconds until the containers that must come back are runnin
     echo never >"${OUT}/$1"
 }
 
-# wait_services [seconds]: until the gateway, the core and AppManagement each answer 200 (the poller's own probes, AppManagement with the dashboard's token), 180 s at the most.
-# They are Restart=always units that systemd starts at boot, and a baseline taken a few seconds after a reboot asks them before they are up (Debian 11 needed about 8 s where
-# the Ubuntu legs needed 4 to 7: the first real run of the d11-12 leg had AppManagement at 000 at its baseline while the poller saw it answer 200 seconds later). What was asked
-# last and how long it took go to ${OUT}/baseline-wait (result ok|gave_up, waited, limit, and the three answers); WAIT_SAID is the sentence for a wait that gave up. Status 1 then.
+# wait_services [seconds] [tag]: until the gateway, the core and AppManagement each answer 200 (the poller's own probes, AppManagement with the dashboard's token), 180 s at the most.
+# They are Restart=always units that systemd starts at boot, and a look taken a few seconds after a reboot asks them before they are up (Debian 11 needed about 8 s where
+# the Ubuntu legs needed 4 to 7: the first real run of the d11-12 leg had AppManagement at 000 at its baseline while the poller saw it answer 200 seconds later; in the second, AppManagement
+# needed 11 to 13 s on Debian after the reboot of the hop, and the after phase that asked once found it at 000). What was asked last and how long it took go to ${OUT}/<tag>-wait (tag
+# baseline, the default, or after; result ok|gave_up, waited, limit, and the three answers); WAIT_SAID is the sentence for a wait that gave up. Status 1 then.
 wait_services() {
-    local limit="${1:-180}" start=${SECONDS} gw="" core="" am="" result=ok
+    local limit="${1:-180}" tag="${2:-baseline}" start=${SECONDS} gw="" core="" am="" result=ok
     while :; do
         gw="$(http_code "${CASA_PORT}" /)"
         core="$(http_code "${CASA_PORT}" /v1/sys/version/current)"
@@ -753,7 +755,7 @@ wait_services() {
         if [ $((SECONDS - start)) -ge "${limit}" ]; then result=gave_up; break; fi
         sleep 2
     done
-    printf 'result %s\nwaited %d\nlimit %d\ngateway %s\ncore %s\nam %s\n' "${result}" $((SECONDS - start)) "${limit}" "${gw}" "${core}" "${am}" >"${OUT}/baseline-wait"
+    printf 'result %s\nwaited %d\nlimit %d\ngateway %s\ncore %s\nam %s\n' "${result}" $((SECONDS - start)) "${limit}" "${gw}" "${core}" "${am}" >"${OUT}/${tag}-wait"
     WAIT_SAID="the gateway, the core and AppManagement did not all answer 200 within ${limit} s of the baseline's start (the last answers: gateway ${gw}, core ${core}, AppManagement ${am}): the box was not ready after its reboot, and nothing about the hop can be measured from it"
     [ "${result}" = ok ]
 }
@@ -1370,6 +1372,9 @@ hop_unit() {
 
 # phase_after: nothing is started by hand before the first look. The core, the gateway and AppManagement are Restart=always units that systemd starts at boot; if they
 # are not up, or come up with another InvocationID after this phase touched them, the report says so. This phase never starts, restarts or enables a unit of ReCasaOS.
+# It waits for the three to answer 200 (the baseline's own wait, 180 s at the most, written to after-wait) before it asks them anything: AppManagement needs 11 to 13 s on Debian and
+# 4 to 7 s on Ubuntu after a boot, and a look taken 2 s after the box settles measures the harness's impatience. A service that never answers is a finding (the report says NO-GO), and
+# the rest of the phase is still collected.
 phase_after() {
     if [ -e "${OUT}/hop-skipped" ]; then
         phase_begin after
@@ -1387,6 +1392,7 @@ phase_after() {
     cp "${OS_RELEASE}" "${OUT}/os-after"
     wait_docker 300 || log "docker does not answer within 300 s of the boot"
     settle settle-after
+    wait_services "${SERVICES_WAIT:-180}" after || log "the gateway, the core and AppManagement did not all answer 200 within ${SERVICES_WAIT:-180} s of the end of the boot (after-wait says which): the report says NO-GO, the rest is collected all the same"
     marker after_settled
     http_code "${CASA_PORT}" / >"${OUT}/gateway-after.code"
     http_code "${CASA_PORT}" /v1/sys/version/current >"${OUT}/core-after.code"
