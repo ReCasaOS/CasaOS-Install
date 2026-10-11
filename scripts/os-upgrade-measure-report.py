@@ -56,6 +56,10 @@ RESTART_WATCH = {"ssh.service": "ssh", "sshd.service": "ssh", "smbd.service": "s
 HOLE = 60.0       # seconds without a sample of the poller, outside a reboot: the poller is dead or the box is not answering at all
 REBOOT_GRACE = 120.0   # a gap that begins within this long of a request to reboot is the box going down
 CURL_NONE = "000"
+ALLOW_FIELDS = ("suite", "version", "label", "codename", "origin")
+# apt's own table (apt-pkg/acquire-item.cc, pkgAcqMetaBase::VerifyVendor, at the tags 2.2.4 and 2.6.1): a change of the Suite or of the Version of a repository is allowed by default (a notice, and
+# the update goes on; the Suite since apt 2.1.10), a change of the Label, the Origin or the Codename is an error until it is accepted
+ALLOWED_BY_DEFAULT = ("suite", "version")
 
 lines = []
 P = lines.append
@@ -142,6 +146,18 @@ def first_error(text):
     for ln in text.splitlines():
         if ln.startswith(("E:", "Err:")) or "No space left" in ln:
             return ln.strip()[:200]
+    return ""
+
+
+# what a log says when the runner could not reach the mirror: a failure of the network, not an answer of apt about a release
+NET_FAILURE = re.compile(r"Temporary failure resolving|Temporary failure in name resolution|Could not resolve|Connection timed out|Connection failed|Connection refused|Could not connect|"
+                         r"Unable to connect|Network is unreachable|Bad Gateway|Service Unavailable|Gateway Time-?out")
+
+
+def net_failure(text):
+    for ln in text.splitlines():
+        if NET_FAILURE.search(ln):
+            return ln.strip()[:160]
     return ""
 
 
@@ -606,7 +622,7 @@ if DEBIAN:
     for h in ("etc-apt-before.sha", "etc-apt-after-sandbox.sha", "lists-before.sha", "lists-after-sandbox.sha"):
         need(h, "the check that the sandbox left apt as it was")
     if not has("allow-skipped"):
-        for f in ("suite", "version", "label"):
+        for f in ALLOW_FIELDS:
             for mode in ("plain", "field", "all"):
                 need_rc("allow-%s-%s" % (f, mode), "the --allow-releaseinfo-change experiment was not run")
 else:
@@ -801,24 +817,38 @@ if DEBIAN:
     wnp = rc_of("without-new-pkgs")
     fact("`apt-get --without-new-pkgs upgrade` (the notes' spelling, for apt) on apt %s" % (APT_NOW or "?"), "accepted" if wnp == 0 else "NOT accepted (exit %s): %s" % (wnp, first_error(read("without-new-pkgs.txt")) or "no message"))
     # the documented switches
-    P("### --allow-releaseinfo-change-{suite,version,label} on apt %s" % (APT_NOW or "?"))
+    P("### --allow-releaseinfo-change-{suite,version,label,codename,origin} on apt %s" % (APT_NOW or "?"))
     P("")
     if has("allow-skipped"):
         P("Not run: %s." % read("allow-skipped").strip())
         open_q("--allow-releaseinfo-change-* was not measured: %s" % read("allow-skipped").strip())
     else:
         P("A stored InRelease of %s gets one field changed (and a time of 0, so that apt asks for the file again), then `apt-get update --error-on=any` runs without the option, with the option of that field, and, after another change, with `--allow-releaseinfo-change`.\n" % L["new_code"])
-        P("| field | without | with the field's option | with the general option | as documented |")
-        P("|---|---|---|---|---|")
-        all_doc = True
-        for f in ("suite", "version", "label"):
+        P("| field | without | with the field's option | with the general option | what apt does | as apt's own table says |")
+        P("|---|---|---|---|---|---|")
+        odd = []
+        for f in ALLOW_FIELDS:
             plain, one, allv = (rc_of("allow-%s-%s" % (f, m)) for m in ("plain", "field", "all"))
             said = re.search(r"changed its '%s' value" % f.capitalize(), read("allow-%s-plain.txt" % f)) is not None
-            doc = plain not in (None, 0) and said and one == 0 and allv == 0
-            all_doc = all_doc and doc
-            show_row(f, "exit %s%s" % (plain, "" if said else " (no 'changed its' message)"), "exit %s" % one, "exit %s" % allv, "yes" if doc else "NO")
+            for m in ("plain", "field", "all"):
+                lost = net_failure(read("allow-%s-%s.txt" % (f, m))) if rc_of("allow-%s-%s" % (f, m)) not in (None, 0) else ""
+                if lost:
+                    invalid("the mirror could not be reached during the releaseinfo experiment (allow-%s-%s: %s): that is not an answer of apt about the option; dispatch the leg again" % (f, m, lost))
+            if plain == 0:
+                does = "tolerated by default (%s)" % ("a notice, and the update goes on" if said else "no notice")
+            elif plain is not None and said:
+                does = "an error until it is accepted"
+            else:
+                does = "?"
+            want = "tolerated by default" if f in ALLOWED_BY_DEFAULT else "an error until it is accepted"
+            good = does.startswith(want) and one == 0 and allv == 0
+            if not good:
+                odd.append(f)
+            show_row(f, "exit %s" % plain, "exit %s" % one, "exit %s" % allv, does, "yes" if good else "NO (apt's table: %s)" % want)
         P("")
-        fact("--allow-releaseinfo-change-{suite,version,label} on apt %s" % APT_NOW, "behave as documented" if all_doc else "DO NOT behave as documented (see the table)")
+        fact("--allow-releaseinfo-change-{suite,version,label,codename,origin} on apt %s" % APT_NOW,
+             "as apt's own table says: suite and version are tolerated by default, label, codename and origin are errors until they are accepted, and the field's option and the general switch both accept the change" if not odd else
+             "NOT as apt's own table says for: %s (see the table)" % ", ".join(odd))
     P("")
 
 # ---- what changed in the packages ----------------------------------------------------------------------------------------------

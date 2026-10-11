@@ -672,12 +672,13 @@ settle() { # <file>: seconds until the containers that must come back are runnin
 
 # ---- prepare --------------------------------------------------------------------------------------------------
 
-# update_old: apt-get update of the old release, as tolerant as the old release needs and no more: a changed Suite/Version/Label is accepted (osresearch-debian.md,
-# pitfalls: bullseye flipped to oldoldstable, bookworm to oldstable), and a backports line that its mirror no longer serves is commented out. What was done goes to $OUT/prepare-notes.
+# update_old: apt-get update of the old release, as tolerant as the old release needs and no more: a changed Label, Origin or Codename is accepted (apt 2.2.4 and 2.6.1 take a
+# changed Suite or Version by themselves, as a notice that -qq does not print: pkgAcqMetaBase::VerifyVendor; osresearch-debian.md, pitfalls, said bullseye flipped to oldoldstable
+# and was refused), and a backports line that its mirror no longer serves is commented out. What was done goes to $OUT/prepare-notes.
 update_old() {
     local rc=0 log="${OUT}/prepare-update.log" f
     "${APT[@]}" update -qq >"${log}" 2>&1 || rc=$?
-    if [ "${rc}" -ne 0 ] && grep -Eq "changed its '(Suite|Version|Label)' value" "${log}"; then
+    if [ "${rc}" -ne 0 ] && grep -Eq "^E: .*changed its '(Label|Origin|Codename)' value" "${log}"; then
         echo "update: --allow-releaseinfo-change was needed" >>"${OUT}/prepare-notes"
         rc=0
         "${APT[@]}" update -qq --allow-releaseinfo-change >>"${log}" 2>&1 || rc=$?
@@ -881,9 +882,10 @@ phase_baseline() {
 
 # ---- probe: Debian ---------------------------------------------------------------------------------------
 
-# sb_opts <dir>: apt's options for a sandbox: its own list of sources, its own state and cache, no locking
+# sb_opts <dir>: apt's options for a sandbox: its own list of sources, its own state and cache, no locking, and the retries of the hop's own apt (apt 2.2.4 retries nothing by default:
+# a sandbox that is stricter than the hop would measure a hiccup of the mirror)
 sb_opts() {
-    SB_OPTS=(-o Dir::Etc::sourcelist="$1/sources.list" -o Dir::Etc::sourceparts="$1/parts" -o Dir::State::lists="$1/lists" -o Dir::Cache="$1/cache" -o Debug::NoLocking=true)
+    SB_OPTS=(-o Dir::Etc::sourcelist="$1/sources.list" -o Dir::Etc::sourceparts="$1/parts" -o Dir::State::lists="$1/lists" -o Dir::Cache="$1/cache" -o Acquire::Retries=3 -o Debug::NoLocking=true)
 }
 
 # sandbox <variant> <dir>: a plan made without touching /etc/apt: osresearch-risks.md R10 and design section 5 ("Sandbox"): the target sources in a temporary
@@ -916,7 +918,7 @@ sandbox() {
     du -sm "${sb}" >"${OUT}/sandbox-${v}-size.txt" 2>&1 || true
 }
 
-# allow_matrix <sandbox dir>: how --allow-releaseinfo-change-{suite,version,label} behave on this apt (design section 8). The stored InRelease of the target
+# allow_matrix <sandbox dir>: how --allow-releaseinfo-change-{suite,version,label,codename,origin} behave on this apt (design section 8). The stored InRelease of the target
 # release gets one field changed and a time of 0 (so that apt fetches the file again instead of being told 304: the comparison is made on a fresh one), then
 # apt-get update is run without the option, with the option of that field, and, on a second change, with the option for all.
 allow_matrix() {
@@ -927,7 +929,7 @@ allow_matrix() {
         echo "no InRelease of ${TARGET_CODENAME} in the sandbox's lists: the update of the sandbox failed" >"${OUT}/allow-skipped"
         return 0
     fi
-    for f in suite version label; do
+    for f in suite version label codename origin; do
         field="${f^}"
         sed -i -E "s/^${field}: .*/${field}: osm-changed/" "${rel}"
         touch -d @0 "${rel}"

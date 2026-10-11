@@ -177,8 +177,11 @@ def sandbox_logs(d, s):
         put(d, h, "a" * 64 + "\n")
     for h in ("lists-before.sha", "lists-after-sandbox.sha"):
         put(d, h, "b" * 64 + "\n")
-    for f in ("suite", "version", "label"):
-        rec(d, "allow-%s-plain" % f, "E: Repository 'http://deb.debian.org/debian %s InRelease' changed its '%s' value from 'osm-changed' to 'x'\nE: This must be accepted explicitly before updates for this repository can be applied.\n" % (s["new_code"], f.capitalize()), 100)
+    for f in ("suite", "version", "label", "codename", "origin"):
+        if f in ("suite", "version"):    # allowed by default (apt 2.2.4 and 2.6.1): a notice, and the update goes on
+            rec(d, "allow-%s-plain" % f, "Get:1 http://deb.debian.org/debian %s InRelease\nN: Repository 'http://deb.debian.org/debian %s InRelease' changed its '%s' value from 'osm-changed' to 'x'\nReading package lists...\n" % (s["new_code"], s["new_code"], f.capitalize()), 0)
+        else:
+            rec(d, "allow-%s-plain" % f, "E: Repository 'http://deb.debian.org/debian %s InRelease' changed its '%s' value from 'osm-changed' to 'x'\nE: This must be accepted explicitly before updates for this repository can be applied.\n" % (s["new_code"], f.capitalize()), 100)
         rec(d, "allow-%s-field" % f, "Get:1 http://deb.debian.org/debian %s InRelease\nReading package lists...\n" % s["new_code"], 0)
         rec(d, "allow-%s-all" % f, "Get:1 http://deb.debian.org/debian %s InRelease\nReading package lists...\n" % s["new_code"], 0)
 
@@ -542,7 +545,7 @@ for leg in ("d11-12", "d12-13"):
     s = LEGS[leg]
     case("a healthy %s leg is measured: every row of the table is answered, and the inhibitor does not keep root out" % leg, leg, 0,
          must_have=["MEASURED", "## The go/no-go table", "How close the plan is to the transaction that was done", "libc6 %s to %s" % s["libc"], "cron, smbd, ssh",
-                    "as documented", "Disk was NOT short in the guest"],
+                    "as apt's own table says", "Disk was NOT short in the guest"],
          must_not_have=["INVALID", "NOT_OFFERED", "Traceback"],
          rows={Q_SANDBOX: "GO", Q_FROZEN: "GO", Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_INH: "NO-GO"})
 for leg, variant in (("u22-24", "hold"), ("u24-26", "hold"), ("u22-24", "keep")):
@@ -663,9 +666,20 @@ case("a window of silence of the database is measured", L, 0, must_have=["Longes
 case("the disk: the lowest free space is said", L, 0, must_have=["Lowest free space on a mount, after any step of the hop: 14000 MB", "Disk was NOT short in the guest"])
 case("the runner's own df is reproduced when the workflow wrote it", L, 0, must_have=["host-df-end.txt", "/dev/root"], mutate=lambda d: put(d, "host-df-end.txt", "Filesystem Size Used Avail Use% Mounted on\n/dev/root 72G 41G 31G 58% /\n"))
 case("a different apt than the leg was meant for is said and does not fail the leg", L, 0, must_have=["the apt of this leg is meant to be 2.2.4: it is 2.2.5"], mutate=lambda d: replace(d, "box-facts", "apt 2.2.4", "apt 2.2.5"))
-case("--allow-releaseinfo-change: a field that apt does not complain about without the option is not as documented", L, 0, must_have=["| suite | exit 0 (no 'changed its' message) |", "DO NOT behave as documented"],
-     mutate=lambda d: rec(d, "allow-suite-plain", "Reading package lists...\n", 0))
-case("--allow-releaseinfo-change: the option of the field is refused by this apt", L, 0, must_have=["DO NOT behave as documented", "| version | exit 100 | exit 100 |"], mutate=lambda d: rec(d, "allow-version-field", "E: Unknown option\n", 100))
+case("--allow-releaseinfo-change: apt's own table (Suite and Version tolerated by default with a notice, Label, Codename and Origin refused until accepted) is what a healthy leg shows", L, 0,
+     must_have=["| suite | exit 0 | exit 0 | exit 0 | tolerated by default (a notice, and the update goes on) | yes |", "| version | exit 0 | exit 0 | exit 0 | tolerated by default (a notice, and the update goes on) | yes |",
+                "| label | exit 100 | exit 0 | exit 0 | an error until it is accepted | yes |", "| codename | exit 100 | exit 0 | exit 0 | an error until it is accepted | yes |", "| origin | exit 100 | exit 0 | exit 0 | an error until it is accepted | yes |",
+                "suite and version are tolerated by default, label, codename and origin are errors until they are accepted"], must_not_have=["DO NOT behave", "NOT as apt's own table"])
+case("--allow-releaseinfo-change: a Label that apt tolerates without the option is not what its table says", L, 0, must_have=["NOT as apt's own table says for: label", "| label | exit 0 | exit 0 | exit 0 | tolerated by default (no notice) | NO (apt's table: an error until it is accepted) |"],
+     mutate=lambda d: rec(d, "allow-label-plain", "Reading package lists...\n", 0))
+case("--allow-releaseinfo-change: a Suite that is refused without the option (an apt older than 2.1.10) is not what its table says either, and the report says so without calling it a bug of the experiment", L, 0,
+     must_have=["NOT as apt's own table says for: suite"], mutate=lambda d: rec(d, "allow-suite-plain", "E: Repository 'x' changed its 'Suite' value from 'a' to 'b'\n", 100))
+case("--allow-releaseinfo-change: the option of the field is refused by this apt", L, 0, must_have=["NOT as apt's own table says for: version", "| version | exit 0 | exit 100 | exit 0 |"], mutate=lambda d: rec(d, "allow-version-field", "E: Unknown option\n", 100))
+case("--allow-releaseinfo-change: codename and origin are rows of their own", L, 0, must_have=["| codename |", "| origin |"])
+invalid("--allow-releaseinfo-change: a mirror that could not be reached is not an answer about the option", L, "the mirror could not be reached during the releaseinfo experiment (allow-label-plain: Temporary failure resolving 'deb.debian.org')",
+        lambda d: rec(d, "allow-label-plain", "Err:1 http://deb.debian.org/debian bookworm InRelease\n  Temporary failure resolving 'deb.debian.org'\nE: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease\n", 100))
+invalid("invalid: the experiment of codename was not run", L, "allow-codename-plain.rc is missing", lambda d: remove(d, "allow-codename-plain.rc"))
+invalid("invalid: the experiment of origin was not run", L, "allow-origin-all.rc is missing", lambda d: remove(d, "allow-origin-all.rc"))
 case("--allow-releaseinfo-change was skipped for a reason, and the report says what it could not decide", L, 0, must_have=["--allow-releaseinfo-change-* was not measured: no InRelease"],
      mutate=lambda d: put(d, "allow-skipped", "no InRelease of bookworm in the sandbox's lists\n"))
 
@@ -1146,16 +1160,18 @@ case "$args" in
         lists=$(printf '%s\n' "$args" | sed -E 's/.*Dir::State::lists=([^ ]+).*/\1/')
         rel="$lists/deb.debian.org_debian_dists_bookworm_InRelease"
         if [ -f "$rel" ] && grep -q 'osm-changed' "$rel" && [ "$(stat -c %Y "$rel")" = 0 ]; then
-            ok=0
-            for f in Suite Version Label; do
+            for f in Suite Version Label Codename Origin; do
                 if grep -q "^$f: osm-changed" "$rel"; then
                     lf=$(printf '%s' "$f" | tr 'A-Z' 'a-z')
+                    ok=0
                     case "$args" in *"--allow-releaseinfo-change-$lf"*|*"--allow-releaseinfo-change update"*) ok=1 ;; esac
-                    [ "$ok" = 1 ] || { echo "E: Repository 'http://deb.debian.org/debian bookworm InRelease' changed its '$f' value from 'x' to 'y'"; exit 100; }
+                    case "$f" in Suite|Version) ok=2 ;; esac
+                    [ "$ok" != 0 ] || { echo "E: Repository 'http://deb.debian.org/debian bookworm InRelease' changed its '$f' value from 'x' to 'y'"; exit 100; }
+                    [ "$ok" != 2 ] || echo "N: Repository 'http://deb.debian.org/debian bookworm InRelease' changed its '$f' value from 'x' to 'y'"
                 fi
             done
         fi
-        printf 'Suite: oldstable\nVersion: 12.12\nLabel: Debian\n' >"$rel"
+        printf 'Suite: oldstable\nVersion: 12.12\nLabel: Debian\nCodename: bookworm\nOrigin: Debian\n' >"$rel"
         mkdir -p "$lists" ;;
     esac
     echo "Reading package lists..." ;;
@@ -1268,6 +1284,27 @@ esac
               and get(w, "out/controls.txt").startswith("variant %s" % variant), ul)
         shutil.rmtree(w, ignore_errors=True)
 
+    def update_old_world(first_output, first_rc):
+        w_, env_ = world("debian")
+        fake(os.path.join(w_, "bin"), "apt-get", r"""echo "apt-get $*" >>"$FAKE_LOG"
+case "$*" in
+*"--allow-releaseinfo-change"*) echo "Reading package lists..."; exit 0 ;;
+*) printf '%b\n' "$FAKE_FIRST_OUTPUT"; exit "$FAKE_FIRST_RC" ;;
+esac
+""")
+        return w_, dict(env_, FAKE_FIRST_OUTPUT=first_output, FAKE_FIRST_RC=str(first_rc))
+
+    w, env = update_old_world("E: Repository 'http://deb.debian.org/debian bullseye InRelease' changed its 'Label' value from 'Debian' to 'x'", 100)
+    p = in_world(w, env, "init_apt; update_old; echo \"status $?\"", timeout=60)
+    check("update_old: an error about a changed Label is retried with --allow-releaseinfo-change, and the notes say so", "status 0" in p.stdout and any("--allow-releaseinfo-change" in x for x in calls(w))
+          and "--allow-releaseinfo-change was needed" in get(w, "out/prepare-notes") and not os.path.exists(os.path.join(w, "out/aborted")), (p.stdout, calls(w), get(w, "out/aborted")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = update_old_world("N: Repository 'http://deb.debian.org/debian bullseye InRelease' changed its 'Suite' value from 'stable' to 'oldstable'\\nE: Could not resolve 'deb.debian.org'", 100)
+    p = in_world(w, env, "init_apt; update_old; echo \"status $?\"", timeout=60)
+    check("update_old: a notice about a changed Suite is not an error to retry: the update that failed for another reason ends the run, without the switch", not any("--allow-releaseinfo-change" in x for x in calls(w))
+          and "apt-get update of the old release fails" in get(w, "out/aborted"), (p.stdout, calls(w), get(w, "out/aborted")))
+    shutil.rmtree(w, ignore_errors=True)
+
     # the sandbox and the experiment on releaseinfo changes
     w, env = world("debian")
     sbd = os.path.join(w, "sb")
@@ -1276,7 +1313,7 @@ esac
     p = in_world(w, env, 'sandbox paused "%s/sb"; sandbox kept "%s/sb2"; ' % (posix(w), posix(w)) + 'sb_opts "%s/sb"; printf "%%s\\n" "${SB_OPTS[@]}" >"$OUT/sbopts"' % posix(w))
     c = calls(w)
     opts = get(w, "out/sbopts").splitlines()
-    check("the sandbox's apt gets its own list of sources, its own parts, its own lists and cache, and no locking", all(any(o.startswith(k) for o in opts) for k in ("Dir::Etc::sourcelist=", "Dir::Etc::sourceparts=", "Dir::State::lists=", "Dir::Cache=", "Debug::NoLocking=true")) and any("%s/sb/sources.list" % posix(w) in o for o in opts), opts)
+    check("the sandbox's apt gets its own list of sources, its own parts, its own lists and cache, and no locking", all(any(o.startswith(k) for o in opts) for k in ("Dir::Etc::sourcelist=", "Dir::Etc::sourceparts=", "Dir::State::lists=", "Dir::Cache=", "Acquire::Retries=3", "Debug::NoLocking=true")) and any("%s/sb/sources.list" % posix(w) in o for o in opts), opts)
     check("the sandbox runs update --error-on=any, then -s upgrade and -s dist-upgrade, for the paused and for the kept sources",
           [x.split(" -o ")[-1] if " -o " in x else x for x in c if "apt-get" in x and ("update" in x or " -s " in x)][:3] == ["Debug::NoLocking=true update --error-on=any", "Debug::NoLocking=true -s upgrade", "Debug::NoLocking=true -s dist-upgrade"] and len([x for x in c if "--error-on=any" in x]) == 2, c)
     check("the paused sandbox has Debian's sources only, rewritten for the target; the kept one has Docker's as it stands",
@@ -1289,11 +1326,13 @@ esac
     w, env = world("debian")
     sb = posix(w) + "/sb"
     os.makedirs(os.path.join(w, "sb/lists/partial"))
-    put(w, "sb/lists/deb.debian.org_debian_dists_bookworm_InRelease", "-----BEGIN PGP SIGNED MESSAGE-----\nSuite: oldstable\nVersion: 12.12\nLabel: Debian\n")
+    put(w, "sb/lists/deb.debian.org_debian_dists_bookworm_InRelease", "-----BEGIN PGP SIGNED MESSAGE-----\nSuite: oldstable\nVersion: 12.12\nLabel: Debian\nCodename: bookworm\nOrigin: Debian\n")
     p = in_world(w, env, 'allow_matrix "%s"' % sb)
-    got = {n: get(w, "out/allow-%s.rc" % n).strip() for n in ("suite-plain", "suite-field", "suite-all", "version-plain", "version-field", "version-all", "label-plain", "label-field", "label-all")}
-    check("the releaseinfo experiment: without the option apt refuses a changed field, with the option of that field and with the general one it does not", all(got[k + "-plain"] == "100" and got[k + "-field"] == "0" and got[k + "-all"] == "0" for k in ("suite", "version", "label")), got)
-    check("the experiment asks for the option of each field by its own name", all(any(("--allow-releaseinfo-change-%s update" % f) in x for x in calls(w)) for f in ("suite", "version", "label")) and any("--allow-releaseinfo-change update" in x for x in calls(w)), calls(w)[:6])
+    fields_ = ("suite", "version", "label", "codename", "origin")
+    got = {"%s-%s" % (k, m): get(w, "out/allow-%s-%s.rc" % (k, m)).strip() for k in fields_ for m in ("plain", "field", "all")}
+    check("the releaseinfo experiment, as apt's own table has it: a changed Suite or Version goes through without the option, a changed Label, Codename or Origin is refused, and the option of the field and the general one accept all five",
+          all(got[k + "-plain"] == ("0" if k in ("suite", "version") else "100") and got[k + "-field"] == "0" and got[k + "-all"] == "0" for k in fields_), got)
+    check("the experiment asks for the option of each field by its own name", all(any(("--allow-releaseinfo-change-%s update" % f) in x for x in calls(w)) for f in fields_) and any("--allow-releaseinfo-change update" in x for x in calls(w)), calls(w)[:6])
     check("the experiment says why when there is nothing to change", "allow-skipped" not in os.listdir(os.path.join(w, "out")), os.listdir(os.path.join(w, "out")))
     shutil.rmtree(w, ignore_errors=True)
     w, env = world("debian")
