@@ -105,6 +105,12 @@ def answer(step, leg, at, mode=""):
         put(data, mode.split(":", 1)[1], "refuse", "A check that should not fire")
     if mode == "nobusy":
         put(data, "busy", "ok", "busy is fine")
+    if mode.startswith("unit:"):
+        # a core that refuses because a unit of the package manager runs (apt-daily), or because PackageKit does
+        put(data, "busy", "refuse", "Another update or package operation is running")
+        for c in data["checks"]:
+            if c["code"] == "busy":
+                c["data"].update(source="unit", unit=mode.split(":", 1)[1])
     if mode == "apt_fails":
         # apt says no to a Default-Release that no source offers, in every command that opens its cache: the checks that run two of them could not ask
         for code in ("broken_dpkg", "docker_origin", "docker_update_pending"):
@@ -247,7 +253,7 @@ def build(d, leg):
     put(d, "os", L["pretty"] + "\n")
     put(d, "os-release", 'PRETTY_NAME="%s"\nNAME="%s"\nVERSION_ID="%s"\nVERSION_CODENAME=%s\nID=%s\n' % (L["pretty"], L["family"].title(), L["version"], L["codename"], L["family"]))
     put(d, "box-facts", "kernel 5.10.0-46-cloud-amd64\ncpus 4\nmemory_mb 5943\nboot bios\nroot ext4 /dev/vda1\nboot_on /dev/vda1 (root: /dev/vda1)\nvirt kvm\ndocker 28.0.4\n"
-                        "apt apt 2.2.4 (amd64)\n")
+                        "apt apt 2.2.4 (amd64)\npackagekit_after_apt %s\npackagekit inactive\n" % ("active" if leg == "u22" else "inactive"))
     put(d, "leak-needles.tsv", "hostname\t%s\nipv4\t%s\nipv4\t172.17.0.1\nipv6\t%s\nmac\t%s\nuser\t%s\n" % (HOST, IPV4, IPV6, MAC, USER))
     put(d, "timeline.tsv", "#\t%.6f\tprepare_start\n#\t%.6f\tinvariance_start\n" % (T0, T0 + 100))
     put(d, "finished", iso(T0 + 3000) + "\n")
@@ -267,6 +273,8 @@ def build(d, leg):
         n[0] += 1
         return T0 + 200 + n[0] * 5
 
+    t = at()
+    api(d, "ready-route", t0=t, body=ready_body(leg, "", t + 1))
     for name in ("ctl-core-1", "ctl-core-2"):
         api(d, name, body={"success": 200, "message": "ok", "data": "v0.5.20"}, t0=at())
     api(d, "sysos-inv", t0=at(), body={"success": 200, "message": "ok", "data": {"id": L["family"], "version_id": L["version"], "codename": L["codename"], "pretty_name": L["pretty"],
@@ -534,7 +542,7 @@ if not os.environ.get("GUEST_ONLY"):
     check("no argument at all is a usage error and not a crash", p_.returncode == 2 and "usage" in p_.stderr and "Traceback" not in p_.stderr, p_.stderr[-200:])
 
     # ---- the answers of the route: every call is judged ----
-    for call_ in ("ready-inv-2", "step-held-dirty", "step-docker_down-clean", "ready-base"):
+    for call_ in ("ready-route", "ready-inv-2", "step-held-dirty", "step-docker_down-clean", "ready-base"):
         fails("an answer with an HTTP 500 (%s)" % call_, V_ROUTE, lambda d, c=call_: api(d, c, code=500, body={"success": 500, "message": "boom"}))
     fails("a call that blocked: curl gave up on it", V_ROUTE, lambda d: api(d, "step-apps-dirty", code=0, curl=28, raw="", secs=45.0, err="Operation timed out"))
     fails("a call that was cut off after the status", V_ROUTE, lambda d: api(d, "step-held-clean", code=200, curl=56, raw="{"))
@@ -548,6 +556,30 @@ if not os.environ.get("GUEST_ONLY"):
     invalid("a call that left no record of how curl ended", "step-busy_unit-dirty.curl, .code, .t0 or .t1 is missing", lambda d: remove(d, "step-busy_unit-dirty.curl"))
     invalid("a call that left no time", "ready-inv-2.curl, .code, .t0 or .t1 is missing", lambda d: remove(d, "ready-inv-2.t1"))
     invalid("the control's calls of the core that answered 500: the control did not run", "the control of the invariance window did not run", lambda d: api(d, "ctl-core-1", code=500, body={}))
+
+    # ---- the first call of the route (ready-route): the one that finds out whether the release has it, judged like the others ----
+    invalid("the first call of the route that left no record", "no answer was recorded for ready-route", lambda d: remove(d, "ready-route.code"), silent=[V_ROUTE])
+    invalid("the first call of the route that is 404: the release has no route, by name", "ready-route got no answer of the route", lambda d: api(d, "ready-route", code=404, body={"message": "no"}),
+            has=["the release under test has no such route"], silent=[V_ROUTE, V_SHAPE])
+    fails("the first call of the route answers without a state", V_SHAPE, lambda d: jdata(d, "ready-route", lambda x: x.pop("state")), extra=["ready-route"])
+    fails("the first call of the route says the box's hostname in its text", V_TEXT, lambda d: jdata(d, "ready-route", lambda x: x.update(text=x["text"] + HOST + "\n")), extra=["ready-route"])
+    fails("the first call of the route has a checked_at that is not the time of the call", V_TIME, lambda d: jdata(d, "ready-route", lambda x: x.update(checked_at=iso(T0 - 3600))), extra=["ready-route"])
+    fails("the first call of the route took 30 s", V_BUDGET, lambda d: api(d, "ready-route", t0=float(slurp(d, "ready-route.t0")), secs=30.0, body=json.loads(slurp(d, "ready-route.json"))), extra=["ready-route"])
+
+    def stopped_first():
+        d_ = VDir()
+        build(d_, "d11")
+        put(d_, "aborted", "the release under test has no /v1/sys/os/readiness\n")
+        remove(d_, "os-release")
+        return d_
+    if wanted("a guest that stopped says so first among the reasons of an invalid run"):
+        count[0] += 1
+        code_, text_ = run_report(stopped_first(), "d11")
+        reasons_ = [ln for ln in text_.splitlines() if ln.startswith("- INVALID: ")]
+        if code_ == 1 and len(reasons_) >= 2 and reasons_[0].startswith("- INVALID: the guest stopped early: the release under test has no /v1/sys/os/readiness") and any("os-release is missing" in r for r in reasons_):
+            print("ok: a guest that stopped says so first among the reasons of an invalid run")
+        else:
+            failures.append("a guest that stopped says so first among the reasons of an invalid run: exit %d, %r" % (code_, reasons_[:3]))
 
     # ---- the shape of an answer ----
     def shape(fn):
@@ -820,11 +852,37 @@ if not os.environ.get("GUEST_ONLY"):
     fails("clean: the reminder to take a snapshot is ok (it must always be said)", V_CLEAN_SNAPSHOT, lambda d: set_sev(d, "ready-base", "snapshot_reminder", "ok"))
     case("clean: a box with warnings is attention, and is clean", 0, ["**PASS** " + V_CLEAN_STATE, "State **attention**"], ["FAIL"])
 
+    # a clean box that a package manager is working on is the box of the harness, and not the feature: INVALID, with its reason, and no FAIL of the verdicts that need a quiet box
+    def busy_of(unit, names):
+        def fn(d):
+            for n in names:
+                make(d, n, "busy", "refuse")
+                jdata(d, n, lambda x: [c["data"].update(source="unit", unit=unit) for c in x["checks"] if c["code"] == "busy"])
+        return fn
+
+    QUIET_VERDICTS = [V_CLEAN_NO_REFUSE, V_CLEAN_STATE, V_CLEAN_AGREE]
+    invalid("clean: busy names apt-daily.service in one of the four answers: the box was not quiet, an invalid run and no FAIL of the feature", "the clean box was not quiet",
+            busy_of("apt-daily.service", ["ready-inv-2"]), silent=QUIET_VERDICTS, has=["apt-daily.service", "says nothing against the feature"])
+    invalid("clean: busy names apt-daily-upgrade.service in the four answers: the same", "the clean box was not quiet",
+            busy_of("apt-daily-upgrade.service", ["ready-inv-1", "ready-inv-2", "ready-inv-3", "ready-base"]), silent=QUIET_VERDICTS, has=["apt-daily-upgrade.service"], leg="u22")
+    case("clean: the other verdicts of the clean box are still made when the box was not quiet", 1, ["**PASS** " + V_CLEAN_DOCKER, "**PASS** " + V_CLEAN_SNAPSHOT, "INVALID RUN"], [],
+         mutate=busy_of("apt-daily.service", ["ready-base"]))
+    case("clean: busy that refuses because dpkg's lock is held (source maintenance) is a FAIL of the feature, as before", 1, ["**FAIL** " + V_CLEAN_NO_REFUSE, "refuse: busy"], ["INVALID"],
+         mutate=lambda d: [(make(d, n, "busy", "refuse"), jdata(d, n, lambda x: [c["data"].update(source="maintenance") for c in x["checks"] if c["code"] == "busy"])) for n in ("ready-inv-1", "ready-inv-2", "ready-inv-3", "ready-base")])
+    case("clean: busy that refuses because it could not ask (no source) is a FAIL of the feature, as before", 1, ["**FAIL** " + V_CLEAN_NO_REFUSE, "refuse: busy"], ["INVALID"],
+         mutate=lambda d: [make(d, n, "busy", "refuse") for n in ("ready-inv-1", "ready-inv-2", "ready-inv-3", "ready-base")])
+    case("clean: a busy that names a unit and is only a warning is not the box of the harness: a FAIL of the verdicts that see it", 1, ["**FAIL** " + V_CLEAN_AGREE], ["INVALID"],
+         mutate=lambda d: [make(d, "ready-inv-2", "busy", "warn"), jdata(d, "ready-inv-2", lambda x: [c["data"].update(source="unit", unit="apt-daily.service") for c in x["checks"] if c["code"] == "busy"])])
+
+    # PackageKit: what it was after the last apt call and what it is, in the table of the box
+    case("the table of the box says what PackageKit was after the last apt call and what it is", 0, ["| packagekit_after_apt | inactive |", "| packagekit | inactive |"], ["FAIL"])
+    case("the table of the box says PackageKit was awake after the last apt call on an Ubuntu", 0, ["| packagekit_after_apt | active |", "| packagekit | inactive |"], ["FAIL"], leg="u22")
+
     # ---- the dirty matrix, one step at a time ----
     for leg_ in ("d11", "u22"):
         for s in steps_of(leg_):
             sid, code_, sev_ = s["id"], s["code"], s["sev"]
-            if leg_ == "u22" and s["id"] not in ("held", "sources_alias", "sources_third_party", "foreign_arch_empty", "containers_policy", "busy_lock", "disk_boot", "docker_down"):
+            if leg_ == "u22" and s["id"] not in ("held", "sources_alias", "sources_third_party", "foreign_arch_empty", "containers_policy", "busy_lock", "busy_packagekit", "disk_boot", "docker_down"):
                 continue
             tag = "(%s)" % leg_
             D, C = "step-%s-dirty" % sid, "step-%s-clean" % sid
@@ -955,6 +1013,9 @@ check("the guest skips no step: every step of the matrix exists on both systems"
 check("the guest waits for AppManagement's own check of the images, and says why when it did not come, before the control and the window",
       re.search(r'    wait_image_check 240 \|\| not_proven "[^"]*IMAGE_UPDATES[^"]*"\n    marker prepare_done\n[^\n]*\n    sleep 20\n\n    invariance\n', guest_text) is not None, "")
 check("the file the wait looks for is the one AppManagement renames into /var/lib/casaos", 'IMAGE_UPDATES="${IMAGE_UPDATES:-/var/lib/casaos/image_updates.json}"' in guest_text, "")
+check("the guest stops PackageKit as soon as the last apt call is over, and probes the route as soon as the services answer: both before the wait for the images, the control and the window",
+      re.search(r'    "\$\{APT\[@\]\}" update -qq\n    PK_AFTER_APT="\$\(unit_state packagekit\.service\)"\n    quiet_packagekit \|\| [^\n]*\n    wait_services 180 \|\| abort "[^"]*"\n    probe_route\n[^\n]*\n    box_facts\n', guest_text) is not None, "")
+check("the first call of the route is the readiness route, kept as ready-route, and a 404 is the one answer that ends the run", re.search(r'probe_route\(\) \{\n    ready_call ready-route\n    \[ "\$\(cat "\$\{OUT\}/ready-route\.code"\)" != 404 \] \|\| abort "the release under test has no /v1/sys/os/readiness"\n\}', guest_text) is not None, "")
 check("the legs of the guest, of the report and of the workflow's file are the same", True)
 
 if have_bash() and not os.environ.get("REPORT_ONLY"):
@@ -1042,6 +1103,8 @@ if lock:
     steps.append("busy_lock")
 if active("casaos-package-update.service"):
     steps.append("busy_unit")
+if active("packagekit.service"):
+    steps.append("busy_packagekit")
 if any(l.startswith("UUID=") and "nofail" not in l and "root-uuid" not in l for l in lines(os.environ["FSTAB"])):
     steps.append("fstab_unresolved")
 names = [l.split("|")[0] for l in lines(os.path.join(F, "containers"))]
@@ -1071,6 +1134,11 @@ if mode == "hang" and lock:
 if mode == "hang500":
     reply(500, {"success": 500, "message": "boom"})
 wrong = "extra:" + os.environ["FAKE_CORE_CODE"] if mode == "extra" and steps else "nobusy" if mode == "nobusy" else ""
+# a core that asks PackageKit, and one that is told by a box that a package manager works on (the clean box of a guest that did not wait for apt-daily)
+if mode == "packagekit" and steps == ["busy_packagekit"]:
+    wrong = "unit:packagekit.service"
+if mode == "notquiet" and not steps:
+    wrong = "unit:apt-daily.service"
 # a Default-Release that no source offers makes apt fail, and the core with it
 if steps == ["sources_pin"] and release != L["codename"]:
     wrong = "apt_fails"
@@ -1109,14 +1177,22 @@ case "$cmd" in
     all=""; for a in "$@"; do [ "$a" != "--all" ] || all=1; done
     while read -r u l a s rest; do [ -n "$all" ] || [ "$a" = active ] || continue; echo "$u $l $a $s $rest"; done <"$FAKE/units.list" ;;
   list-timers) printf 'Mon 2026-10-12 00:00:00 UTC 3h left Sun 2026-10-11 00:00:12 UTC 20h ago logrotate.timer logrotate.service\n' ;;
+  cat) [ -e "$FAKE/unitfile/$1" ] || { echo "No files found for $1." >&2; exit 1; } ;;
   show)
+    # `--property=ActiveState --value <unit>` says the state alone, as systemd does; `-p ... <units>` is a block for each unit
+    value=""; prop=""
+    for a in "$@"; do case "$a" in --value) value=1 ;; --property=*) prop="${a#--property=}" ;; esac; done
     while [ $# -gt 0 ]; do
       u="$1"; shift
       case "$u" in -p) shift; continue ;; -*) continue ;; esac
       st=inactive; sub=dead; pid=0
       if [ -e "$FAKE/active/$u" ]; then st=active; sub=running; pid=$(( $(printf '%s' "$u" | cksum | cut -d' ' -f1) % 30000 + 100 )); fi
       inv="inv-$u"; [ ! -e "$FAKE/inv/$u" ] || inv="$(cat "$FAKE/inv/$u")"
-      printf 'Id=%s\nActiveState=%s\nSubState=%s\nMainPID=%s\nInvocationID=%s\n\n' "$u" "$st" "$sub" "$pid" "$inv"
+      if [ -n "$value" ]; then
+        case "$prop" in ActiveState) echo "$st" ;; *) echo ;; esac
+      else
+        printf 'Id=%s\nActiveState=%s\nSubState=%s\nMainPID=%s\nInvocationID=%s\n\n' "$u" "$st" "$sub" "$pid" "$inv"
+      fi
     done ;;
   *) echo "systemctl $cmd $*" >>"$FAKE/calls" ;;
 esac
@@ -1226,7 +1302,7 @@ esac
     def sandbox(tmp):
         """the box of the guest in a directory of its own: the fake tools in front of PATH, the files the guest script's variables point at, the state the tools keep"""
         j = lambda *p: os.path.join(tmp, *p).replace("\\", "/")
-        for sub in ("fake", "fake/active", "fake/inv", "root/etc/apt/sources.list.d", "root/etc/apt/apt.conf.d", "root/etc/apt/preferences.d", "root/etc/casaos", "root/var/lib/dpkg/updates",
+        for sub in ("fake", "fake/active", "fake/inv", "fake/unitfile", "root/etc/apt/sources.list.d", "root/etc/apt/apt.conf.d", "root/etc/apt/preferences.d", "root/etc/casaos", "root/var/lib/dpkg/updates",
                     "root/var/lib/apt/lists", "root/var/cache/apt", "root/var/lib/casaos", "root/var/log/casaos", "root/boot", "root/run/casaos", "lib", "auth", "out"):
             os.makedirs(j(*sub.split("/")), exist_ok=True)
         for name, text in FAKES.items():
@@ -1429,6 +1505,29 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
           files={"out/rc1": "0\n", "out/pkgs": "osr-foreign:i386\n", "out/d": "1\n", "out/rc2": "0\n", "out/u": "0\n"})
     gcase("foreign_arch: an undo that cannot remove the architecture (a package of it is left) fails", 'dpkg() { case "$1" in --purge) return 0 ;; --remove-architecture) return 2 ;; *) command dpkg "$@" ;; esac; }; in_subshell undo_foreign_arch; echo "$STATUS" >"$OUT/rc"', files={"out/rc": "2\n"})
 
+    # ---- PackageKit: stopped after the last apt call, and the step that starts it ----
+    gcase("unit_state: the ActiveState of a unit, and inactive for one that is not there", 'systemctl start x.service; unit_state x.service >"$OUT/a"; unit_state y.service >"$OUT/b"', files={"out/a": "active\n", "out/b": "inactive\n"})
+    gcase("quiet_packagekit: PackageKit is stopped, and the function says it is quiet", 'systemctl start packagekit.service; quiet_packagekit; echo "$?" >"$OUT/rc"; unit_state packagekit.service >"$OUT/state"', files={"out/rc": "0\n", "out/state": "inactive\n"})
+    gcase("quiet_packagekit: a box with no PackageKit is quiet already", 'quiet_packagekit; echo "$?" >"$OUT/rc"', files={"out/rc": "0\n"})
+    gcase("quiet_packagekit: a PackageKit that does not stop is said, after thirty looks (status 1)", 'systemctl() { case "$1" in show) echo active ;; esac; }; quiet_packagekit; echo "$?" >"$OUT/rc"', files={"out/rc": "1\n"})
+    gcase("quiet_packagekit: a PackageKit that is slow to stop is waited for", 'systemctl() { case "$1" in show) n=$(cat "$FAKE/n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$FAKE/n"; if [ "$n" -lt 5 ]; then echo deactivating; else echo inactive; fi ;; esac; }; '
+          'quiet_packagekit; echo "$?" >"$OUT/rc"; cat "$FAKE/n" >"$OUT/looked"', files={"out/rc": "0\n", "out/looked": "5\n"})
+    gcase("busy_packagekit on a box that has no PackageKit: a unit of its name stands for it, and the undo stops it",
+          'systemd-run() { echo "systemd-run $*" >>"$FAKE/calls"; command systemd-run "$@"; }; in_subshell dirty_busy_packagekit; echo "$STATUS" >"$OUT/rc1"; unit_state packagekit.service >"$OUT/during"; in_subshell undone_busy_packagekit; echo "$STATUS" >"$OUT/d"; '
+          'in_subshell undo_busy_packagekit; in_subshell undone_busy_packagekit; echo "$STATUS" >"$OUT/u"',
+          files={"out/rc1": "0\n", "out/during": "active\n", "out/d": "1\n", "out/u": "0\n", "out/step-busy_packagekit.note": "packagekit.service was active when the call was made (the real unit: no)\n"}, calls=["systemd-run --quiet --unit=packagekit.service"])
+    gcase("busy_packagekit on an Ubuntu: the real unit is started, and no unit of its name is made",
+          'systemd-run() { echo "systemd-run $*" >>"$FAKE/calls"; command systemd-run "$@"; }; in_subshell dirty_busy_packagekit; echo "$STATUS" >"$OUT/rc1"; unit_state packagekit.service >"$OUT/during"', setup=lambda tmp, j: open(j("fake", "unitfile", "packagekit.service"), "w").close(),
+          files={"out/rc1": "0\n", "out/during": "active\n", "out/step-busy_packagekit.note": "packagekit.service was active when the call was made (the real unit: yes)\n"}, no_calls=["systemd-run"])
+    gcase("busy_packagekit: a dirt that leaves PackageKit inactive is a dirt that failed (an invalid run, not a FAIL of the feature)", 'systemd-run() { :; }; in_subshell dirty_busy_packagekit; echo "$STATUS" >"$OUT/rc1"', files={"out/rc1": "1\n"})
+    gcase("busy_packagekit: an undo of a unit that is gone already is not a failure (systemctl stop says it is not loaded)", 'systemctl() { return 5; }; in_subshell undo_busy_packagekit; echo "$STATUS" >"$OUT/rc"', files={"out/rc": "0\n"})
+    gcase("busy_packagekit: the box is not back while PackageKit still runs", 'systemctl start packagekit.service; in_subshell undone_busy_packagekit; echo "$STATUS" >"$OUT/rc"', files={"out/rc": "1\n"})
+    gcase("probe_route: the first call of the route is kept as ready-route, and a box that answers goes on", 'probe_route; echo "$?" >"$OUT/rc"', files={"out/rc": "0\n", "out/ready-route.code": "200\n", "out/ready-route.json": "{*", "out/aborted": None}, calls=["curl /v1/sys/os/readiness"])
+    gcase("probe_route: a 404 ends the run, and says that the release has no such route", 'probe_route', prelude_env={"FAKE_CORE_MODE": "route404"}, returned=False,
+          files={"out/aborted": "the release under test has no /v1/sys/os/readiness\n", "out/ready-route.code": "404\n"})
+    gcase("probe_route: an answer that is not a 404 (the core is down: nothing answers) is not the answer of a release with no route, and the run goes on to say so in its own words", 'curl() { printf 000; return 7; }; probe_route; echo "$?" >"$OUT/rc"',
+          files={"out/rc": "0\n", "out/ready-route.code": "000\n", "out/aborted": None})
+
     # ---- the wait for AppManagement's own check of the images ----
     gcase("wait_image_check: the file is there, no wait", 'wait_image_check 5; echo "$?" >"$OUT/rc"', setup=lambda tmp, j: open(j("root/var/lib/casaos/image_updates.json"), "w").write("{}"), files={"out/rc": "0\n"})
     gcase("wait_image_check: the file comes while it waits", '( command sleep 0.4; echo "{}" >"$IMAGE_UPDATES" ) & wait_image_check 20; echo "$?" >"$OUT/rc"; wait', files={"out/rc": "0\n"})
@@ -1442,6 +1541,9 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
           files={"out/n": "1\n"})
     gcase("listen_dump: the sockets as `<protocol> <address:port>`, sorted", 'listen_dump t', files={"out/listen-t.txt": LISTEN_SORTED})
     gcase("box_facts: the kernel, the boot mode, where /boot is, what the tools are; and a copy of os-release", 'box_facts', files={"out/box-facts": "kernel 5.10.0-46-cloud-amd64\ncpus 4\nmemory_mb 5943\nboot *", "out/os-release": "PRETTY_NAME=*"})
+
+    gcase("box_facts: what PackageKit was after the last apt call, and what it is now", 'PK_AFTER_APT=active; systemctl start packagekit.service; box_facts; grep packagekit "$OUT/box-facts" >"$OUT/pk"', files={"out/pk": "packagekit_after_apt active\npackagekit active\n"})
+    gcase("box_facts: a box that was not asked about PackageKit says so, and PackageKit that is not there is inactive", 'box_facts; grep packagekit "$OUT/box-facts" >"$OUT/pk"', files={"out/pk": "packagekit_after_apt not asked\npackagekit inactive\n"})
 
     # ---- api(): what a call leaves ----
     gcase("api: the body, the status, the time before and after, and how curl ended (written last)", 'api probe /v1/sys/os 30; cat "$OUT/probe.code" "$OUT/probe.curl" >"$OUT/both"; [ -s "$OUT/probe.t0" ] && [ -s "$OUT/probe.t1" ] && echo times >"$OUT/t"',
@@ -1609,7 +1711,7 @@ esac
 
     # ---- the end to end: the real guest functions, the stand-in core, the real report ----
     E2E = ('write_manifest_tool "$LIBDIR/manifest.py"; write_lock_tools "$LIBDIR"; INV_TREES=("$INV_ROOT/etc" "$INV_ROOT/var/lib/dpkg" "$INV_ROOT/var/lib/apt" "$INV_ROOT/var/cache/apt" "$INV_ROOT/var/lib/casaos" "$INV_ROOT/var/log/casaos"); '
-           'HOST_NAME=' + HOST + '; SUDO_USER=casa; guard_run; : >"$OUT/timeline.tsv"; echo "$LEG" >"$OUT/leg"; echo "$PRETTY_NAME" >"$OUT/os"; box_facts; leak_needles; marker prepare_start; invariance; for id in "${STEP_IDS[@]}"; do run_step "$id"; done; date -u +%FT%TZ >"$OUT/finished"')
+           'HOST_NAME=' + HOST + '; SUDO_USER=casa; guard_run; : >"$OUT/timeline.tsv"; echo "$LEG" >"$OUT/leg"; echo "$PRETTY_NAME" >"$OUT/os"; PK_AFTER_APT=active; quiet_packagekit; probe_route; box_facts; leak_needles; marker prepare_start; invariance; for id in "${STEP_IDS[@]}"; do run_step "$id"; done; date -u +%FT%TZ >"$OUT/finished"')
 
     def e2e(label, want_code, must_have=(), must_not_have=(), env_extra=None, snippet=E2E, leg="d11", after=None):
         """the real guest functions, the stand-in tools and core, the real report: the report's verdict on what the guest left. after(tmp, j) says what else is wrong with the box"""
@@ -1652,10 +1754,15 @@ esac
     e2e("a core that never says busy is caught under the lock and by both busy steps", 1, ["**FAIL** " + V_LOCK_BUSY, "**FAIL** " + f_fires(STEP_BY_ID["busy_lock"]), "**FAIL** " + f_fires(STEP_BY_ID["busy_unit"])], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "nobusy"})
     e2e("a core that leaks the box's name in the text is caught", 1, ["**FAIL** " + V_TEXT, HOST], ["Traceback"], env_extra={"FAKE_CORE_MODE": "leak"})
-    e2e("a core that has no such route is an invalid run, by name", 1, ["INVALID RUN", "the release under test has no such route"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "route404"})
+    e2e("a core that has no such route is found out by the first call, and the run stops there: an invalid run, by name", 1,
+        ["INVALID RUN", "the guest stopped early: the release under test has no /v1/sys/os/readiness", "ready-route got no answer of the route", "the release under test has no such route"], ["Traceback"],
+        env_extra={"FAKE_CORE_MODE": "route404"}, after=lambda tmp, j: [] if not os.path.exists(j("out/inv-before.tsv")) else ["the run went on to the invariance window after the first call said 404"])
     e2e("a core that fires a check nobody expected with every dirt is caught step by step", 1, ["**FAIL** " + f_alone(STEP_BY_ID["held"]), "also fires: network_uplink"], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "extra", "FAKE_CORE_CODE": "network_uplink"})
     e2e("a core that answers 500 is caught as a route that fails", 1, ["**FAIL** " + V_ROUTE], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang500"})
+    e2e("a core that refuses `busy` because PackageKit runs is caught by the step that starts it, by name", 1, ["**FAIL** " + f_quiet(STEP_BY_ID["busy_packagekit"])], ["Traceback", "INVALID"], env_extra={"FAKE_CORE_MODE": "packagekit"})
+    e2e("a clean box that apt-daily is working on is an invalid run, and no FAIL of the feature", 1, ["INVALID RUN", "the clean box was not quiet", "apt-daily.service"],
+        ["Traceback", "**FAIL** " + V_CLEAN_NO_REFUSE, "**FAIL** " + V_CLEAN_STATE, "**FAIL** " + V_CLEAN_AGREE], env_extra={"FAKE_CORE_MODE": "notquiet"})
     e2e("a guest whose Default-Release names a release that no source offers makes apt fail, and the core with it: broken_dpkg, docker_origin and docker_update_pending could not be asked, and the proof says so", 1,
         ["**FAIL** " + f_alone(STEP_BY_ID["sources_pin"]), "also fires: broken_dpkg, docker_origin"], ["Traceback"],
         snippet=E2E.replace("guard_run;", "guard_run; dirty_sources_pin() { mkdir -p \"$APT_DIR/apt.conf.d\" && printf 'APT::Default-Release \"%s\";\\n' \"$TO_CODENAME\" >\"$APT_DIR/apt.conf.d/99osr-default-release\"; };"))
@@ -1731,6 +1838,9 @@ if not os.environ.get("REPORT_ONLY"):
           "tee -a \"${GITHUB_STEP_SUMMARY}\"" in report_step)
     check("the evidence the guest left is the directory the report is run on", "/home/casa/osr-out" in prove and "/home/casa/osr-out" in report_step)
     check("the tag is the input, and nothing else", "TAG: ${{ inputs.tag }}" in wf and "EVENT" not in wf)
+    check("the workflow says that the release under test has to carry the route (v0.5.25 is the first), what the guest does when it does not, and that an empty tag is the latest release",
+          "v0.5.25 is the first one" in wf and "once v0.5.25 is published" in wf and "the release under test has no /v1/sys/os/readiness" in wf and "Left empty, the tag is the latest published release" in wf and "until then, give the tag of the candidate" in wf)
+    check("the guest script ends the run with the very words the workflow says", "the release under test has no /v1/sys/os/readiness" in guest_text)
     check("the legs are chosen by the plan job from the file of the legs, which stops a run that matches none", "scripts/os-readiness-proof-legs.json" in wf_runs.get("plan:The legs this run proves", "") and 'raise SystemExit("no leg is' in wf_runs.get("plan:The legs this run proves", ""))
     artifact = re.search(r"^\s+name: (os-readiness-proof-.+)$", wf, re.M)
     check("each leg uploads its evidence under a name of its own", bool(artifact) and "${{ matrix.leg }}" in artifact.group(1))

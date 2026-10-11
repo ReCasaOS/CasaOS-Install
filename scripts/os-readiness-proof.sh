@@ -184,7 +184,7 @@ COME_BACK=(p-always p-unless-stopped p-db p-web)
 # the dirty matrix, in the order it runs: the lightest first, Docker and AppManagement last. os-readiness-proof-report.py has the same list.
 STEP_IDS=(held held_docker broken_dpkg sources_cdrom sources_file sources_alias sources_pin sources_pin_prefs sources_proposed sources_third_party
     foreign_arch_empty foreign_arch reboot_first fstab_unresolved containers_policy containers_ports_host containers_ports_publish busy_lock busy_unit
-    disk_boot apps docker_down)
+    busy_packagekit disk_boot apps docker_down)
 
 # EPOCHREALTIME and printf's %()T are the shell's own: a clock that does not need `date` to be installed, or to work
 now() { printf '%s' "${EPOCHREALTIME}"; }
@@ -208,6 +208,24 @@ wait_docker() { # [seconds]
         sleep 1
     done
     log "docker did not answer within ${1:-300} s"
+    return 1
+}
+
+# unit_state <unit>: its ActiveState, as systemd says it (a unit that does not exist is inactive, for systemd)
+unit_state() { systemctl show "$1" --property=ActiveState --value 2>/dev/null || true; }
+
+# quiet_packagekit: on an Ubuntu the apt run that ends the preparation wakes PackageKit, which leaves by itself after 300 s without a request. Left alone it would leave
+# in the middle of the invariance window, and a unit that stops there is a unit that changed. The core does not ask about it (the step busy_packagekit proves that), so it
+# is stopped here, once: nothing runs apt after this, so nothing wakes it. Status 1 when it is still there after 30 s.
+quiet_packagekit() {
+    local i
+    systemctl stop packagekit.service >/dev/null 2>&1 || true
+    for i in $(seq 1 30); do
+        case "$(unit_state packagekit.service)" in
+        active | activating | deactivating) sleep 1 ;;
+        *) return 0 ;;
+        esac
+    done
     return 1
 }
 
@@ -349,6 +367,14 @@ api() {
 # the call under test: longer than the core's 20 s budget, so that a call that blocks shows as one
 ready_call() { api "$1" /v1/sys/os/readiness 45; }
 
+# probe_route: the first call of the route, as soon as the services answer: a release that has none (every release before the one that carries it) answers 404 to it and to every
+# call that follows, and the run would find that out after the wait for the images, the control and the window. Recorded as ready-route, which the report judges like the
+# others. It is the one call made before the window: a write that only the very first call of the route makes is not in it.
+probe_route() {
+    ready_call ready-route
+    [ "$(cat "${OUT}/ready-route.code")" != 404 ] || abort "the release under test has no /v1/sys/os/readiness"
+}
+
 # code_of <path> [seconds]: the HTTP status of a GET with the loopback secret, 000 when nothing answered
 code_of() { curl -s -o /dev/null --max-time "${2:-5}" -w '%{http_code}' -H "$(internal_header)" "http://127.0.0.1:${CASA_PORT}$1" 2>/dev/null || true; }
 
@@ -395,6 +421,9 @@ box_facts() {
         echo "apt $(apt-get --version 2>&1 | sed -n 1p)"
         echo "dpkg $(dpkg --version 2>&1 | sed -n 1p)"
         echo "systemd $(systemctl --version 2>&1 | sed -n 1p)"
+        # PackageKit: what the apt run that ends the preparation left it as (active on an Ubuntu), and what it is now that it was stopped
+        echo "packagekit_after_apt ${PK_AFTER_APT:-not asked}"
+        echo "packagekit $(unit_state packagekit.service)"
     } >"${OUT}/box-facts" 2>&1 || true
     cp "${OS_RELEASE}" "${OUT}/os-release"
     df -P -m / /boot /var >"${OUT}/df-start.txt" 2>&1 || true
@@ -636,6 +665,22 @@ dirty_busy_unit() {
 undo_busy_unit() { systemctl stop casaos-package-update.service; }
 undone_busy_unit() { [ "$(systemctl is-active casaos-package-update.service || true)" != active ]; }
 
+# PackageKit running is no package operation: on a stock Ubuntu it is active for five minutes after any apt run with nothing to do, and a transaction of its own holds dpkg's lock,
+# which the core reads on its own. The answer has to leave `busy` quiet while PackageKit runs. Debian 11's cloud image has no PackageKit: a unit of its name stands for it there.
+dirty_busy_packagekit() {
+    local real=yes
+    systemctl cat packagekit.service >/dev/null 2>&1 || real=no
+    if [ "${real}" = yes ]; then
+        systemctl start packagekit.service
+    else
+        systemd-run --quiet --unit=packagekit.service --collect --property=Type=exec /bin/sleep 300
+    fi
+    [ "$(unit_state packagekit.service)" = active ]
+    printf 'packagekit.service was active when the call was made (the real unit: %s)\n' "${real}" >"${OUT}/step-busy_packagekit.note"
+}
+undo_busy_packagekit() { systemctl stop packagekit.service >/dev/null 2>&1 || true; }
+undone_busy_packagekit() { [ "$(unit_state packagekit.service)" != active ]; }
+
 # a file that leaves 200 MiB free on the filesystem of /boot: fallocate takes the blocks without writing them. On these images /boot is on the root filesystem,
 # so the disk checks of / and of apt's archives fire with it.
 dirty_disk_boot() {
@@ -774,7 +819,10 @@ main() {
     install_casaos
     start_things
     "${APT[@]}" update -qq
+    PK_AFTER_APT="$(unit_state packagekit.service)"
+    quiet_packagekit || echo "packagekit.service was still there 30 s after it was stopped: it may leave in the invariance window" >>"${OUT}/prepare-notes"
     wait_services 180 || abort "the gateway, the core and AppManagement do not all answer after the installation"
+    probe_route
     timeout 120 systemctl is-system-running --wait >/dev/null 2>&1 || true
     box_facts
     leak_needles

@@ -36,7 +36,7 @@ var proofLegs = []proofLeg{
 var proofSteps = []string{
 	"held", "held_docker", "broken_dpkg", "sources_cdrom", "sources_file", "sources_alias", "sources_pin", "sources_pin_prefs", "sources_proposed",
 	"sources_third_party", "foreign_arch_empty", "foreign_arch", "reboot_first", "fstab_unresolved", "containers_policy", "containers_ports_host",
-	"containers_ports_publish", "busy_lock", "busy_unit", "disk_boot", "apps", "docker_down",
+	"containers_ports_publish", "busy_lock", "busy_unit", "busy_packagekit", "disk_boot", "apps", "docker_down",
 }
 
 const (
@@ -135,6 +135,9 @@ func proofBox(t *testing.T, l proofLeg, step string) *fakeProbe {
 		f.busyReason = "another package manager holds dpkg's lock"
 	case "busy_unit":
 		f.busyReason = "casaos-package-update is running"
+	case "busy_packagekit":
+		// PackageKit runs, as it does on a stock Ubuntu for five minutes after an apt run: the core does not ask about it
+		f.on("active\n", 0, argvUnit("packagekit.service")...)
 	case "disk_boot":
 		for _, p := range []string{"/", "/usr", "/boot", "/var/cache/apt/archives"} {
 			f.free[p] = 200 << 20
@@ -172,6 +175,13 @@ func TestDumpReadinessFixtures(t *testing.T) {
 			}
 			if err := os.WriteFile(filepath.Join(dir, name+".json"), append(body, '\n'), 0o644); err != nil {
 				t.Fatal(err)
+			}
+			if step == "busy_packagekit" {
+				for _, argv := range f.attemptedCommands() {
+					if strings.Contains(strings.Join(argv, " "), "packagekit") {
+						t.Fatalf("%s/%s: the core asked about PackageKit: %q", l.name, step, argv)
+					}
+				}
 			}
 			var bad []string
 			for _, c := range answer.Checks {

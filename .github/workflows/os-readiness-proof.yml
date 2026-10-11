@@ -16,12 +16,14 @@ name: os-readiness-proof
 #     differ. Nothing else is hashed: not /tmp, not /run, not /home or /root (a tool that writes there, as `dkms status` may in $TMPDIR, is not seen), and the
 #     report says so. A control (two snapshots a few seconds apart) tells what changes by itself, and that is left out and named. The guest first waits (four
 #     minutes at the most, or the run is invalid) for AppManagement's own check of the images, which renames a new /var/lib/casaos/image_updates.json into
-#     place three minutes after its start and would be taken for a write of the report;
+#     place three minutes after its start and would be taken for a write of the report. On an Ubuntu the last apt call of the preparation wakes PackageKit, which
+#     leaves by itself five minutes later and would be a unit that changed in the window: it is stopped there, and what it was is written down;
 #   - the CLEAN box: a clean cloud image with ReCasaOS and Docker has no refuse, and every warning and every info is written down: they are the first data
-#     of the report on a real guest;
+#     of the report on a real guest. A `busy` that names a unit of the package manager (apt-daily) on it is a box that a package manager was working on: an
+#     INVALID RUN for it, and no FAIL of the feature;
 #   - the DIRTY MATRIX: the guest is dirtied in one way at a time (a hold, an unfinished dpkg journal, a cdrom, file, alias (stable, devel), proposed and
 #     third-party source, a Default-Release of the box's own release and a pin, a foreign architecture, a reboot flag, a lock, a running package update, a
-#     missing fstab device, containers that will not come back or that take the host's ports (53 on a loopback alias: the gateway holds 80 and 443), a nearly
+#     PackageKit that runs (it is no package operation: `busy` stays quiet), a missing fstab device, containers that will not come back or that take the host's ports (53 on a loopback alias: the gateway holds 80 and 443), a nearly
 #     full disk, AppManagement and Docker stopped...), the report is asked, the dirt is undone (a trap runs the undo when the script dies in the middle), and
 #     the report is asked again: the exact code with the exact severity has to appear, nothing else may become worse with it (a warning of the clean box that
 #     is a refusal with the dirt is a code that fires), and after the undo the answer has to be the clean one again.
@@ -34,9 +36,12 @@ name: os-readiness-proof
 # the reason (uptime_long, container, virt_xen, unproven_arch, an AppManagement operation in progress). The answers the harness judges are the real core's own,
 # dumped from it (scripts/fixtures/readiness): what the real tools say on a real guest is what these legs show.
 #
-# It installs a release that has the route (a release before it answers 404 on the first call: an INVALID RUN, by name). Left empty, the tag is the latest
-# published release; a candidate that is a pre-release is proved by its tag before it is made the latest. By hand only; it publishes nothing and changes
-# nothing outside the guests.
+# It needs a release that carries the route: v0.5.25 is the first one (v0.5.24 and the releases before it answer 404 to GET /v1/sys/os/readiness). The guest
+# calls the route once, as soon as the gateway, the core and AppManagement answer, and a 404 ends the run there, as an INVALID RUN that says
+# "the release under test has no /v1/sys/os/readiness": the wait for the images, the control and the window are minutes of a virtual machine, for an answer
+# that was known.
+# Left empty, the tag is the latest published release, which carries the route only once v0.5.25 is published: until then, give the tag of the candidate (a
+# pre-release is proved by its tag before it is made the latest). By hand only; it publishes nothing and changes nothing outside the guests.
 
 on:
   workflow_dispatch:

@@ -12,6 +12,9 @@ step that did not run is INVALID, not a verdict: there is no skipped check that 
 FAIL of the feature. NOT TESTABLE is neutral and visible: what these guests cannot do, with the reason; it is never a pass.
 
 What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud image with ReCasaOS and Docker and a few witness containers:
+  - PackageKit stopped (on an Ubuntu the apt run that ends the preparation wakes it, and it leaves by itself five minutes later: in the middle of the window, a
+    unit that changed), and then the first call of the route (ready-route), as soon as the services answer: a release with no such route is found out there, and
+    not after the wait for the images, the control and the window. It is judged like every other call;
   - a control: two snapshots of the box a few seconds apart with two calls to the core in between (GET /v1/sys/version/current), to know what changes by
     itself: those paths and units are not held against the readiness report, and the report names them;
   - the INVARIANCE window: a snapshot (the name, size, times, mode, owner and content hash of every file of /etc, /var/lib/dpkg, /var/lib/apt,
@@ -19,7 +22,8 @@ What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud imag
     GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while another process holds dpkg's lock, then the same snapshot. Only
     /var/log/casaos may differ. Nothing else is looked at: not /tmp, not /run, not /home or /root (a tool that writes there, as `dkms status` may in
     $TMPDIR, is not seen). The call under the lock has to answer 200 inside the core's budget, say `busy`, and leave the lock to its holder;
-  - the CLEAN box: the answers of that window (and one more) have no refuse; every warn and info is a fact of the report;
+  - the CLEAN box: the answers of that window (and one more) have no refuse; every warn and info is a fact of the report. A `busy` that names a unit (apt-daily)
+    on the clean box is a box that a package manager was working on: the run is INVALID for it, and is not a FAIL of the feature;
   - the DIRTY MATRIX: one way of dirtying the guest at a time (a hold, an unfinished dpkg journal, a source of each kind, a foreign architecture, a
     reboot flag, a lock, a missing fstab device, a container with no restart policy, a nearly full disk, AppManagement and Docker stopped...), a call, the
     undo, a call: the exact code with the exact severity has to appear, nothing else may appear with it, and after the undo the answer has to be the
@@ -109,6 +113,7 @@ STEPS = [
     Step("containers_ports_publish", "containers_ports", sev="warn", what="a running container publishing host port 53 on a loopback alias (the gateway holds 80 and 443)"),
     Step("busy_lock", "busy", what="dpkg's lock held by another process"),
     Step("busy_unit", "busy", what="a unit of the package update running"),
+    Step("busy_packagekit", "busy", mode="quiet", what="PackageKit running (the real unit on an Ubuntu, a unit of its name on a Debian): it is no package operation, and `busy` stays quiet"),
     Step("disk_boot", "disk_boot", extras=("disk_root", "disk_archives"), what="a file that leaves 200 MiB free on the filesystem of /boot (the root one on these images)"),
     Step("apps", "apps", what="AppManagement stopped (the core cannot ask: it fails closed)"),
     Step("docker_down", "docker_down", sev="warn", what="Docker stopped, and its socket (the core asks the service, and does not start it by asking the daemon)"),
@@ -225,14 +230,15 @@ for _line in read("box-facts").splitlines():
     if _k:
         FACTS[_k] = _v.strip()
 
+if read("aborted").strip():
+    # first: it is why the rest of the evidence is missing
+    invalid("the guest stopped early: " + " ".join(read("aborted").split())[:300])
 if not OSREL.get("ID"):
     invalid("os-release is missing or empty: the guest did not say what system it is")
 elif (OSREL.get("ID"), OSREL.get("VERSION_ID")) != (L["family"], L["version"]):
     invalid("the guest is %s %s, the %s leg needs %s %s" % (OSREL.get("ID"), OSREL.get("VERSION_ID"), leg, L["family"], L["version"]))
 if read("leg").strip() != leg:
     invalid("the guest says it ran leg %r, the report is asked about %r" % (read("leg").strip(), leg))
-if read("aborted").strip():
-    invalid("the guest stopped early: " + " ".join(read("aborted").split())[:300])
 if not read("finished").strip():
     invalid("the guest did not reach the end of its run (no `finished` file)")
 if not read("timeline.tsv").strip():
@@ -488,7 +494,7 @@ P("| | |")
 P("|---|---|")
 P("| system | %s |" % cell(read("os").strip() or OSREL.get("PRETTY_NAME", "?")))
 P("| leg | %s: %s %s to %s %s |" % (leg, L["family"], L["version"], L["family"], L["to_version"]))
-for k in ("kernel", "cpus", "memory_mb", "boot", "root", "boot_on", "virt", "docker", "installer", "apt", "systemd"):
+for k in ("kernel", "cpus", "memory_mb", "boot", "root", "boot_on", "virt", "docker", "installer", "apt", "systemd", "packagekit_after_apt", "packagekit"):
     if FACTS.get(k):
         P("| %s | %s |" % (k, cell(FACTS[k])))
 P("")
@@ -501,7 +507,7 @@ for c in ctl:
     if c and (c["kind"] or c["http"] != 200):
         invalid("%s answered HTTP %s: the control of the invariance window did not run" % (c["name"], c["http"]))
 sysos = get("sysos-inv")
-for n in INV_CALLS + ("ready-inv-lock", "ready-base"):
+for n in ("ready-route",) + INV_CALLS + ("ready-inv-lock", "ready-base"):
     get(n)
 for s in STEPS:
     if not os.path.exists(os.path.join(out_dir, "step-%s.skipped" % s.id)):
@@ -673,13 +679,29 @@ GOOD = {n: c for n, c in ANSWERS.items() if c["data"] is not None}   # the answe
 clean = [GOOD.get(n) for n in CLEAN_CALLS]
 base = GOOD.get("ready-base")
 CLEAN_TEXT = base["data"].get("text") if base is not None and isinstance(base["data"].get("text"), str) else ""
+def busy_unit(c):
+    """the unit that the `busy` of an answer names, when it refuses because a unit of the package manager runs (apt-daily); None for any other busy, which is the
+    core saying that dpkg's lock is held, or that it could not ask"""
+    k = check_of(c, "busy")
+    d = k.get("data") if k is not None and isinstance(k.get("data"), dict) else {}
+    if k is None or k.get("severity") != "refuse" or d.get("source") != "unit":
+        return None
+    return d.get("unit") if isinstance(d.get("unit"), str) else "a unit"
+
+
 if all(clean):
-    refused = sorted({k for c in clean for k, v in sev_map(c).items() if v == "refuse"})
-    verdict(V_CLEAN_NO_REFUSE, not refused, "refuse: " + few(refused) if refused else "no refuse in %d answers" % len(clean))
-    verdict(V_CLEAN_STATE, all(c["data"].get("state") in ("ready", "attention") for c in clean), "state %s" % "/".join(sorted({cell(c["data"].get("state")) for c in clean})))
-    maps = [sev_map(c) for c in clean]
-    verdict(V_CLEAN_AGREE, all(m == maps[0] for m in maps), "same %d codes" % len(maps[0]) if all(m == maps[0] for m in maps) else
-            "they differ in: " + few(sorted({k for m in maps for k in m if any(o.get(k) != m.get(k) for o in maps)})))
+    # a clean box that a package manager is working on is the box of the harness, and not the feature: the verdicts that need a quiet box are not made
+    not_quiet = sorted({busy_unit(c) for c in clean if busy_unit(c)})
+    if not_quiet:
+        invalid("the clean box was not quiet: `busy` names %s as running when the clean calls were made (a package manager was at work on the box, and the guest did not wait for it): "
+                "the verdicts of the clean box are not made, and this says nothing against the feature" % few(not_quiet))
+    else:
+        refused = sorted({k for c in clean for k, v in sev_map(c).items() if v == "refuse"})
+        verdict(V_CLEAN_NO_REFUSE, not refused, "refuse: " + few(refused) if refused else "no refuse in %d answers" % len(clean))
+        verdict(V_CLEAN_STATE, all(c["data"].get("state") in ("ready", "attention") for c in clean), "state %s" % "/".join(sorted({cell(c["data"].get("state")) for c in clean})))
+        maps = [sev_map(c) for c in clean]
+        verdict(V_CLEAN_AGREE, all(m == maps[0] for m in maps), "same %d codes" % len(maps[0]) if all(m == maps[0] for m in maps) else
+                "they differ in: " + few(sorted({k for m in maps for k in m if any(o.get(k) != m.get(k) for o in maps)})))
     third = check_of(base, "sources_third_party")
     verdict(V_CLEAN_DOCKER, third is not None and third.get("severity") == "warn" and "docker" in json.dumps(third).lower(),
             "sources_third_party is %s%s" % (third.get("severity") if third else "not in the answer", "" if not third or "docker" in json.dumps(third).lower() else ", and does not name Docker's source"))
