@@ -1477,6 +1477,23 @@ exit 0
     check("refresh: an earlier phase that aborted ends the run here, quietly", p.returncode == 0 and "skipped refresh" in p.stdout and not [x for x in calls(w) if x.startswith("apt-get")], (p.stdout, calls(w)))
     shutil.rmtree(w, ignore_errors=True)
 
+    for label, body in (("says nothing (it cannot reach the manager while dpkg replaces systemd)", 'case "$1" in is-active) exit 1 ;; esac\nexit 0\n'), ("says something odd", 'case "$1" in is-active) echo unknown; exit 3 ;; esac\nexit 0\n'),
+                        ("says inactive once and then nothing (the manager went away between the two looks)", 'case "$1" in is-active) n=$(cat "$FAKE_STATE/ia" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$FAKE_STATE/ia"; if [ "$n" -eq 1 ]; then echo inactive; exit 3; fi; exit 1 ;; esac\nexit 0\n'),
+                        ("says inactive once and active again (a blip)", 'case "$1" in is-active) n=$(cat "$FAKE_STATE/ia" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$FAKE_STATE/ia"; if [ "$n" -eq 1 ]; then echo inactive; exit 3; fi; echo active; exit 0 ;; esac\nexit 0\n')):
+        w, env = world("debian")
+        put(w, "out/hop-unit.log", "1790000000.5 START\n")
+        fake(os.path.join(w, "bin"), "systemctl", body)
+        p = in_world(w, env | {"HOP_LIMIT": "1"}, 'phase_hop_wait; echo "status $?"', timeout=60)
+        tl = get(w, "out/timeline.tsv")
+        check("hop-wait: a systemctl that %s is not 'the unit ended': the wait goes on, to its limit, and nothing is collected" % label, "status 3" in p.stdout and "hop_timeout" in tl and "hop_unit_end" not in tl and "hop_done" not in tl, (p.stdout, tl))
+        shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    put(w, "out/hop-unit.log", "1790000000.5 START\n1790000900.5 DONE\n")
+    fake(os.path.join(w, "bin"), "systemctl", 'case "$1" in is-active) echo failed; exit 3 ;; list-units) exit 0 ;; esac\nexit 0\n')
+    p = in_world(w, env | {"HOP_LIMIT": "30"}, 'phase_hop_wait; echo "status $?"', timeout=60)
+    check("hop-wait: a unit that failed is an ended unit (twice in a row), and what it left is collected", "status 0" in p.stdout and "hop_unit_end" in get(w, "out/timeline.tsv") and "hop_done" in get(w, "out/timeline.tsv"), (p.stdout, get(w, "out/timeline.tsv")))
+    shutil.rmtree(w, ignore_errors=True)
+
     # the reboot, the inhibitor, a hop that was skipped
     w, env = world("debian")
     p = in_world(w, env, '(phase_reboot pre); echo "status $?"')

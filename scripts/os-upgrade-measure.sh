@@ -1027,7 +1027,15 @@ phase_hop_wait() {
     if grep -q 'hop_done' "${OUT}/timeline.tsv" 2>/dev/null; then return 0; fi
     while :; do
         state="$(systemctl is-active "${UNIT}.service" 2>/dev/null || true)"
-        case "${state}" in active | activating | deactivating) ;; *) break ;; esac
+        case "${state}" in
+        inactive | failed)
+            # a unit that is gone (collected) says inactive too, so the end is confirmed by a second look; and anything else that systemctl says, or nothing at all (it cannot reach the
+            # manager while dpkg replaces systemd, dbus or libc6), is not an answer: the wait goes on, to its limit
+            sleep 2
+            state="$(systemctl is-active "${UNIT}.service" 2>/dev/null || true)"
+            case "${state}" in inactive | failed) break ;; esac
+            ;;
+        esac
         if [ $((SECONDS - start)) -ge "${limit}" ]; then
             marker hop_timeout
             return 3
