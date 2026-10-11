@@ -154,8 +154,8 @@ def package_set(s, when, spec):
         pk["libnftables1"] = "1.0"
         pk["nftables"] = "1.0"
         pk.pop("libfoo1")
-    if s["family"] == "ubuntu" and when != "before":
-        pk.pop("osm-orphan", None)                  # the tool removes what no repository has
+    if s["family"] == "ubuntu" and when != "before" and spec.get("removes", True):
+        pk.pop("osm-orphan", None)                  # the tool removes what no repository has (removes False: it leaves it alone, as the first real run saw)
         if spec.get("variant", "hold") == "hold":
             pk.pop("docker-buildx-plugin", None)    # the unheld ones go, the held ones stay
             pk.pop("docker-compose-plugin", None)
@@ -427,7 +427,8 @@ def build(d, s, spec=None):
     tcur = S["hop_start"] + 10
     for n in names_:
         ul.append((tcur, "STEP_START %s" % n))
-        put(d, "step-%s.log" % n, step_log(s, n) if deb else ("Checking for a new Ubuntu release\nrunning...\n" if n == "upgrader" else "Reading package lists...\n"))
+        put(d, "step-%s.log" % n, step_log(s, n) if deb else (("Checking for a new Ubuntu release\nrunning...\nSetting up libc6:amd64 (%s) ...\n" % s["libc"][1] + spec.get("libc_restarts", "Checking for services that may need to be restarted...\nChecking init scripts...\nNothing to restart.\n")
+                                                                                          + "Preparing to unpack .../libc-bin.deb ...\n") if n == "upgrader" else "Reading package lists...\n"))
         put(d, "step-%s.rc" % n, "0\n")
         tcur += 120 if n in ("minimal", "full") else 20
         ul.append((tcur, "STEP_END %s 0" % n))
@@ -455,7 +456,11 @@ def build(d, s, spec=None):
         rec(d, "release-upgrades-after", "[DEFAULT]\nPrompt=lts\n")
         rec(d, "pro-status-after", '{"attached": false}\n')
         put(d, "hop-sample.log", "".join("%.6f screen=0 sshd1022=0\n" % (T0 + S["hop_start"] + 100 * i) for i in range(1, 8)))
-        put(d, "dist-upgrade-main.log", "2026-10-10 12:00:00,000 INFO Using ubuntu-release-upgrader 1:24.04.27\n2026-10-10 12:00:01,000 INFO release-upgrader: starting\n")
+        # the tool's own log: what it names Obsolete (Docker's engine and both controls, as in the first real run, since no source it reads carries them) and what it takes for removal
+        obsolete = "containerd.io docker-buildx-plugin docker-ce docker-ce-cli docker-ce-rootless-extras docker-compose-plugin osm-orphan osm-orphan-held libgone1"
+        cands = ["libgone1", "libgone2"] + (["osm-orphan"] + (["docker-buildx-plugin", "docker-compose-plugin", "docker-ce-rootless-extras"] if variant == "hold" else []) if spec.get("removes", True) else [])
+        put(d, "dist-upgrade-main.log", "2026-10-10 12:00:00,000 INFO Using ubuntu-release-upgrader 1:24.04.27\n2026-10-10 12:00:01,000 INFO release-upgrader: starting\n2026-10-10 12:00:02,000 DEBUG Obsolete: %s\n"
+            "2026-10-10 12:30:00,000 DEBUG Obsolete: %s\n2026-10-10 12:30:01,000 DEBUG remove_candidates: '{%s}'\n" % (obsolete, obsolete, ", ".join("'%s'" % c for c in cands)))
         listing = "total 8\n-rw-r--r-- 1 root root 200 Oct 10 12:00 docker.list.casaos-paused\n-rw-r--r-- 1 root root 190 Oct 10 12:30 docker.sources\n"
         rec(d, "sources-dir-after", listing)
         rec(d, "sources-dir-end", listing)
@@ -602,7 +607,7 @@ for leg in ("d11-12", "d12-13"):
 for leg, variant in (("u22-24", "hold"), ("u24-26", "hold"), ("u22-24", "keep")):
     case("a healthy %s leg, variant %s, is measured" % (leg, variant), leg, 0, spec={"variant": variant},
          must_have=["MEASURED", "## The go/no-go table", "Canonical's side", "Last-Modified", "Mon, 07 Sep 2026"], must_not_have=["INVALID", "NOT_OFFERED", "Traceback"],
-         rows=dict({Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_TOOL: "GO", Q_DOCKER: "GO"}, **({Q_HOLD: "GO", Q_CFG: "OPEN"} if variant == "hold" else {Q_HOLD: "OPEN", Q_CFG: "GO"})))
+         rows=dict({Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_TOOL: "GO", Q_DOCKER: "GO"}, **({Q_HOLD: "GO", Q_CFG: "OPEN"} if variant == "hold" else {Q_HOLD: "OPEN", Q_CFG: "OPEN"})))
 for leg in ("u22-24", "u24-26"):
     case("%s: an upgrade Canonical has not opened is NOT_OFFERED, neutral and visible, and no row is a GO" % leg, leg, 0, spec={"offered": False},
          must_have=["NOT_OFFERED", "neither a pass nor a failure", "No new release found"], must_not_have=["INVALID", "**GO**"],
@@ -857,8 +862,41 @@ case("debian: a hop that failed halfway with docker-ce gone is OPEN on the Docke
      mutate=seq(lambda d: put(d, "os-after", get(d, "os-before")), lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")])), must_have=["what was seen all the same", "NOT all the same installed versions"])
 case("ubuntu hold: a tool that removed nothing at all, not even the control, did not exercise the hold: OPEN, and it says why", U, 0, rows={Q_HOLD: "OPEN", Q_DOCKER: "GO"},
      mutate=seq(*[(lambda t: lambda d: put(d, "dpkg-%s.tsv" % t, get(d, "dpkg-%s.tsv" % t) + "osm-orphan\t1.0\tii \n" + "".join("%s\t5:29.8.0-1~ubuntu.22.04~jammy\tii \n" % n for n in ("docker-buildx-plugin", "docker-compose-plugin", "docker-ce-rootless-extras"))))(t) for t in ("hop", "after")]),
-     must_have=["NOT removed: the tool removed nothing, so the hold was not exercised"])
-case("ubuntu keep: the drop-in row says what a keep run alone cannot", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "GO"}, must_have=["cannot tell 'the drop-in is honoured' from 'the tool removes nothing'"])
+     must_have=["NOT removed: the tool left it, and the unheld Docker packages, alone, so the hold had nothing to hold back and is neither shown to work nor to fail"], must_not_have=["the same rule that removes osm-orphan"])
+case("ubuntu keep: a control that stayed is not the drop-in being read (the tool leaves such a package alone anyway): the row is OPEN and says so, and a keep run cannot be a GO", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "OPEN"},
+     must_have=["but the tool leaves a package that no repository carries alone with or without the drop-in, so its staying does not show that the drop-in was read"], must_not_have=["**GO** | osm-orphan (held by nothing)"])
+
+# what the first real runs saw: the tool removed nothing it names Obsolete, not the control that no repository carries and not Docker's engine, whose source was paused
+for leg in ("u22-24", "u24-26"):
+    case("%s: a tool that left everything alone (what the first real run saw): the engine survived, and the report says that this is the tool's behaviour and not the hold's" % leg, leg, 0, spec={"removes": False},
+         rows={Q_DOCKER: "GO", Q_HOLD: "OPEN", Q_CFG: "OPEN", Q_TOOL: "GO", Q_HOP: "GO"},
+         must_have=["**What this means.** The tool removed none of the packages that it names Obsolete in its own log (containerd.io, docker-buildx-plugin, docker-ce, docker-ce-cli, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan, osm-orphan-held)",
+                    "in this run the tool left alone a package that no repository carries", "the questions of the hold and of `RemoveObsoletes=no` are moot here", "a control that IS in a repository of the old release and gone from the next one",
+                    "so this survival is what the tool does with a package no repository carries (Docker's source is paused here), and not the effect of the hold or of the drop-in",
+                    "neither shown to work nor to fail", "named Obsolete: containerd.io, docker-buildx-plugin, docker-ce, docker-ce-cli, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan, osm-orphan-held; taken for removal: none of them",
+                    "apt-mark hold on the engine: moot in this setup", "no: osm-orphan is still installed after the unit"],
+         must_not_have=["INVALID", "the same rule that removes osm-orphan", "the tool removed nothing, so the hold was not exercised"])
+case("u22-24: ... and in the keep variant the drop-in is neither shown to be read nor ignored, and the report says it is moot", "u22-24", 0, spec={"removes": False, "variant": "keep"}, rows={Q_CFG: "OPEN", Q_HOLD: "OPEN", Q_DOCKER: "GO"},
+     must_have=["RemoveObsoletes=no and release-upgrades.d/*.cfg: moot in this setup", "osm-orphan stayed, and the tool leaves such a package alone anyway", "the tool removed none of what it names Obsolete"], must_not_have=["INVALID"])
+case("ubuntu: a tool that removed what it named obsolete (the model of the GO rows) has no 'what this means' and says what it took for removal", U, 0,
+     must_have=["named Obsolete: containerd.io, docker-buildx-plugin, docker-ce, docker-ce-cli, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan, osm-orphan-held; taken for removal: docker-buildx-plugin, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan"],
+     must_not_have=["**What this means.**", "so this survival is what the tool does"])
+case("ubuntu keep: the control removed anyway (the drop-in ignored) is something the tool did: NO-GO, and no 'what this means' that says it did nothing", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "NO-GO"},
+     mutate=lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("osm-orphan	")]), must_not_have=["**What this means.**", "so this survival is what the tool does"])
+case("ubuntu: a main.log with no Obsolete or remove_candidates line is said, and nothing is made up of it", U, 0, mutate=lambda d: put(d, "dist-upgrade-main.log", "2026-10-10 12:00:00,000 INFO Using ubuntu-release-upgrader 1:24.04.27\n"),
+     must_have=["no Obsolete or remove_candidates line found in main.log"], must_not_have=["taken for removal"])
+case("ubuntu: Docker's source is shown by the names in the listing, as renamed by the harness, and the report says that the tool's own treatment of such a source is not measured (not the lines of the file)", U, 0,
+     must_have=["- sources-dir-after.txt: docker.list.casaos-paused, docker.sources", "Docker's source was renamed (`*.casaos-paused`) by this harness before the tool ran", "is NOT measured here"],
+     must_not_have=["https://download.docker.com", "signed-by"],
+     mutate=lambda d: rec(d, "sources-dir-after", "total 12\n-rw-r--r-- 1 root root 110 Oct 11 03:27 docker.list.casaos-paused\n-rw-r--r-- 1 root root 190 Oct 11 03:41 docker.sources\n"
+                          "==> /etc/apt/sources.list.d/docker.list.casaos-paused <==\ndeb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable\n"))
+case("ubuntu: a Docker source that is only the paused one is said to be still under the harness's name", U, 0, spec={"removes": False},
+     mutate=lambda d: rec(d, "sources-dir-after", "total 8\n-rw-r--r-- 1 root root 110 Oct 11 03:27 docker.list.casaos-paused\n-rw-r--r-- 1 root root 381 Oct 11 03:41 ubuntu.sources\n"),
+     must_have=["- sources-dir-after.txt: docker.list.casaos-paused (still under the name this harness gave it)", "| Docker's apt source after the unit | docker.list.casaos-paused (still under the name this harness gave it) |"])
+case("ubuntu: libc6's postinst in the tool's own output: the report reads it there (it used to say 'none' because it only looked at the steps of the Debian unit) and says what the postinst said", U, 0,
+     must_have=["Services named by libc6's postinst in the output of the Ubuntu tool (step-upgrader.log): none (its postinst said 'Nothing to restart.')", "none: its postinst said 'Nothing to restart.'"], must_not_have=["(the output of the step has no such line)"])
+case("ubuntu: libc6's postinst that restarts services in the tool's output has them named", U, 0, spec={"libc_restarts": "Restarting services possibly affected by the upgrade:\n  cron: restarting...done.\n  ssh: restarting...done.\nServices restarted successfully.\n"},
+     must_have=["Services named by libc6's postinst in the output of the Ubuntu tool (step-upgrader.log): cron, ssh."], must_not_have=["Nothing to restart"])
 
 # ---- NOT_OFFERED is the tool's own answer ----
 NOT_ON_OFFER = {"offered": False}
@@ -897,7 +935,7 @@ case("ubuntu keep: nothing is removed when the drop-in is read", U, 0, spec={"va
 case("ubuntu: the hop that was offered and run is not a NOT_OFFERED", U, 0, must_not_have=["NOT_OFFERED"])
 case("ubuntu: the unit asked Canonical's tool again and the answer is in the facts", U, 0, must_have=["do-release-upgrade -c asked again inside the unit"])
 case("ubuntu: Pro is said not attached, and that the attached case was not measured", U, 0, must_have=["not attached (a cloud image, no token): the behaviour with Pro attached was NOT measured", "Ubuntu Pro/ESM attached: not measured"])
-case("ubuntu: what could not be decided names the other variant", U, 0, must_have=["run the workflow again with ubuntu_variant keep"])
+case("ubuntu: what could not be decided names the other variant", U, 0, must_have=["A run with ubuntu_variant keep could only show the drop-in ignored (the control removed with it in place); it cannot show it read while the tool leaves a package that no repository carries alone"])
 
 # ---- an invalid run is never a GO ------------------------------------------------------------------------------------------------------
 
