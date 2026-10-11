@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.24] - 2026-10-11
+
+Components: CasaOS `v0.4.70`, CasaOS-UI `v0.4.84`. Unchanged from v0.5.23: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The dashboard updates Docker when its packages are on hold, if you tell it to.** Until now a hold on `docker-ce` (an owner's deliberate act) only showed the terminal command that goes round it. The window now says that Docker's packages are on hold and asks for a confirmation of its own, a box to tick ("I know the packages are on hold and I want to update anyway"), then runs what `apt-get install --only-upgrade --allow-change-held-packages` would run. That command drops the hold of the packages it updates (dpkg marks them "install" again); ReCasaOS puts the hold back on the same packages when the update has ended, and the result says whether it did. A hold on any other package that the update would have to change still refuses the update, and a hold set or lifted after you confirmed makes the check ask again.
+
+### Changed
+
+- **The proof of the Docker update puts Docker's packages on hold on its Debian 12 leg** (and docker-ce alone on every other leg, for the refusals): the check has to offer the update with the held packages named, a request that does not confirm the hold has to be refused, and after the update `apt-mark showhold`, the status and the log of the update have to agree that the hold is back.
+
 ## [0.5.23] - 2026-10-11
 
 Components: CasaOS `v0.4.69`, CasaOS-UI `v0.4.83`. Unchanged from v0.5.22: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
