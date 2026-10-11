@@ -17,7 +17,8 @@ What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud imag
   - the INVARIANCE window: a snapshot (the name, size, times, mode, owner and content hash of every file of /etc, /var/lib/dpkg, /var/lib/apt,
     /var/cache/apt, /var/lib/casaos and /var/log/casaos; every service unit with its state, main pid and invocation id; the listening ports), then
     GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while another process holds dpkg's lock, then the same snapshot. Only
-    /var/log/casaos may differ. The call under the lock has to answer 200 inside the core's budget, say `busy`, and leave the lock to its holder;
+    /var/log/casaos may differ. Nothing else is looked at: not /tmp, not /run, not /home or /root (a tool that writes there, as `dkms status` may in
+    $TMPDIR, is not seen). The call under the lock has to answer 200 inside the core's budget, say `busy`, and leave the lock to its holder;
   - the CLEAN box: the answers of that window (and one more) have no refuse; every warn and info is a fact of the report;
   - the DIRTY MATRIX: one way of dirtying the guest at a time (a hold, an unfinished dpkg journal, a source of each kind, a foreign architecture, a
     reboot flag, a lock, a missing fstab device, a container with no restart policy, a nearly full disk, AppManagement and Docker stopped...), a call, the
@@ -25,7 +26,7 @@ What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud imag
     clean one again.
 
 What these guests cannot do is NOT TESTABLE, with the reason: uptime_long (180 days), container, virt_xen, unproven_arch (the guest is a KVM amd64 machine),
-an AppManagement operation in progress (none can be held open cheaply), sources_alias on Ubuntu (the archive has no such alias).
+an AppManagement operation in progress (none can be held open cheaply).
 """
 import fnmatch
 import json
@@ -44,9 +45,13 @@ LEGS = {
     "u22": dict(family="ubuntu", version="22.04", codename="jammy", to_version="24.04", to_codename="noble"),
 }
 STATES = ("ready", "attention", "blocked", "unsupported", "latest")
+MAX_TEXT = 2000            # the longest title or detail
+MAX_LIST = 50              # the longest list of strings in a check's data
+MAX_STRING = 200           # the longest string of a check's data, alone or in a list
 SUPPORTED_STATES = ("ready", "attention", "blocked")
 SEVERITIES = ("refuse", "warn", "ok", "info")
 BAD = ("refuse", "warn")
+RANK = {"refuse": 0, "warn": 1}   # how bad a severity is (info and ok are the same here, the rest of the ladder)
 ACTIONS = ("restart_machine", "finish_dpkg", "wait_for_package_manager", "wait_for_apps", "free_disk_space", "release_holds", "review_sources", "none")
 CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 # every code of the spec's table (os-readiness-spec.md, item 6): what is not among them is a code the core added, and the report says so
@@ -77,12 +82,11 @@ MAX_NAMED = 12
 class Step:
     """a way of dirtying the guest: id; the code it must make fire (or, mode quiet, leave quiet) and its severity; mode fires (the code is not in the clean
     answer), names (the code is in the clean answer already, and what the step adds must be named in it: needle) or quiet; forbid: codes that must not
-    fire (a hold on Docker is not a hold); extras: codes (patterns) that may fire with it because the dirt has that effect too; only: the families the step
-    exists on, with the reason it does not on the others"""
+    fire (a hold on Docker is not a hold); extras: codes (patterns) that may become worse with it because the dirt has that effect too"""
 
-    def __init__(self, id, code, mode="fires", sev="refuse", needle="", forbid=(), extras=(), only=None, why="", what="", see=""):
+    def __init__(self, id, code, mode="fires", sev="refuse", needle="", forbid=(), extras=(), what="", see=""):
         self.id, self.code, self.mode, self.sev, self.needle = id, code, mode, sev, needle
-        self.forbid, self.extras, self.only, self.why, self.what, self.see = forbid, extras, only, why, what, see
+        self.forbid, self.extras, self.what, self.see = forbid, extras, what, see
 
 
 STEPS = [
@@ -91,23 +95,23 @@ STEPS = [
     Step("broken_dpkg", "broken_dpkg", what="a file of digits only in /var/lib/dpkg/updates"),
     Step("sources_cdrom", "sources_cdrom", what="a cdrom: source"),
     Step("sources_file", "sources_cdrom", what="a file: source"),
-    Step("sources_alias", "sources_alias", only="debian", why="Ubuntu's archive has no stable/oldstable/testing alias to name in place of a codename", what="a source that says `stable`"),
-    Step("sources_pin", "sources_pin", what="APT::Default-Release naming another release"),
+    Step("sources_alias", "sources_alias", what="a source that says `stable` (Debian) or `devel` (Ubuntu) where the box is on a codename"),
+    Step("sources_pin", "sources_pin", what="APT::Default-Release naming the box's own release (apt fails on one that no source offers)"),
     Step("sources_pin_prefs", "sources_pin", what="a preferences file pinning another release"),
     Step("sources_proposed", "sources_proposed", what="a proposed-updates source"),
     Step("sources_third_party", "sources_third_party", mode="names", sev="warn", needle="osr-third-party", what="a third-party source file"),
     Step("foreign_arch_empty", "foreign_arch", mode="quiet", what="dpkg --add-architecture i386 and no package of it"),
     Step("foreign_arch", "foreign_arch", what="dpkg --add-architecture i386 and a package installed from it"),
     Step("reboot_first", "reboot_first", what="/var/run/reboot-required"),
-    Step("fstab_unresolved", "fstab_unresolved", what="an fstab line, not nofail, for a device that is not there"),
+    Step("fstab_unresolved", "fstab_unresolved", what="an fstab line, not nofail, for a device that is not there (the core reads fstab and /dev/disk, it asks no tool)"),
     Step("containers_policy", "containers_policy", sev="warn", needle="p-no", what="a running container with restart policy no"),
     Step("containers_ports_host", "containers_ports", sev="warn", what="a running container on the host network"),
-    Step("containers_ports_publish", "containers_ports", sev="warn", what="a running container publishing port 443"),
+    Step("containers_ports_publish", "containers_ports", sev="warn", what="a running container publishing host port 53 on a loopback alias (the gateway holds 80 and 443)"),
     Step("busy_lock", "busy", what="dpkg's lock held by another process"),
     Step("busy_unit", "busy", what="a unit of the package update running"),
     Step("disk_boot", "disk_boot", extras=("disk_root", "disk_archives"), what="a file that leaves 200 MiB free on the filesystem of /boot (the root one on these images)"),
-    Step("apps", "apps", extras=("backup_age",), what="AppManagement stopped (the core cannot ask: it fails closed)"),
-    Step("docker_down", "docker_down", sev="warn", extras=("containers_*", "docker_*", "backup_age"), what="Docker stopped"),
+    Step("apps", "apps", what="AppManagement stopped (the core cannot ask: it fails closed)"),
+    Step("docker_down", "docker_down", sev="warn", what="Docker stopped, and its socket (the core asks the service, and does not start it by asking the daemon)"),
 ]
 # what these guests cannot do, and why (the report lists them: NOT TESTABLE is visible and never a pass)
 NOT_TESTABLE = [
@@ -336,6 +340,11 @@ def get(name):
     return CALLS[name]
 
 
+def short(x):
+    """a string of the data of a check: not longer than MAX_STRING, and with no control character in it"""
+    return isinstance(x, str) and len(x) <= MAX_STRING and not re.search(r"[\x00-\x1f\x7f]", x)
+
+
 def judge_answer(c):
     """{category: [what is wrong]} of one answer of the readiness route that was read"""
     bad = {k: [] for k in ("shape", "counts", "hop", "fields", "text", "time", "budget")}
@@ -394,9 +403,11 @@ def judge_answer(c):
         seen.add(code)
         if k.get("severity") not in SEVERITIES:
             bad["fields"].append("%s: severity %s" % (code, cell(k.get("severity"))))
-        for f in ("title", "detail"):
-            if not isinstance(k.get(f), str) or (f == "title" and not k.get(f).strip()) or len(k.get(f)) > 2000:
-                bad["fields"].append("%s: %s is missing, empty or longer than 2000" % (code, f))
+        # the title is always there; the detail is not (the core leaves it out of a check that has nothing to say), and when it is there it is a string
+        if not isinstance(k.get("title"), str) or not k.get("title").strip() or len(k.get("title")) > MAX_TEXT:
+            bad["fields"].append("%s: title is missing, empty or longer than %d" % (code, MAX_TEXT))
+        if "detail" in k and (not isinstance(k.get("detail"), str) or len(k.get("detail")) > MAX_TEXT):
+            bad["fields"].append("%s: detail is not a string, or is longer than %d" % (code, MAX_TEXT))
         if k.get("action") not in (None, "") + ACTIONS:
             bad["fields"].append("%s: action %s" % (code, cell(k.get("action"))))
         data = k.get("data")
@@ -406,8 +417,11 @@ def judge_answer(c):
         for key, v in data.items():
             if isinstance(v, bool) or isinstance(v, (int, float)):
                 continue
-            if not isinstance(v, str) or len(v) > 200 or re.search(r"[\x00-\x1f\x7f]", v):
-                bad["fields"].append("%s: data.%s is not a short string or a number (raw tool output?)" % (code, cell(key, 30)))
+            if isinstance(v, list):
+                if len(v) > MAX_LIST or not all(short(x) for x in v):
+                    bad["fields"].append("%s: data.%s is a list of more than %d items, or has an item that is not a short string" % (code, cell(key, 30), MAX_LIST))
+            elif not short(v):
+                bad["fields"].append("%s: data.%s is not a short string, a number, a boolean or a list of short strings (raw tool output?)" % (code, cell(key, 30)))
         if "unknown" in data and not isinstance(data["unknown"], bool):
             bad["fields"].append("%s: data.unknown is not true or false" % code)
     # the text
@@ -443,7 +457,7 @@ V_ROUTE = "GET /v1/sys/os/readiness answers 200 with a JSON envelope on every ca
 V_SHAPE = "every answer has the contract's shape: state, hop, counts, checks, text, checked_at"
 V_COUNTS = "counts are the tally of the checks, and state follows them (blocked with a refuse, attention with a warn, ready with neither)"
 V_HOP = "hop.from is this box's os-release, hop.to is the release the leg goes to, and the state is that of a supported hop"
-V_FIELDS = "every check has a code (once), a severity, a title, a detail, an action of the list, and data of short strings and numbers"
+V_FIELDS = "every check has a code (once), a severity, a title (and a detail when it has one), an action of the list when it has one, and data of short strings, numbers, booleans and lists of short strings"
 V_TEXT = "text is plain ASCII, at most 8 KiB, and says nothing of the box's hostname, addresses, MAC or users, nor a URL with userinfo or a query"
 V_TIME = "checked_at is the time of the call"
 V_BUDGET = "every call answered within the core's 20 s budget (25 s allowed)"
@@ -606,7 +620,7 @@ if m1 is not None and m2 is not None:
     cr = [p for p in cr if not exempt(p) and p not in noisy_files]
     rm = [p for p in rm if not exempt(p) and p not in noisy_files]
     said = ["changed %s (%s)" % (cell(p, 100), "/".join(c)) for p, c in ch] + ["created %s" % cell(p, 100) for p in cr] + ["removed %s" % cell(p, 100) for p in rm]
-    verdict(V_INV_FILES, not said, few(said) if said else "%d paths looked at, %d of them changed by themselves in the control and left out" % (len(m1), len(noisy_files)))
+    verdict(V_INV_FILES, not said, few(said) if said else "%d paths looked at (these six trees only, not /tmp, /run or the rest of the machine), %d of them changed by themselves in the control and left out" % (len(m1), len(noisy_files)))
 
 if u1 is not None and u2 is not None:
     said = []
@@ -637,6 +651,11 @@ if lock is not None and LOCK_DURING == "held":
         verdict(V_LOCK_BUSY, k is not None and k.get("severity") == "refuse", "busy is %s" % (k.get("severity") if k else "not in the answer"))
     verdict(V_LOCK_KEPT, LOCK_AFTER == "held", "the lock was %s after the call" % (LOCK_AFTER or "not looked at"))
 
+P("## What the invariance window looks at")
+P("")
+P("The names, sizes, times, mode, owner and content of every file of %s; every service unit with its state, main pid and invocation id; the listening sockets. "
+  "It does not look at /tmp, /run, /var/tmp, /home, /root, /proc or /sys, nor at anything else: what a tool writes there (`dkms status` may create and remove a file in $TMPDIR) is not seen by this proof." % ", ".join(TREES))
+P("")
 P("## What changed by itself (the control)")
 P("")
 P("Two snapshots a few seconds apart with two calls of `GET /v1/sys/version/current` between them. What differs there is left out of the verdicts above, and named here.")
@@ -714,14 +733,7 @@ tainted_by = ""    # the first step whose undo failed: what comes after it was m
 for s in STEPS:
     skip = read("step-%s.skipped" % s.id).strip()
     if skip:
-        if s.only is None or L["family"] in s.only:
-            invalid("step %s: the guest skipped it (%s), and it exists on this system" % (s.id, cell(skip, 100)))
-        else:
-            not_testable("step %s (%s)" % (s.id, s.code), s.why or skip)
-            P("| %s | %s | not testable | |" % (s.id, cell(s.what, 70)))
-        continue
-    if s.only is not None and L["family"] not in s.only:
-        invalid("step %s: the guest ran it, and it does not exist on this system (%s)" % (s.id, s.why))
+        invalid("step %s: the guest skipped it (%s), and it exists on this system" % (s.id, cell(skip, 100)))
         continue
     dirty_rc, undo_rc, undone = read("step-%s.dirty-rc" % s.id).strip(), read("step-%s.undo-rc" % s.id).strip(), read("step-%s.undone" % s.id).strip()
     if not dirty_rc or not undo_rc or not undone:
@@ -747,8 +759,9 @@ for s in STEPS:
         P("| %s | %s | no answer | |" % (s.id, cell(s.what, 70)))
         continue
     exercised.add(s.code)
-    base_bad, now_bad = bad_codes(base), bad_codes(dirty)
-    sev = sev_map(dirty).get(s.code)
+    base_sev, now_sev = sev_map(base), sev_map(dirty)
+    now_bad = bad_codes(dirty)
+    sev = now_sev.get(s.code)
     if s.mode == "quiet":
         verdict(F_QUIET % (s.id, s.code), s.code not in now_bad, "%s is %s" % (s.code, sev or "not in the answer"))
     elif s.mode == "names":
@@ -768,8 +781,10 @@ for s in STEPS:
             verdict(F_FIRES % (s.id, s.code, s.sev), ok, "%s is %s%s" % (s.code, sev or "not in the answer", "" if not s.needle or k is None or s.needle in json.dumps(k) else ", and does not name %s" % s.needle))
     for code in s.forbid:
         verdict(F_FORBID % (s.id, code), code not in now_bad, "%s is %s" % (code, sev_map(dirty).get(code, "not in the answer")))
-    extra = sorted(c for c in now_bad - base_bad if not allowed(s, c))
-    brought = sorted(now_bad - base_bad - {s.code})
+    # a code is worse when its severity went down the ladder refuse, warn, anything else: a warn of the clean box that is a refuse with the dirt is one
+    worse = sorted(c for c, v in now_sev.items() if RANK.get(v, 2) < RANK.get(base_sev.get(c), 2))
+    extra = [c for c in worse if not allowed(s, c)]
+    brought = [c for c in worse if c != s.code]
     verdict(F_ALONE % s.id, not extra, "also fires: " + few(extra) if extra else "%s%s" % (s.code, " and what the dirt brings with it, which is allowed: " + few(brought) if brought else " only"))
     back_ok = non_ok(after) == non_ok(base) and after["data"].get("state") == base["data"].get("state") and \
         (s.mode != "names" or s.needle not in json.dumps(check_of(after, s.code) or {}))

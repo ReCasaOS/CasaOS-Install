@@ -9,12 +9,15 @@
 #   os-readiness-proof.sh u22   Ubuntu 22.04: a hop to Ubuntu 24.04
 #
 # In this order:
+#   0. a WAIT: until AppManagement has made its own check of the images of the apps (it does, three minutes after it starts, and ends it by renaming a new
+#      /var/lib/casaos/image_updates.json into place: a write that would fall in the window below and be taken for the report's);
 #   1. a CONTROL: a snapshot of the box, two calls of GET /v1/sys/version/current, a few seconds, a snapshot: what changes by itself is known and is not held
 #      against the report;
 #   2. the INVARIANCE window: a snapshot (name, size, mtime, ctime, mode, owner and content hash of every file under /etc, /var/lib/dpkg, /var/lib/apt,
 #      /var/cache/apt, /var/lib/casaos and /var/log/casaos; every service unit with its state, main pid and invocation id; the listening sockets), then
 #      GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while ANOTHER process holds dpkg's lock (the call must neither wait for the lock
-#      nor take it), then the same snapshot, then one more call: the answer of the unchanged box that the dirty matrix is compared with;
+#      nor take it), then the same snapshot, then one more call: the answer of the unchanged box that the dirty matrix is compared with. Nothing else is
+#      hashed: not /tmp, not /run, not /home or /root; a tool that writes there (`dkms status` may, in $TMPDIR) is not seen;
 #   3. the DIRTY MATRIX, one way of dirtying the box at a time: the dirt, a call, the undo (always: a trap runs it when the script dies in the middle of a
 #      step), a check that the undo held, a call. Every step is a trio of functions (dirty_<id>, undo_<id>, undone_<id>), each run in a subshell that stops at
 #      its first failing command, so that the status of a step says whether the box was really dirtied and really put back.
@@ -172,6 +175,8 @@ DPKG_JOURNAL="${DPKG_JOURNAL:-/var/lib/dpkg/updates/0001}"
 DPKG_LOCK="${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"
 REBOOT_REQUIRED="${REBOOT_REQUIRED:-/var/run/reboot-required}"
 INTERNAL_SECRET_FILE="${INTERNAL_SECRET_FILE:-/var/run/casaos/internal.secret}"
+# what AppManagement writes when it has checked the images of the apps (a temporary file in /var/lib/casaos, renamed over this one)
+IMAGE_UPDATES="${IMAGE_UPDATES:-/var/lib/casaos/image_updates.json}"
 # the six trees of the invariance window, the first five of which may not change
 if [ -z "${INV_TREES+x}" ]; then INV_TREES=(/etc /var/lib/dpkg /var/lib/apt /var/cache/apt /var/lib/casaos /var/log/casaos); fi
 # the witnesses that start by themselves after a restart of Docker (its own rule for always and unless-stopped)
@@ -363,6 +368,17 @@ wait_services() {
     done
 }
 
+# wait_image_check [seconds]: until AppManagement has made its own check of the images, 240 s at the most. It makes it three minutes after it starts and every six
+# hours, and the check ends with a new /var/lib/casaos/image_updates.json renamed into place: a change of one of the trees the window hashes, which has nothing to
+# do with the report. Once the file is there the next one is hours away. Status 1 when it did not come.
+wait_image_check() {
+    local end=$((SECONDS + ${1:-240}))
+    while [ ! -e "${IMAGE_UPDATES}" ]; do
+        if [ "${SECONDS}" -ge "${end}" ]; then return 1; fi
+        sleep 5
+    done
+}
+
 # ---- what is written down -------------------------------------------------------------------------------------------------------------------
 
 # box_facts: the box and the tools the report leans on, for the report to show
@@ -517,14 +533,23 @@ dirty_sources_file() { src_dirty osr-file.list "deb [trusted=yes] file:/srv/osr-
 undo_sources_file() { src_undo osr-file.list; }
 undone_sources_file() { src_undone osr-file.list; }
 
-# a source that says `stable` where the box is on a codename: Debian's alias; Ubuntu's archive has none
-skip_sources_alias() { if [ "${FAMILY}" = ubuntu ]; then echo "Ubuntu's archive has no stable, oldstable or testing alias to name in place of a codename"; fi; }
-dirty_sources_alias() { src_dirty osr-alias.list "deb http://deb.debian.org/debian stable main"; }
+# a source that names a release by an alias where the box is on a codename: Debian's `stable`, Ubuntu's `devel` (dists/devel is there on archive.ubuntu.com,
+# and the core only reads the line: nothing is fetched)
+dirty_sources_alias() {
+    if [ "${FAMILY}" = ubuntu ]; then
+        src_dirty osr-alias.list "deb http://archive.ubuntu.com/ubuntu devel main"
+    else
+        src_dirty osr-alias.list "deb http://deb.debian.org/debian stable main"
+    fi
+}
 undo_sources_alias() { src_undo osr-alias.list; }
 undone_sources_alias() { src_undone osr-alias.list; }
 
-# a Default-Release, and a pin of the preferences, that name another release than the box's own
-dirty_sources_pin() { mkdir -p "${APT_DIR}/apt.conf.d" && printf 'APT::Default-Release "%s";\n' "${TO_CODENAME}" >"${APT_DIR}/apt.conf.d/99osr-default-release"; }
+# a Default-Release that names the box's own release, and a pin of the preferences that names the target: a Default-Release that no source offers (the target's,
+# which the sources do not carry before the hop) makes apt itself refuse to build its policy ("E: The value 'bookworm' is invalid for APT::Default-Release as such
+# a release is not available in the sources", status 100), in apt-get check and in apt-cache policy, which the core runs: they would fail with the dirt, and the
+# core with them. The core refuses any Default-Release, so the box's own is as good. An unmatched `Pin: release n=` is no error of apt's.
+dirty_sources_pin() { mkdir -p "${APT_DIR}/apt.conf.d" && printf 'APT::Default-Release "%s";\n' "${FROM_CODENAME}" >"${APT_DIR}/apt.conf.d/99osr-default-release"; }
 undo_sources_pin() { rm -f "${APT_DIR}/apt.conf.d/99osr-default-release"; }
 undone_sources_pin() { [ ! -e "${APT_DIR}/apt.conf.d/99osr-default-release" ]; }
 
@@ -587,14 +612,16 @@ dirty_containers_policy() { docker run -d --init --name p-no --restart no busybo
 undo_containers_policy() { docker rm -f p-no >/dev/null; }
 undone_containers_policy() { [ -z "$(docker ps -aq --filter name=^p-no$)" ]; }
 
-# the machine may be the DNS or the web server: a container on the host network, one that publishes port 443 (the policy of both comes back by itself)
+# the machine may be the DNS or the web server: a container on the host network, one that publishes port 53 (the policy of both comes back by itself). Not 80 nor 443:
+# ReCasaOS's own gateway listens on *:80 and *:443, and Docker cannot bind them again. Not 53 on every address either: systemd-resolved holds 127.0.0.53:53, and a
+# bind of 0.0.0.0:53 fails with it. 127.0.0.2:53 is free on Debian 11 and on Ubuntu 22.04, and the core reports a host port of 53 whatever the address.
 dirty_containers_ports_host() { docker run -d --init --name p-hostnet --restart unless-stopped --network host busybox sleep 100000 >/dev/null; }
 undo_containers_ports_host() { docker rm -f p-hostnet >/dev/null; }
 undone_containers_ports_host() { [ -z "$(docker ps -aq --filter name=^p-hostnet$)" ]; }
 
-dirty_containers_ports_publish() { docker run -d --init --name p-pub443 --restart unless-stopped -p 443:80 nginx:alpine >/dev/null; }
-undo_containers_ports_publish() { docker rm -f p-pub443 >/dev/null; }
-undone_containers_ports_publish() { [ -z "$(docker ps -aq --filter name=^p-pub443$)" ]; }
+dirty_containers_ports_publish() { docker run -d --init --name p-pub53 --restart unless-stopped -p 127.0.0.2:53:80 nginx:alpine >/dev/null; }
+undo_containers_ports_publish() { docker rm -f p-pub53 >/dev/null; }
+undone_containers_ports_publish() { [ -z "$(docker ps -aq --filter name=^p-pub53$)" ]; }
 
 # a package manager at work: dpkg's lock held by another process; and a package update that is running (a stand-in that holds the unit's name, which is all the
 # core looks at: the Docker update proof does the same)
@@ -751,6 +778,8 @@ main() {
     timeout 120 systemctl is-system-running --wait >/dev/null 2>&1 || true
     box_facts
     leak_needles
+    # AppManagement's check of the images lands in /var/lib/casaos three minutes after its start: it is over before the control looks at what changes by itself
+    wait_image_check 240 || not_proven "AppManagement did not write ${IMAGE_UPDATES} within 240 s: its own check of the images (3 minutes after its start) could fall in the invariance window, and be taken for a write of the report"
     marker prepare_done
     # what the installation started has a few seconds to be quiet: the control below looks at what still changes by itself
     sleep 20
