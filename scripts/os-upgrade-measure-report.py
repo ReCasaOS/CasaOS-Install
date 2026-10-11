@@ -471,6 +471,15 @@ if has("baseline-wait") and baseline_wait.get("result") not in ("ok", "gave_up")
 if wait_gave_up and "did not all answer 200 within" not in aborted:
     invalid("the gateway, the core and AppManagement did not all answer 200 within %s s of the baseline's start (the last answers: gateway %s, core %s, AppManagement %s): the box was not ready "
             "after its reboot, and nothing about the hop can be measured from it" % (baseline_wait.get("limit", "?"), baseline_wait.get("gateway", "?"), baseline_wait.get("core", "?"), baseline_wait.get("am", "?")))
+# the after phase waits the same way after the reboot of the hop (180 s at the most) before it asks the services anything, and writes it down the same way (after-wait). Unlike the baseline's, a wait that
+# gave up does not make the run invalid: a service that never answered within 180 s is the finding (NO-GO of the row about the core coming back), and what the phase collected after it is still read
+after_wait = kv("after-wait")
+if has("after-wait") and after_wait.get("result") not in ("ok", "gave_up"):
+    invalid("after-wait says %r, not ok or gave_up: the wait after the reboot left no usable record" % after_wait.get("result"))
+if after_wait.get("result") == "ok":
+    for key, name in (("gateway", "the gateway"), ("core", "the core"), ("am", "AppManagement")):
+        if after_wait.get(key) != "200":
+            invalid("after-wait says ok while %s's last answer was %s: the record contradicts itself" % (name, after_wait.get(key) or "missing"))
 for code in ("gateway-before", "core-before", "am-before", "jwt-before", "internal-before"):
     got = read(code + ".code").strip()
     if wait_gave_up:
@@ -644,6 +653,7 @@ if ran_hop:
                       ("os-after", "the release after the reboot"), ("reboot-pre.txt", "the reboot before the hop"), ("reboot-post.txt", "the reboot after it"),
                       ("kernel-before.txt", "the kernel before"), ("kernel-after.txt", "the kernel after"), ("docker-before.txt", "Docker before"), ("docker-after.txt", "Docker after"),
                       ("deps-before.txt", "the installer's dependencies before"), ("deps-after.txt", "the installer's dependencies after"),
+                      ("after-wait", "how long the after phase waited for the gateway, the core and AppManagement to answer 200 after the reboot of the hop: without it nothing says that they were given the time to come up"),
                       ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("hop-journal.txt", "the journal of the hop"), ("dpkg-hop.log", "dpkg's own log of the hop")):
         if name == "dpkg-hop.log" and unit_ended:
             continue    # a unit that ended itself before its first apt had nothing for dpkg to log: the reason it ended is the finding, and not the empty log that follows from it
@@ -996,6 +1006,8 @@ if ran_hop:
     for name, s in steps.items():
         if s["end"] is not None:
             show_row("  step %s (exit %s)" % (name, s["rc"]), fmt_s(s["end"] - s["start"]))
+    show_row("after the reboot: waiting for the gateway, the core and AppManagement to answer 200 (the longest it will wait: %s s)" % after_wait.get("limit", "?"),
+             "%s s (%s)" % (after_wait.get("waited", "n/a"), after_wait.get("result", "not recorded").replace("_", " ")))
 P("")
 
 # ---- the refresh of the old release -------------------------------------------------------------------------------------------
@@ -1494,7 +1506,8 @@ if ran_hop:
     casa = sorted(n for n in ub if CASA_UNITS_RE.match(n) and ub[n]["active"] == "active")
     P("## ReCasaOS after the reboot")
     P("")
-    P("The after phase starts nothing: it reads the units first (`units-boot`), waits, then asks. (The harness's own test checks that the phase has no start, restart or enable of a unit.)")
+    P("The after phase starts nothing: it reads the units first (`units-boot`), waits for the gateway, the core and AppManagement to answer 200 (the baseline's own wait, at most %s s: AppManagement "
+      "needs 11 to 13 s on Debian and 4 to 7 s on Ubuntu after a boot), and only then asks them. (The harness's own test checks that the phase has no start, restart or enable of a unit.)" % after_wait.get("limit", "180"))
     P("")
     P("| unit | before | first look | settled | restarted by systemd after the first look |")
     P("|---|---|---|---|---|")
@@ -1509,22 +1522,38 @@ if ran_hop:
         show_row(n, ub[n]["active"], a.get("active", "?"), b.get("active", "?"), "yes" if again else "no")
     P("")
     codes = {k: read("%s-after.code" % k).strip() for k in ("gateway", "core", "internal", "am", "jwt")}
-    P("Asked once settled: gateway %s, core %s, core with the loopback secret %s, AppManagement with the token of the baseline's login %s." % (codes["gateway"], codes["core"], codes["internal"], codes["am"]))
+    P("The wait after the reboot: %s s of the %s s it allows, result %s (the last answers: gateway %s, core %s, AppManagement %s). Asked again once the wait ended: gateway %s, core %s, core with the loopback secret %s, "
+      "AppManagement with the token of the baseline's login %s." % (after_wait.get("waited", "n/a"), after_wait.get("limit", "?"), after_wait.get("result", "not recorded").replace("_", " "),
+                                                                     after_wait.get("gateway", "?"), after_wait.get("core", "?"), after_wait.get("am", "?"), codes["gateway"], codes["core"], codes["internal"], codes["am"]))
     P("")
     answered = {k: reboot_times.get(lbl) for k, lbl in (("gateway", "the gateway answers 200"), ("core", "the core answers 200"), ("am", "AppManagement answers 200"))} if boot_row is not None else {}
-    # the harness starts nothing in this phase, so a unit with another InvocationID was brought back by systemd's own Restart=: that is coming back by itself, and it is said, not failed.
-    # What decides is that every unit is active, that each answered after the reboot, and that all three still answer 200 once settled
-    unaided = bool(casa) and not down_after and all(answered.get(k) is not None for k in ("gateway", "core", "am")) and all(codes[k] == "200" for k in ("gateway", "core", "am"))
+    # the wait is the record of whether they answered, and the poller's samples say when each did: a wait that says they all answered while the poller never saw one of them answer cannot both be true
+    services = (("gateway", "the gateway"), ("core", "the core"), ("am", "AppManagement"))
+    if after_wait.get("result") == "ok" and boot_row is not None:
+        for key, name in services:
+            if answered.get(key) is None:
+                invalid("after-wait says %s answered 200 and the poller never saw it answer after the reboot: the evidence contradicts itself" % name)
+    never = [name for key, name in services if after_wait.get(key) != "200"] or ["one of the three"]
+    took = "seconds after the first sample of the box: gateway %s, core %s, AppManagement %s" % (fmt_s(answered.get("gateway")), fmt_s(answered.get("core")), fmt_s(answered.get("am")))
+    # What decides: all three answered 200 within the wait (it ends as soon as they do: a service that is slow to come up is not a service that does not), and no casaos unit that is not active, nor that systemd
+    # had to restart after the first look (the harness starts nothing in this phase: a unit with another InvocationID crashed and was brought back by its Restart=, which is not coming up by itself)
+    unaided = bool(casa) and after_wait.get("result") == "ok" and not down_after and not moved
     if not casa:
         answer("The core, the gateway and AppManagement come back by themselves", "OPEN", "no active casaos service in units-before")
         open_q("the core coming back: units-before lists no casaos service")
     else:
-        note = ("restarted by systemd after the first look (its Restart= brought %s back): %s" % ("it" if len(moved) == 1 else "them", ", ".join(moved))) if moved else "none restarted after the first look"
-        hop_answer("The core, the gateway and AppManagement come back by themselves", "GO" if unaided else "NO-GO",
-                   ("all %d casaos units active; %s; first answer after the first sample of the box: gateway %s, core %s, AppManagement %s; asked once settled: %s, %s, %s" % (
-                       len(casa), note, fmt_s(answered.get("gateway")), fmt_s(answered.get("core")), fmt_s(answered.get("am")), codes["gateway"], codes["core"], codes["am"])) if unaided else
-                   "not active after the reboot: %s; %s; answered: %s; asked once settled: gateway %s, core %s, AppManagement %s" % (
-                       ", ".join(down_after) or "none", note, ", ".join("%s %s" % (k, fmt_s(v)) for k, v in answered.items()) or "n/a", codes["gateway"], codes["core"], codes["am"]))
+        said = [("the gateway, the core and AppManagement all answered 200 within the wait (it took %s s of the %s s it allows)" % (after_wait.get("waited", "?"), after_wait.get("limit", "?")))
+                if after_wait.get("result") == "ok" else
+                ("%s never answered 200 within %s s of the wait (the last answers: gateway %s, core %s, AppManagement %s)" % (
+                    never[0] if len(never) == 1 else ", ".join(never[:-1]) + " and " + never[-1], after_wait.get("limit", "?"), after_wait.get("gateway", "?"), after_wait.get("core", "?"), after_wait.get("am", "?")))]
+        if down_after:
+            said.append("not active after the reboot: %s" % ", ".join(down_after))
+        if moved:
+            said.append("restarted by systemd after the first look, so it did not come up by itself (its Restart= brought %s back): %s" % ("it" if len(moved) == 1 else "them", ", ".join(moved)))
+        elif not down_after:
+            said.append("all %d casaos units active, none restarted by systemd after the first look" % len(casa))
+        said += [took, "asked again once the wait ended: gateway %s, core %s, AppManagement %s" % (codes["gateway"], codes["core"], codes["am"])]
+        hop_answer("The core, the gateway and AppManagement come back by themselves", "GO" if unaided else "NO-GO", "; ".join(said))
     # a token issued before the hop
     claims = {}
     try:

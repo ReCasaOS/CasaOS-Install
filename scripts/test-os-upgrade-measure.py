@@ -440,6 +440,8 @@ def build(d, s, spec=None):
         put(d, "unit-%s.txt" % tag, "pid 4242\ninvocation %s\nmanager %s\nsystemd %s\ndbus %s\nlibc6 %s\ntty not a tty\n" % (hex32("inv"), "247" if tag == "start" else "252", s["systemd"][0 if tag == "start" else 1], s["dbus"][0 if tag == "start" else 1], s["libc"][0 if tag == "start" else 1]))
     put(d, "os-hop", new_os)
     put(d, "os-after", new_os)
+    # what the wait after the reboot saw: the three answered 200 within it (the poller's own samples above have AppManagement answering 24 s after the box came back)
+    put(d, "after-wait", "result ok\nwaited 4\nlimit 180\ngateway 200\ncore 200\nam 200\n")
     sysos_files(d, "after", new_os, core_answer(s["family"], s["new"], s["new_code"], s["new_pretty"]))
     jd = datetime.fromtimestamp(T0 + S["hop_start"] + 700, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     put(d, "hop-journal.txt", "%s.123456+00:00 host systemd[1]: Stopping OpenBSD Secure Shell server...\n%s.223456+00:00 host systemd[1]: Started OpenBSD Secure Shell server.\n" % (jd, jd))
@@ -674,16 +676,142 @@ def restarted_gateway(d):
     unit_set(d, "units-after.tsv", lambda n, f: f[:4] + [hex32("again")] if n == "casaos-gateway.service" else f)
 
 
-flips("core: the gateway was restarted by systemd after the first look: it came back by itself, and the row says so instead of failing it", L, Q_CORE, "GO", restarted_gateway,
-      must_have=["restarted by systemd after the first look (its Restart= brought it back): casaos-gateway.service"])
-flips("core: restarted by systemd and not answering 200 once settled is still a NO-GO", L, Q_CORE, "NO-GO", seq(restarted_gateway, lambda d: put(d, "am-after.code", "502\n")),
-      must_have=["asked once settled: gateway 200, core 200, AppManagement 502", "casaos-gateway.service"])
-flips("core: the core never answers 200 after the reboot", L, Q_CORE, "NO-GO", lambda d: timeline_edit(d, lambda f: f[:5] + ["502"] + f[6:] if float(f[0]) > T0 + S["reboot_post"] and f[5] == "200" else f))
-flips("core: AppManagement never answers 200, with either credential, after the reboot", L, Q_CORE, "NO-GO",
-      lambda d: timeline_edit(d, lambda f: f[:6] + ["401", "401"] + f[8:] if float(f[0]) > T0 + S["reboot_post"] else f))
+def wait_after(**said):
+    """what the wait after the reboot wrote in after-wait: its result, how long it took, its limit and the last answers of the three"""
+    v = dict(result="ok", waited=4, limit=180, gateway=200, core=200, am=200)
+    v.update(said)
+    return lambda d: put(d, "after-wait", "".join("%s %s\n" % (k, v[k]) for k in ("result", "waited", "limit", "gateway", "core", "am")))
+
+
+def never_after(col, code):
+    """the poller saw the column (4 gateway, 5 core, 6 am, 7 ami) answer `code` after the request to reboot, never 200"""
+    return lambda d: timeline_edit(d, lambda f: f[:col] + [code] + f[col + 1:] if float(f[0]) > T0 + S["reboot_post"] and f[col] == "200" else f)
+
+
+flips("core: the gateway was restarted by systemd after the first look: that is not coming up by itself, and the row says which unit and why", L, Q_CORE, "NO-GO", restarted_gateway,
+      must_have=["restarted by systemd after the first look, so it did not come up by itself (its Restart= brought it back): casaos-gateway.service"])
+case("core: restarted by systemd is a NO-GO although all three answered 200 in the wait, and it says so", L, 0, rows={Q_CORE: "NO-GO"}, mutate=restarted_gateway,
+     must_have=["the gateway, the core and AppManagement all answered 200 within the wait", "casaos-gateway.service"], must_not_have=["asked once settled", "INVALID"])
+case("core: the core never answers 200 within the wait: NO-GO, and it says which and for how long it was waited for", L, 0, rows={Q_CORE: "NO-GO"},
+     mutate=seq(wait_after(result="gave_up", waited=180, core=502), never_after(5, "502"), lambda d: put(d, "core-after.code", "502\n")),
+     must_have=["the core never answered 200 within 180 s of the wait (the last answers: gateway 200, core 502, AppManagement 200)", "core n/a"], must_not_have=["asked once settled", "INVALID"])
+flips("core: AppManagement never answers 200 within the wait, with either credential: NO-GO", L, Q_CORE, "NO-GO",
+      seq(wait_after(result="gave_up", waited=180, am="000"), never_after(6, "401"), never_after(7, "401"), lambda d: put(d, "am-after.code", "000\n")),
+      must_have=["AppManagement never answered 200 within 180 s of the wait (the last answers: gateway 200, core 200, AppManagement 000)", "AppManagement n/a"])
+flips("core: AppManagement did not answer within the wait but the poller saw it answer later: NO-GO, and the seconds it took are said", L, Q_CORE, "NO-GO",
+      seq(wait_after(result="gave_up", waited=180, am="000"), lambda d: put(d, "am-after.code", "000\n")),
+      must_have=["AppManagement never answered 200 within 180 s of the wait", "AppManagement 24 s"])
+flips("core: gateway and core never answered within the wait: both are named", L, Q_CORE, "NO-GO",
+      seq(wait_after(result="gave_up", waited=180, gateway="000", core="000"), never_after(4, "000"), never_after(5, "000")),
+      must_have=["the gateway and the core never answered 200 within 180 s of the wait"])
 case("core: AppManagement answering only with the loopback secret is answering", L, 0, rows={Q_CORE: "GO"},
      mutate=lambda d: timeline_edit(d, lambda f: f[:6] + ["401", "200"] + f[8:] if float(f[0]) > T0 + S["reboot_post"] else f))
 flips("core: no casaos service was active before: nothing to say", L, Q_CORE, "OPEN", lambda d: unit_set(d, "units-before.tsv", lambda n, f: [f[0], "inactive"] + f[2:] if n.startswith("casaos") else f))
+# the second real dispatch: the guest declared the box settled 2.4 s after it came back and asked AppManagement once, which needs 11 to 13 s on Debian: NO-GO for the impatience of the harness
+case("core: a healthy leg says what the wait took and what each service took, and does not blame the moment it was asked", L, 0, rows={Q_CORE: "GO"},
+     must_have=["the gateway, the core and AppManagement all answered 200 within the wait (it took 4 s of the 180 s it allows)", "gateway 18 s, core 20 s, AppManagement 24 s", "asked again once the wait ended: gateway 200, core 200, AppManagement 200",
+                "| after the reboot: waiting for the gateway, the core and AppManagement to answer 200 (the longest it will wait: 180 s) | 4 s (ok) |", "Asked again once the wait ended"],
+     must_not_have=["asked once settled", "Asked once settled", "INVALID"])
+case("core: a wait of 11 s for the services is shown, and is a GO and not a NO-GO", L, 0, rows={Q_CORE: "GO"}, mutate=wait_after(waited=11),
+     must_have=["(it took 11 s of the 180 s it allows)", "| 11 s (ok) |"], must_not_have=["INVALID"])
+invalid("core: no record of the wait after the reboot: nothing says that the services were given the time to come up", L, "after-wait is missing or empty", lambda d: remove(d, "after-wait"))
+invalid("core: an empty record of the wait after the reboot", L, "after-wait is missing or empty", lambda d: put(d, "after-wait", ""))
+invalid("core: the wait after the reboot says something that is not ok or gave_up", L, "after-wait says 'maybe', not ok or gave_up", lambda d: put(d, "after-wait", "result maybe\nwaited 3\nlimit 180\n"))
+invalid("core: a wait that says ok while AppManagement's last answer is not 200 contradicts itself", L, "after-wait says ok while AppManagement's last answer was 000", wait_after(am="000"))
+invalid("core: a wait that says all three answered 200 while the poller never saw the core answer after the reboot: the evidence contradicts itself", L,
+        "after-wait says the core answered 200 and the poller never saw it answer after the reboot", never_after(5, "502"))
+invalid("core: the same for AppManagement with either credential", L, "after-wait says AppManagement answered 200 and the poller never saw it answer after the reboot",
+        seq(never_after(6, "401"), never_after(7, "401")))
+for leg_ in ("u22-24", "u24-26"):
+    invalid("%s: no record of the wait after the reboot is an invalid run on an Ubuntu leg too" % leg_, leg_, "after-wait is missing or empty", lambda d: remove(d, "after-wait"))
+    case("%s: a hop that was not offered never reaches the after phase: no wait is asked of it" % leg_, leg_, 0, spec={"offered": False}, must_not_have=["INVALID", "after-wait"])
+
+
+def replay_real(leg):
+    """the reboot of a real run of the second dispatch put in a healthy fixture: the poller's own samples from the request to reboot after the hop to the end of the after phase (REAL_TAILS), and
+    what the fixed guest would have written of its own: the wait began where the guest of that run declared the box settled (it did not wait) and ended at the first sample on which all three answered 200,
+    and after_settled is that moment. The files of the old guest that asked once (am-after.code 000) are those of the fixed guest after the wait (200)."""
+    def m(d):
+        t_req = T0 + S["reboot_post"]
+        names = {"ALL": ",".join(sorted(CONTAINERS)), "BACK": ",".join(n for n in sorted(CONTAINERS) if n not in STAYS), "-": "-"}
+        names["STRAY"] = "musing_lamarr," + names["BACK"]
+        tail = REAL_TAILS[leg]
+        old_settled = next(t_ for t_, *rest in tail if rest[0] == "#" and rest[1] == "after_settled")
+        ok_at = min(t_ for t_, *rest in tail if rest[0] != "#" and t_ > old_settled and rest[0].split("\t")[3:7] == ["200"] * 4)
+        ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if float(ln.split("\t")[1] if ln.startswith("#") else ln.split("\t")[0]) < t_req])
+        out = []
+        for t_, *rest in tail:
+            if rest[0] == "#":
+                name = rest[1]
+                if name == "after_settled":
+                    t_ = ok_at
+                out.append("#\t%.6f\t%s" % (t_req + t_, "boot_changed aaa bbb" if name == "boot_changed" else name))
+            else:
+                f = rest[0].split("\t")
+                out.append("%.6f\t%s\t%s" % (t_req + t_, "\t".join(f[:9]), names[f[9]]))
+        ledit(d, "timeline.tsv", lambda ls: ls + out)
+        wait_after(waited=int(round(ok_at - old_settled)))(d)
+        put(d, "am-after.code", "200\n")
+    return m
+
+
+# the tails of the two real runs of the second dispatch (2026-10-11): what the poller wrote from the request to reboot after the hop to the end of the after phase, in seconds from that request
+# (d11-12 is Debian 11 to 12, d12-13 Debian 12 to 13). Each row is docker, ssh, samba, gateway, core, AppManagement with the token, AppManagement with the secret, the published port, the host-network port
+# and the running containers (ALL: the seven witnesses, BACK: without the two that do not start by themselves, STRAY: BACK with the container named musing_lamarr that a docker run without a name made, "-": none).
+# The guest of that run said `after_settled` 2.4 s after the box came back, asked once and found AppManagement at 000: it came up 11 s (Debian 11) and 13 s (Debian 12) after the first sample of the box.
+REAL_TAILS = {
+    "d11-12": [
+        (0.000, "#", "reboot_post_start"),
+        (0.684, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (1.686, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (2.687, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (3.689, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (4.691, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (5.692, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (6.694, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (7.695, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (8.697, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (9.698, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (23.013, "#", "boot_changed"),
+        (23.014, "#", "after_start"),
+        (21.171, "28.0.4\tdown\tdown\t000\t000\t404\t000\t000\t000\tBACK"),
+        (23.830, "28.0.4\tup\tup\t200\t200\t404\t404\t200\t200\tBACK"),
+        (25.398, "#", "after_settled"),
+        (24.833, "28.0.4\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (26.265, "28.0.4\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (29.289, "28.0.4\tup\tup\t200\t200\t000\t000\t200\t200\tSTRAY"),
+        (32.324, "#", "after_done"),
+        (32.322, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+    ],
+    "d12-13": [
+        (0.000, "#", "reboot_post_start"),
+        (-0.175, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (0.827, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (1.829, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (2.831, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (3.833, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (4.834, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (5.837, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (19.879, "-\tdown\tdown\t000\t000\t000\t000\t000\t000\t-"),
+        (22.955, "29.9.0\tup\tup\t200\t200\t404\t404\t200\t200\tBACK"),
+        (26.017, "#", "boot_changed"),
+        (26.017, "#", "after_start"),
+        (23.957, "29.9.0\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (27.664, "#", "after_settled"),
+        (26.981, "29.9.0\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (30.006, "29.9.0\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (33.042, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+        (34.047, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+        (35.241, "#", "after_done"),
+        (35.049, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+    ],
+}
+for leg_, took_ in (("d11-12", "gateway 3 s, core 3 s, AppManagement 11 s"), ("d12-13", "gateway 3 s, core 3 s, AppManagement 13 s")):
+    case("%s: the real reboot of the second dispatch, whose AppManagement needed 11 to 13 s: with the wait, the row is a GO and says what each service took" % leg_, leg_, 0, mutate=replay_real(leg_), rows={Q_CORE: "GO"},
+         must_have=["the gateway, the core and AppManagement all answered 200 within the wait", took_, "MEASURED"], must_not_have=["INVALID", "asked once settled", "Asked once settled"])
+    case("%s: ... and the same reboot with a wait that gave up before AppManagement came up is a NO-GO that says it" % leg_, leg_, 0,
+         mutate=seq(replay_real(leg_), wait_after(result="gave_up", waited=5, limit=5, am="000"), lambda d: put(d, "am-after.code", "000\n")), rows={Q_CORE: "NO-GO"},
+         must_have=["AppManagement never answered 200 within 5 s of the wait (the last answers: gateway 200, core 200, AppManagement 000)", took_], must_not_have=["INVALID"])
 flips("token: refused after the reboot, and not expired", L, Q_TOKEN, "NO-GO", lambda d: put(d, "jwt-after.code", "401\n"), must_have=["the token of the baseline: rejected"])
 flips("token: refused after the reboot because it expired: not decidable", L, Q_TOKEN, "OPEN",
       seq(lambda d: put(d, "jwt-after.code", "401\n"), lambda d: put(d, "jwt-claims-jwt-before.json", json.dumps({"issued": T0 + 100, "claims": {"exp": int(T0 + 200)}}))), must_have=["the token of the baseline: expired"])
