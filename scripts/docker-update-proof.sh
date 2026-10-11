@@ -35,9 +35,17 @@
 #                                  middle of a package), and which of the two it was is recorded; and the repair the
 #                                  dashboard names (dpkg --configure -a, then apt-get -f install) is run, after
 #                                  which the check has to refuse nothing.
+#                                  With PROOF_HOLD_DOCKER=1 (one minor leg) docker-ce, docker-ce-cli and containerd.io are put on hold with
+#                                  apt-mark before the first check, as an owner does who wants Docker where it is. The dashboard does not refuse
+#                                  a hold any more: it offers the update with `held` true and the names, refuses a POST that does not confirm the
+#                                  hold (409 `held`), and goes ahead on the owner's word (allow_held true), as `apt-get install --only-upgrade
+#                                  --allow-change-held-packages` would, which drops the hold of every package dpkg unpacks: the unit puts it back and
+#                                  says so (HOLDS). What `apt-mark showhold` says when the update
+#                                  is asked for and when it has ended (dpkg's own answer) is recorded (holds-before.txt, holds-after.txt); the
+#                                  proof lifts the hold itself once that is recorded, so that the failure injection can put the box back.
 #
-# In both: the refusals first (a hold, dpkg's lock, a running package update, an unfinished dpkg journal, a plan
-# that is not the plan, a body that is not a plan_id, a token in the query, a refresh token), none of which
+# In both: the refusals first (a hold the POST does not confirm, dpkg's lock, a running package update, an unfinished dpkg journal,
+# a plan that is not the plan, a body that is not a plan_id, a token in the query, a refresh token), none of which
 # changes anything of the engine; then the update, polled to its end; then what is left of the
 # box: versions, containers, the witness, AppManagement.
 #
@@ -51,7 +59,7 @@
 # Needs: PROOF_DISPOSABLE=1, EXPECT_ID and EXPECT_VERSION_ID (the system it must be, as
 # /etc/os-release names it), DOCKER_FROM for the major leg, INSTALLER_ARGS (options for install.sh,
 # unquoted on purpose: a list), PROOF_KILL_INSTALL (1 on the minor leg that kills the unit, else empty),
-# OUT (default ./proof-out).
+# PROOF_HOLD_DOCKER (1 on the minor leg that holds Docker's packages, else empty), OUT (default ./proof-out).
 
 # ---- the parts that are only text, and can be tested without a machine -----------------------
 
@@ -123,6 +131,8 @@ candidate_of() { apt-cache policy "$1" | awk '/Candidate:/ && !found {print $2; 
 # ---- the machine --------------------------------------------------------------------------------
 
 COME_BACK=(p-always p-unless-stopped p-db p-web p-host)
+# what the held leg puts on hold: the engine as get.docker.com installs it
+PROOF_HOLDS=(docker-ce docker-ce-cli containerd.io)
 # a maintainer script of one of Docker's packages: while it runs, dpkg is in the middle of a package
 MAINTAINER_RE='/var/lib/dpkg/info/(docker-ce|docker-ce-cli|containerd\.io|docker-ce-rootless-extras)\.(preinst|prerm|postinst|postrm)'
 # the file the proof makes to stand for an unfinished dpkg journal: by apt's own rule (debSystem::CheckUpdates) a file of digits only in
@@ -151,7 +161,7 @@ cleanup() {
     local rc=$?
     if [ -n "${POLL_PID:-}" ]; then kill "${POLL_PID}" 2>/dev/null || true; fi
     if [ -n "${LOCK_PID:-}" ]; then kill "${LOCK_PID}" 2>/dev/null || true; fi
-    apt-mark unhold docker-ce >/dev/null 2>&1 || true
+    apt-mark unhold "${PROOF_HOLDS[@]}" >/dev/null 2>&1 || true
     systemctl stop casaos-package-update.service >/dev/null 2>&1 || true
     if [ "${DAEMON_JSON_BROKEN:-0}" = 1 ]; then mend_daemon_json || true; fi
     if [ "${DPKG_JOURNAL_FAKED:-0}" = 1 ]; then rm -f "${DPKG_JOURNAL}" || true; fi
@@ -342,11 +352,13 @@ box_facts() {
 # core names them), with its exit status on the last line. The report sets it against what apt offers; the file is also the fixture to give
 # the core's parser for this apt.
 apt_simulation() {
-    local rc=0 names=() n
+    local rc=0 names=() n flags=()
+    # engine packages on hold: the core adds this to the simulation, which apt refuses without before it prints a plan
+    if [ "${HOLD_RUN:-0}" = 1 ]; then flags=(--allow-change-held-packages); fi
     for n in docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin docker-model-plugin; do
         if installed "${n}"; then names+=("${n}"); fi
     done
-    LC_ALL=C apt-get -s --no-remove -o Debug::NoLocking=true -o Dpkg::Use-Pty=0 install --only-upgrade --no-install-recommends "${names[@]}" >"${OUT}/apt-simulation.txt" 2>&1 || rc=$?
+    LC_ALL=C apt-get -s --no-remove -o Debug::NoLocking=true -o Dpkg::Use-Pty=0 "${flags[@]}" install --only-upgrade --no-install-recommends "${names[@]}" >"${OUT}/apt-simulation.txt" 2>&1 || rc=$?
     echo "# exit ${rc}" >>"${OUT}/apt-simulation.txt"
 }
 
@@ -356,7 +368,8 @@ snapshot() { # <name>
         echo "# $(date -u +%FT%TZ)"
         echo "docker $(timeout -s KILL 10 docker version --format '{{.Server.Version}}' 2>&1 || echo unavailable)"
         echo "driver $(timeout -s KILL 10 docker info --format '{{.Driver}}' 2>&1 || echo unavailable)"
-        echo "packages $(dpkg -l 'docker*' 'containerd*' 2>/dev/null | awk '$1 == "ii" {printf "%s=%s ", $2, $3}')"
+        # a package on hold is `hi`, not `ii`: the held leg's engine is that
+        echo "packages $(dpkg -l 'docker*' 'containerd*' 2>/dev/null | awk '$1 == "ii" || $1 == "hi" {printf "%s=%s ", $2, $3}')"
         for u in docker containerd casaos-app-management casaos-message-bus casaos casaos-gateway; do
             ts="$(systemctl show "${u}.service" -p ActiveEnterTimestamp --value 2>/dev/null || true)"
             # none: the unit has not been active. unreadable: this system's date could not read the time systemd gave. Never 0, which is a time
@@ -400,9 +413,14 @@ call_as() {
     echo "${rc}" >"${OUT}/${name}.curl"
 }
 
-post_plan() { # <name> <plan id> [credential]
-    local body
-    body="$(jq -nc --arg p "$2" '{plan_id: $p}')" || abort "jq could not make the body of a POST"
+post_plan() { # <name> <plan id> [credential]; ALLOW_HELD=true or false puts allow_held in the body, empty leaves it out
+    local body filter='{plan_id: $p}'
+    case "${ALLOW_HELD:-}" in
+    "") ;;
+    true | false) filter='{plan_id: $p, allow_held: '"${ALLOW_HELD}"'}' ;;
+    *) abort "post_plan: ALLOW_HELD is true, false or empty, not ${ALLOW_HELD}" ;;
+    esac
+    body="$(jq -nc --arg p "$2" "${filter}")" || abort "jq could not make the body of a POST"
     CALL_MAX=60 call_as "${3:-internal}" "$1" POST /v1/sys/docker/update "${body}"
 }
 
@@ -474,6 +492,40 @@ poll_timeline() {
     done
 }
 
+# ---- the hold: the owner's deliberate act ---------------------------------------------------------------------
+
+# hold_docker: the held leg's hold, set before the first check
+hold_docker() { apt-mark hold "${PROOF_HOLDS[@]}" >"${OUT}/hold-set.txt" 2>&1; }
+
+# lift_holds: the held leg's hold, lifted once the update has ended and dpkg's answer is recorded, so that the failure injection can put the box back
+lift_holds() { apt-mark unhold "${PROOF_HOLDS[@]}" >>"${OUT}/hold-set.txt" 2>&1; }
+
+# record_holds <file>: what dpkg itself says is on hold (apt-mark showhold): its exit status on the first line, then the names. The report judges by it whether the
+# hold is back after the update: the status of the run says so too (holds_kept), but what dpkg says is the hold
+record_holds() {
+    local out rc=0
+    out="$(apt-mark showhold 2>&1)" || rc=$?
+    { echo "exit ${rc}"; if [ -n "${out}" ]; then printf '%s\n' "${out}"; fi; } >"${OUT}/$1"
+}
+
+# hold_refusals: Docker's packages on hold (docker-ce alone, or the three of the held leg, which are on hold already) and what the check and the POST say of it:
+# the update is on offer with `held` true and the names, and a POST that does not confirm the hold (no allow_held, or allow_held false) is refused with `held`,
+# naming them. Then the hold is lifted and the check asked again: `held` false, and another plan. Needs PLAN_ID (the first check's); leaves in it the id of that
+# last check, with no hold, for the refusals that follow. A hold the proof set is lifted by cleanup when the run ends in between.
+hold_refusals() {
+    local held=(docker-ce) held_id
+    if [ "${HOLD_RUN:-0}" = 1 ]; then held=("${PROOF_HOLDS[@]}"); fi
+    apt-mark hold "${held[@]}" >"${OUT}/hold.txt" 2>&1
+    call_as internal packages-held GET /v1/sys/packages
+    held_id="$(plan_id_of packages-held)"
+    post_plan held-post "${held_id:-${PLAN_ID}}"
+    ALLOW_HELD=false post_plan held-false-post "${held_id:-${PLAN_ID}}"
+    apt-mark unhold "${held[@]}" >>"${OUT}/hold.txt" 2>&1
+    call_as internal packages-unheld GET /v1/sys/packages
+    PLAN_ID="$(plan_id_of packages-unheld)"
+    [ -n "${PLAN_ID}" ] || abort "after the hold was lifted the check has no plan_id"
+}
+
 # ---- the refusals: nothing of the engine changes -----------------------------------------------------------
 
 # dpkg_journal_refusal: an unfinished dpkg journal (DPKG_JOURNAL) while an update is on offer: the check has to refuse it with `dpkg`, and so has the POST of the plan
@@ -492,7 +544,7 @@ dpkg_journal_refusal() {
 }
 
 refusals() {
-    local held_id wrong body
+    local wrong body
     wrong="$(printf '0%.0s' $(seq 1 64))"
     CALL_MAX=60 call_as internal status-idle GET /v1/sys/docker/update/status
     call_as internal packages-1 GET /v1/sys/packages
@@ -500,12 +552,8 @@ refusals() {
     [ -n "${PLAN_ID}" ] || abort "the first check has no docker.update.plan_id: the stack under test has no Docker update, or does not offer it on this box"
     CALL_MAX=60 call_as internal containers-before GET /v1/sys/docker/containers
 
-    # a hold is the owner's deliberate act: the button never overrides it
-    apt-mark hold docker-ce >"${OUT}/hold.txt" 2>&1
-    call_as internal packages-held GET /v1/sys/packages
-    held_id="$(plan_id_of packages-held)"
-    post_plan held-post "${held_id:-${PLAN_ID}}"
-    apt-mark unhold docker-ce >>"${OUT}/hold.txt" 2>&1
+    # a hold is the owner's deliberate act: the update goes ahead over it on his word only, and the unit puts the hold back when it has ended
+    hold_refusals
 
     # another process holds dpkg's lock (an fcntl lock, which is what dpkg takes and the core asks about)
     cat >"${AUTH_DIR}/lockhold.py" <<'PY'
@@ -544,18 +592,25 @@ PY
     post_plan refresh-post "${wrong}" refresh
     post_plan jwt-post "${wrong}" jwt
 
-    # and the hold lifted: the same plan again, the one the update will confirm
+    # and the box as the update will find it (the held leg's hold put back, as the first check saw it): the plan the update will confirm
+    if [ "${HOLD_RUN:-0}" = 1 ]; then apt-mark hold "${PROOF_HOLDS[@]}" >>"${OUT}/hold.txt" 2>&1; fi
     call_as internal packages-2 GET /v1/sys/packages
     PLAN_ID="$(plan_id_of packages-2)"
-    [ -n "${PLAN_ID}" ] || abort "after the hold was lifted the check has no plan_id"
+    [ -n "${PLAN_ID}" ] || abort "after the refusals the check has no plan_id"
 }
 
 # ---- the update ------------------------------------------------------------------------------------------------
 
 update_run() {
+    local allow=""
     dpkg_dump before
+    # the held leg: what dpkg says is on hold as the update is asked for, and the confirmation the dashboard sends for a held plan (allow_held true)
+    if [ "${HOLD_RUN:-0}" = 1 ]; then
+        record_holds holds-before.txt
+        allow=true
+    fi
     marker post_start
-    post_plan update-post "${PLAN_ID}"
+    ALLOW_HELD="${allow}" post_plan update-post "${PLAN_ID}"
     marker post_done
     [ "$(cat "${OUT}/update-post.code")" = 200 ] || abort "the POST of the right plan was not accepted (HTTP $(cat "${OUT}/update-post.code")): nothing to follow"
     # the unit is running now: a second press must be refused
@@ -568,6 +623,8 @@ update_run() {
 
     snapshot after
     dpkg_dump after
+    # and what dpkg says is on hold now: dpkg dropped the hold of what it unpacked, and the unit has to have put it back
+    if [ "${HOLD_RUN:-0}" = 1 ]; then record_holds holds-after.txt; fi
     cp "$(runtime_log)" "${OUT}/docker-update.log" 2>/dev/null || true
     collect_journal unit-journal.txt
     db_dump ""
@@ -807,6 +864,14 @@ main() {
     *) echo "PROOF_KILL_INSTALL is 1 or empty" >&2; exit 2 ;;
     esac
     [ "${KILL_INSTALL}" = 0 ] || [ "${LEG}" = minor ] || { echo "the kill -9 injection (PROOF_KILL_INSTALL=1) belongs to a minor leg" >&2; exit 2; }
+    # PROOF_HOLD_DOCKER=1: this minor leg puts Docker's packages on hold before the first check (the report has to be told, with `hold`)
+    HOLD_RUN=0
+    case "${PROOF_HOLD_DOCKER:-}" in
+    "" | 0) ;;
+    1) HOLD_RUN=1 ;;
+    *) echo "PROOF_HOLD_DOCKER is 1 or empty" >&2; exit 2 ;;
+    esac
+    [ "${HOLD_RUN}" = 0 ] || [ "${LEG}" = minor ] || { echo "the update over a hold (PROOF_HOLD_DOCKER=1) belongs to a minor leg" >&2; exit 2; }
     [[ "${PROOF_DISPOSABLE:-}" == 1 ]] ||
         { echo "This installs and removes Docker, holds dpkg's lock and breaks Docker's configuration: run it on a disposable machine (PROOF_DISPOSABLE=1)." >&2; exit 2; }
     [ "$(id -u)" -eq 0 ] || { echo "Run it as root." >&2; exit 2; }
@@ -853,6 +918,7 @@ main() {
     } >"${OUT}/apt-docker-ce.txt"
     cat "${OUT}/apt-docker-ce.txt"
     box_facts
+    if [ "${HOLD_RUN}" = 1 ]; then hold_docker; fi
     apt_simulation
     snapshot before
     images_dump before
@@ -862,6 +928,7 @@ main() {
     sleep 5
     refusals
     update_run
+    if [ "${HOLD_RUN}" = 1 ]; then lift_holds; fi
     if [ "${LEG}" = major ]; then rollback_run; fi
     if [ "${KILL_INSTALL}" = 1 ]; then kill_run; fi
     failure_run
