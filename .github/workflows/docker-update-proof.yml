@@ -47,8 +47,9 @@ name: docker-update-proof
 #           which drops the hold of every package dpkg unpacks (the unit puts it back and says so):
 #           the check has to offer it with held true and the three names, a POST that does not confirm
 #           the hold has to be refused with `held`, and afterwards apt-mark showhold (dpkg's own
-#           answer) has to list the three again, the status has to say holds_kept, and the unit's log
-#           has to carry the HELD line and, before the terminal marker, the HOLDS line. On every leg a
+#           answer) has to list the three again and no hold that the update made, the status has to
+#           say holds_kept, and the unit's log has to carry the HELD line and, before the terminal
+#           marker, the HOLDS line. On every leg a
 #           hold of docker-ce for a moment is offered and refused the same way, and with it lifted the
 #           check says held false.
 #

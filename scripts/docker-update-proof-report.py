@@ -39,10 +39,11 @@ One minor leg is also given `hold`: Docker's packages (docker-ce, docker-ce-cli,
 does who wants Docker where it is. The dashboard does not refuse a hold: the check offers the update with `held` true and the names, a POST that does not
 confirm the hold is refused with `held`, and the update goes ahead on the owner's word (allow_held true), as `apt-get install --only-upgrade
 --allow-change-held-packages` would, which drops the hold of every package dpkg unpacks: the unit puts it back, and says so. The report then wants the evidence that it
-is back: what dpkg itself says (`apt-mark showhold`) before the update and after it, what the status says (held, held_packages, holds_kept), and the HELD and HOLDS lines of
+is back: what dpkg itself says (`apt-mark showhold`) before the update and after it (the three, and no hold that the update made), what the status says (held, held_packages, holds_kept), and the HELD and HOLDS lines of
 the unit's log, the HOLDS line before the terminal marker (the unit says what it put back before it says how the run ended). A run over a hold that fails gives a rollback
-command with the same flag right after --allow-downgrades and a last part that puts the hold back (`&& sudo apt-mark hold <the held packages>`); a run that held nothing gets
-the plain command.
+command with the same flag right after --allow-downgrades and a last part that puts the hold back (` ; sudo apt-mark hold <the held packages>`, joined with a semicolon and not
+`&&`: a failed install may already have unpacked packages, dpkg has dropped their hold by then, and the hold has to go back whatever apt-get returned); a run that held nothing
+gets the plain command.
 On every other leg docker-ce alone is held for a moment, for the refusals: the check offers the update with `held` true, the POST that does not confirm
 is refused with `held`, and with the hold lifted the check says `held` false and gives another plan_id (a hold is part of what was confirmed).
 
@@ -117,7 +118,8 @@ V_HELD_POST_FALSE = "POST while Docker's packages are held, with allow_held fals
 V_UNHELD = "with the hold lifted the update is offered again, held false, with a plan_id that is not the held plan's (and is the first check's, when that had no hold)"
 V_AGAIN = "before the update the check offers the first check's plan again, held as it was then"
 V_FIRST_HELD = "the first check, with Docker's packages on hold, offers the update with held true and the three held packages named"
-V_HOLDS = "after the update apt-mark showhold (dpkg's own answer) lists the packages that were on hold: the unit put the hold back"
+V_HOLDS = ("after the update apt-mark showhold (dpkg's own answer) lists the packages that were on hold and no package that was not: "
+           "the unit put the hold back and held nothing else")
 V_HELD_STATUS = "the status of the run over a hold says held true, names the held packages, and says the hold is back (holds_kept)"
 V_HELD_LOG = "the log has the HELD line (the packages on hold at the start) and the HOLDS line (those on hold again at the end), HOLDS before the terminal marker"
 V_DPKG_CHECK = "an unfinished dpkg journal is refused by the check with `dpkg`, with no button"
@@ -324,12 +326,14 @@ def held_of(status):
 def rollback_command_ok(rb, held=None):
     """the command a failure offers: a fixed shape, validated pins of the engine's packages, and docker-ce at the version the leg started on. A run over a hold (held: the
     packages its status names, held_of) gets the shape RollbackCommandHeld builds: the flag right after --allow-downgrades, since dpkg drops the hold of every package it
-    unpacks, and a last part that puts the hold back on exactly those packages (` && sudo apt-mark hold <names>`). A run that held nothing (held None) gets neither."""
+    unpacks, and a last part that puts the hold back on exactly those packages (` ; sudo apt-mark hold <names>`: a semicolon and not `&&`, since this command is shown for a
+    failed run, where an install that fails again may have unpacked packages and dpkg has dropped their hold, so the hold goes back whatever apt-get returned). A run that held
+    nothing (held None) gets neither."""
     head = "sudo apt-get install --allow-downgrades "
     if held is not None:
         if not held or not all(isinstance(n, str) and n in ALLOWLIST for n in held):
             return False
-        tail = " && sudo apt-mark hold " + " ".join(held)
+        tail = " ; sudo apt-mark hold " + " ".join(held)
         if not rb.endswith(tail):
             return False
         head, rb = head + HOLD_FLAG + " ", rb[:-len(tail)]
@@ -841,8 +845,12 @@ if hold_expected:
     if hold_before is not None and not set(HELD_PROOF) <= set(hold_before):
         invalid("apt-mark showhold lists %s when the update was asked for, not all of %s: the packages were not on hold, and what the update left says nothing of the hold" %
                 (", ".join(hold_before) or "nothing", ", ".join(HELD_PROOF)))
-    verdict(V_HOLDS, on(hold_before is not None and hold_after is not None and set(HELD_PROOF) <= set(hold_before), set(HELD_PROOF) <= set(hold_after or [])),
-            "apt-mark showhold before the update: %s; after it: %s (wanted at least %s)" % (", ".join(hold_before or []) or "nothing", ", ".join(hold_after or []) or "nothing", ", ".join(HELD_PROOF)))
+    # the update creates no hold: a unit that puts a hold on every package it unpacked (docker-ce-rootless-extras is unpacked on this leg and nobody held it) is a regression
+    # that the status and the HOLDS line, which only read the packages that were held, do not see
+    made = sorted(set(hold_after or []) - set(hold_before or []))
+    verdict(V_HOLDS, on(hold_before is not None and hold_after is not None and set(HELD_PROOF) <= set(hold_before), set(HELD_PROOF) <= set(hold_after or []) and not made),
+            "apt-mark showhold before the update: %s; after it: %s (wanted at least %s, and no package that was not on hold before: new %s)" %
+            (", ".join(hold_before or []) or "nothing", ", ".join(hold_after or []) or "nothing", ", ".join(HELD_PROOF), ", ".join(made) or "none"))
     verdict(V_HELD_STATUS, on(fd, fd.get("held") is True and fd.get("held_packages") == HELD_PROOF and fd.get("holds_kept") is True),
             "held %r, held_packages %r (wanted %s), holds_kept %r" % (fd.get("held"), fd.get("held_packages"), HELD_PROOF, fd.get("holds_kept")))
     # the unit's own words (the HELD line at its start, the HOLDS line before its terminal marker): the names it found on hold, and the ones on hold again. A status the core
@@ -862,7 +870,7 @@ if hold_expected:
     P("")
     P("docker-ce, docker-ce-cli and containerd.io were put on hold with apt-mark before the first check. The check offered the update all the same, with `held` true; a POST that "
       "did not confirm the hold was refused with `held`; the update was then asked for with `allow_held` true, as `apt-get install --only-upgrade --allow-change-held-packages` "
-      "would run it, which drops the hold of every package dpkg unpacks: the unit puts it back, and `apt-mark showhold` is dpkg's own answer to whether it did. What dpkg says is on hold: before the update %s; after it %s. The status says held %r, holds_kept %r; the log's HELD line says %r "
+      "would run it, which drops the hold of every package dpkg unpacks: the unit puts it back, and `apt-mark showhold` is dpkg's own answer to whether it did, and to whether the update held anything else. What dpkg says is on hold: before the update %s; after it %s. The status says held %r, holds_kept %r; the log's HELD line says %r "
       "and its HOLDS line %r. The proof lifted the hold itself once that was recorded, so that the failure injection could put the box back." % (", ".join(hold_before or []) or "nothing", ", ".join(hold_after or []) or "nothing", fd.get("held"), fd.get("holds_kept"),
                                   held_lines[0][2] if held_lines else None, holds_lines[0][2] if holds_lines else None))
     P("")
@@ -1151,10 +1159,14 @@ if leg == "minor" and kill_expected:
         kkinds = [m[0] for m in kmarks]
         kterms = [(m[0], m[2].split()[-1:]) for m in kmarks if m[0] in ("SUCCESS", "RESTART_PENDING", "FAILED")]
         klines = [ln for ln in klog.splitlines() if ln.strip()]
+        # the FAILED the script wrote is how the log ended, as on every other log: the last line, and what the unit put back (HOLDS) is said before it, since the status turns
+        # terminal on that marker
+        kfailed = [i for i, k in enumerate(kkinds) if k == "FAILED"]
+        failed_last = bool(kfailed) and klines[-1].split(" ")[0] == PREFIX + "FAILED" and all(i < kfailed[0] for i, k in enumerate(kkinds) if k == "HOLDS")
         # the log is what the status was made of: cut off in the install (no INSTALLED, and no terminal marker unless the script itself wrote FAILED install)
         agree = (len({m[1] for m in kmarks}) == 1 and bool(klines) and klines[0].split(" ")[0] == "CASAOS_DOCKER_UPDATE_QUEUED"
                  and "PREVIOUS" in kkinds and "DOWNLOADED" in kkinds and "INSTALLED" not in kkinds
-                 and ((ecode == "no_result" and not kterms) or (ecode == "install" and kterms == [("FAILED", ["install"])])))
+                 and ((ecode == "no_result" and not kterms) or (ecode == "install" and kterms == [("FAILED", ["install"])] and failed_last)))
         verdict(K_LOG, on(kmarks and kdd, agree), "error_code %r; kinds %s; terminal markers %s" % (ecode, ",".join(kkinds), kterms or "none"))
         krb = kdd.get("rollback_command") or ""
         verdict(K_ROLLBACK, on(kdd, rollback_command_ok(krb, held_of(kdd))), "rollback_command %r (the status says held %r, held_packages %r)" % (krb, kdd.get("held"), kdd.get("held_packages")))
