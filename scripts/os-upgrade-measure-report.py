@@ -256,9 +256,10 @@ def apt_parse(text):
     m = re.search(r"^Need to get ([0-9.,]+) ([kMGT]?B)(?:/([0-9.,]+) ([kMGT]?B))? of archives\.$", text, re.M)
     if m:
         d["need"] = to_bytes(m.group(3), m.group(4)) if m.group(3) else to_bytes(m.group(1), m.group(2))
-    m = re.search(r"^After this operation, ([0-9.,]+) ([kMGT]?B) of (additional disk space will be used|disk space will be freed)\.$", text, re.M)
+    # apt (private-install.cc) prints "%sB of additional disk space will be used." and "%sB disk space will be freed.": the second has no "of"
+    m = re.search(r"^After this operation, ([0-9.,]+) ([kMGT]?B) (of additional disk space will be used|disk space will be freed)\.$", text, re.M)
     if m:
-        d["disk"] = to_bytes(m.group(1), m.group(2)) * (1 if m.group(3).startswith("additional") else -1)
+        d["disk"] = to_bytes(m.group(1), m.group(2)) * (1 if m.group(3).startswith("of additional") else -1)
     cur = None
     for ln in text.splitlines():
         h = re.match(r"^The following (.*?):$", ln)
@@ -677,19 +678,32 @@ P("")
 P("| point | mount: free MB |")
 P("|---|---|")
 low = None
+mount_low = {}      # the least free space seen on each mount
 for tag in ("start", "prepared", "before", "probed", "hop", "after"):
     cells = df_row(tag)
     if cells:
         show_row(tag, ", ".join("%s: %d" % c for c in cells[:3]))
         low = min([c[1] for c in cells] + ([low] if low is not None else []))
+        for mnt, avail in cells:
+            mount_low[mnt] = min(avail, mount_low.get(mnt, avail))
 steps_df = [ln.split() for ln in read("df-steps.txt").splitlines() if len(ln.split()) == 3]
 if steps_df:
     mn = min(int(x[2]) for x in steps_df if x[2].isdigit())
     low = mn if low is None else min(low, mn)
+    for x in steps_df:
+        if x[2].isdigit():
+            mount_low[x[1]] = min(int(x[2]), mount_low.get(x[1], int(x[2])))
     P("")
     P("Lowest free space on a mount, after any step of the hop: %d MB." % mn)
 P("")
-P("%s" % ("Disk was NOT short in the guest: the lowest free space seen is %d MB." % low if low is not None else "No free space figure was read."))
+FLOOR_MB = {"/boot": 300}     # a kernel with its initramfs; 1000 MB elsewhere
+short = sorted((m, v) for m, v in mount_low.items() if v < FLOOR_MB.get(m, 1000))
+if short:
+    P("**The guest's disk was SHORT**: %s (the floors are 300 MB on /boot and 1000 MB elsewhere)." % ", ".join("%s %d MB free" % x for x in short))
+elif low is not None:
+    P("The lowest free space seen in the guest is %d MB, and no mount fell below 300 MB (on /boot) or 1000 MB (elsewhere)." % low)
+else:
+    P("No free space figure was read.")
 for hf in ("host-df-start.txt", "host-df-end.txt"):
     if has(hf):
         P("")

@@ -545,7 +545,7 @@ for leg in ("d11-12", "d12-13"):
     s = LEGS[leg]
     case("a healthy %s leg is measured: every row of the table is answered, and the inhibitor does not keep root out" % leg, leg, 0,
          must_have=["MEASURED", "## The go/no-go table", "How close the plan is to the transaction that was done", "libc6 %s to %s" % s["libc"], "cron, smbd, ssh",
-                    "as apt's own table says", "Disk was NOT short in the guest"],
+                    "as apt's own table says", "The lowest free space seen in the guest is 14000 MB"],
          must_not_have=["INVALID", "NOT_OFFERED", "Traceback"],
          rows={Q_SANDBOX: "GO", Q_FROZEN: "GO", Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_INH: "NO-GO"})
 for leg, variant in (("u22-24", "hold"), ("u24-26", "hold"), ("u22-24", "keep")):
@@ -688,7 +688,15 @@ case("a container that starts by itself and does not come back is said", L, 0, m
 case("the database lost nothing; a lost write is counted", L, 0, must_have=["**0 missing**"])
 case("a database that lost an acknowledged write says how many", L, 0, must_have=["**1 missing**"], mutate=lambda d: ledit(d, "db-after-file.txt", lambda ls: ls[:-1]))
 case("a window of silence of the database is measured", L, 0, must_have=["Longest silence during the hop: 2.0 s", "Longest silence from the reboot to the containers being back: 1"])
-case("the disk: the lowest free space is said", L, 0, must_have=["Lowest free space on a mount, after any step of the hop: 14000 MB", "Disk was NOT short in the guest"])
+case("the disk: the lowest free space is said, and no claim is made that it was short or not beyond the figures", L, 0, must_have=["Lowest free space on a mount, after any step of the hop: 14000 MB", "The lowest free space seen in the guest is 14000 MB, and no mount fell below 300 MB"],
+     must_not_have=["Disk was NOT short", "was SHORT"])
+case("the disk: a /boot that was left with 7 MB is said to be short, with the mount and the figure", L, 0, must_have=["**The guest's disk was SHORT**: /boot 7 MB free"], must_not_have=["Disk was NOT short", "The lowest free space seen in the guest"],
+     mutate=lambda d: put(d, "df-steps.txt", "update / 20000\nfull /boot 7\n"))
+case("the disk: 600 MB left on the root is short (the floor is 1000 MB there), and 600 MB on /boot is not (it is 300 MB)", L, 0, must_have=["**The guest's disk was SHORT**: / 600 MB free"], must_not_have=["/boot 600"],
+     mutate=lambda d: put(d, "df-steps.txt", "update / 600\nfull /boot 600\n"))
+case("apt prints a freed disk space without an 'of' and the report reads it: the step's figure is negative", L, 0, must_have=["after this operation -25.6 MB."], must_not_have=["after this operation n/a"],
+     mutate=lambda d: replace(d, "step-full.log", "After this operation, 540 MB of additional disk space will be used.", "After this operation, 25.6 MB disk space will be freed."))
+case("apt prints an additional disk space with its 'of' and the report reads it", L, 0, must_have=["after this operation 540.0 MB."])
 case("the runner's own df is reproduced when the workflow wrote it", L, 0, must_have=["host-df-end.txt", "/dev/root"], mutate=lambda d: put(d, "host-df-end.txt", "Filesystem Size Used Avail Use% Mounted on\n/dev/root 72G 41G 31G 58% /\n"))
 case("a different apt than the leg was meant for is said and does not fail the leg", L, 0, must_have=["the apt of this leg is meant to be 2.2.4: it is 2.2.5"], mutate=lambda d: replace(d, "box-facts", "apt 2.2.4", "apt 2.2.5"))
 case("--allow-releaseinfo-change: apt's own table (Suite and Version tolerated by default with a notice, Label, Codename and Origin refused until accepted) is what a healthy leg shows", L, 0,
