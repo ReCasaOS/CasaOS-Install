@@ -8,15 +8,15 @@ A healthy leg of each of the two (d11, u22) passes. Every verdict has a case in 
 name; a run that did not get as far as it should (a step that did not run, a call that got no answer of the route, a box that could not be dirtied or put
 back, evidence that is missing) must be INVALID and never green. What these guests cannot do is NOT TESTABLE, with its reason, and neither a pass nor a fail.
 
-The core is not here: the answers of the cases come from a model of it (MODEL_SRC, a reference implementation of the spec's table that this file keeps
-apart from the report it tests). The same model, behind a stand-in for curl, answers the END-TO-END cases, which run the REAL guest functions of
-os-readiness-proof.sh (the control, the invariance window, the dirty matrix, with the real manifest tool) against stand-ins for systemctl, docker, apt-mark,
-dpkg and the rest, and hand what they wrote to the REAL report: the plumbing between the guest and the report is tested as one, and a model that writes a
-file during the call, restarts a unit, opens a port, blocks, fails to fire a code or fires another one must come out red by the name of the verdict that
-catches it. The text-only functions of the guest script, each step's dirt and undo, its runner and its traps are tested too, when bash is here. No VM leg
-can run here: what the real core, systemd, apt and Docker say is what the first dispatch of the workflow shows.
+The core is not here: the answers of the cases are what the real core said, dumped from it (fixtures/readiness/<leg>/<step>.json, see the README there), the
+clean box's and each dirty box's, and the cases that need a shape the core never makes edit them. The same fixtures, behind a stand-in for curl, answer the
+END-TO-END cases, which run the REAL guest functions of os-readiness-proof.sh (the control, the invariance window, the dirty matrix, with the real manifest tool)
+against stand-ins for systemctl, docker, apt-mark, dpkg and the rest, and hand what they wrote to the REAL report: the plumbing between the guest and the
+report is tested as one, and a core that writes a file during the call, restarts a unit, opens a port, blocks, fails to fire a code or fires another one must
+come out red by the name of the verdict that catches it. The text-only functions of the guest script, each step's dirt and undo, its runner and its traps are
+tested too, when bash is here. No VM leg can run here: what the real tools, systemd, apt and Docker say is what the first dispatch of the workflow shows.
 
-REPORT=<path>, READINESS_SCRIPT=<path> and WORKFLOW=<path> run the cases against other copies, to see that a broken one is caught. CASES=<regex> runs the cases
+REPORT=<path>, READINESS_SCRIPT=<path>, WORKFLOW=<path> and FIXTURES=<dir> run the cases against other copies, to see that a broken one is caught. CASES=<regex> runs the cases
 whose name matches. REPORT_ONLY=1 stops after the cases of the report, GUEST_ONLY=1 skips them. TEST_BASH=<path> names a bash where plain `bash` is not the one.
 """
 import ast
@@ -63,140 +63,60 @@ def check(label, ok, detail=""):
         failures.append("%s: %s" % (label, detail))
 
 
-# ---- a model of the core: the spec's table, as a function of the box ------------------------------------------------------------------------------------
+# ---- the answers of the core: its own, dumped from it ------------------------------------------------------------------------------------------------------
 
-MODEL_SRC = r'''
+FIXTURES = os.environ.get("FIXTURES") or os.path.join(HERE, "fixtures", "readiness")
+
+ANSWERS_SRC = r'''
 import json
+import os
 
-LEGS = {
-    "d11": dict(family="debian", version="11", codename="bullseye", pretty="Debian GNU/Linux 11 (bullseye)", to=("debian", "12", "bookworm", "Debian 12 (bookworm)")),
-    "u22": dict(family="ubuntu", version="22.04", codename="jammy", pretty="Ubuntu 22.04.5 LTS", to=("ubuntu", "24.04", "noble", "Ubuntu 24.04 LTS (noble)")),
-}
-OK_CODES = ["unsupported_os", "vendor_os", "unproven_arch", "container", "virt_xen", "no_systemd", "not_root", "busy", "apps", "reboot_first", "uptime_long",
-            "broken_dpkg", "held", "sources_cdrom", "sources_alias", "sources_pin", "sources_proposed", "sources_format", "foreign_arch", "host_services", "dkms",
-            "merged_usr", "cgroup1", "bootloader", "root_zfs", "root_luks", "md_degraded", "smart_failed", "fstab_unresolved", "fstab_network", "log_on_tmpfs",
-            "disk_root", "disk_archives", "disk_boot", "ram", "power", "network_uplink", "docker_swarm", "docker_origin", "docker_down", "containers_policy",
-            "containers_ports", "held_docker"]
 DOCKER_FAMILY = ("docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin", "docker-ce-rootless-extras")
-DEBIAN_ALIASES = ("stable", "oldstable", "oldoldstable", "testing", "unstable", "sid")
-FREE_MB = 28000
+SEVERITIES = ("refuse", "warn", "ok", "info")
+
+
+def recount(data):
+    data["counts"] = {s: sum(1 for c in data["checks"] if c["severity"] == s) for s in SEVERITIES}
+    data["state"] = "blocked" if data["counts"]["refuse"] else "attention" if data["counts"]["warn"] else "ready"
+
+
+def put(data, code, severity, title, unknown=False):
+    """the check of the code has this severity (it is added when the answer has none)"""
+    found = [c for c in data["checks"] if c["code"] == code]
+    if not found:
+        data["checks"].append(dict(code=code, severity=severity, title=title, data={}, action="none"))
+        found = data["checks"][-1:]
+    for c in found:
+        c.update(severity=severity, title=title)
+        c["data"]["unknown"] = unknown
+        if unknown:
+            c["data"]["reason"] = "unexpected_output"
+    recount(data)
+
+
+def answer(step, leg, at, mode=""):
+    """the body of GET /v1/sys/os/readiness for the box of the leg, clean (step "") or dirtied by one step of the matrix: the answer that the core itself made
+    (fixtures/readiness/<leg>/<step>.json), dated `at`. mode is a way for the stand-in core of the end-to-end cases to be wrong"""
+    with open(os.path.join(FIXTURES_DIR, leg, (step or "clean") + ".json"), encoding="utf-8") as f:
+        data = json.load(f)
+    data["text"] = data["text"].replace(data["checked_at"], at)
+    data["checked_at"] = at
+    if mode.startswith("extra:"):
+        put(data, mode.split(":", 1)[1], "refuse", "A check that should not fire")
+    if mode == "nobusy":
+        put(data, "busy", "ok", "busy is fine")
+    if mode == "apt_fails":
+        # apt says no to a Default-Release that no source offers, in every command that opens its cache: the checks that run two of them could not ask
+        for code in ("broken_dpkg", "docker_origin", "docker_update_pending"):
+            put(data, code, "refuse", "Could not check: apt failed", unknown=True)
+    return {"success": 200, "message": "ok", "data": data}
+'''
+ANSWERS = {"FIXTURES_DIR": FIXTURES}
+exec(ANSWERS_SRC, ANSWERS)
+recount = ANSWERS["recount"]
+# the four containers that come back by themselves, which the proof starts
 WITNESSES = [dict(name="p-always", policy="always", network="bridge", ports=""), dict(name="p-unless-stopped", policy="unless-stopped", network="bridge", ports=""),
              dict(name="p-db", policy="unless-stopped", network="bridge", ports=""), dict(name="p-web", policy="unless-stopped", network="bridge", ports="18081")]
-
-
-def clean_box():
-    return dict(holds=[], journal=False, sources=[], default_release=False, pins=False, foreign_pkgs=[], reboot=False, lock=False, unit_busy=False, fstab_bad=False,
-                containers=[dict(c) for c in WITNESSES], fill=0, am_up=True, docker_up=True, extra_files=[])
-
-
-def classify(line):
-    """what a source line is: cdrom, file, alias, proposed, third (not Debian's or Ubuntu's), or debian (an ordinary one)"""
-    f = line.split()
-    if f and f[0].startswith("deb") and len(f) > 2:
-        rest = [x for x in f[1:] if not x.startswith("[")]
-        uri, suite = rest[0], rest[1] if len(rest) > 1 else ""
-        if uri.startswith(("cdrom:", "file:")):
-            return "cdrom"
-        if uri.startswith("http") and any(h in uri for h in ("deb.debian.org", "security.debian.org", "archive.debian.org", "archive.ubuntu.com", "security.ubuntu.com")):
-            if suite in DEBIAN_ALIASES:
-                return "alias"
-            if suite.endswith(("-proposed", "-proposed-updates")):
-                return "proposed"
-            return "debian"
-        return "third"
-    return "none"
-
-
-def answer(box, leg, at, mode=""):
-    """the body of GET /v1/sys/os/readiness for this box. mode is a way for the model to be wrong, for the stand-in core of the end-to-end cases"""
-    L = LEGS[leg]
-    free = FREE_MB - box["fill"]
-    kinds = [classify(line) for _, line in box["sources"]]
-    other = [c for c in box["holds"] if c not in DOCKER_FAMILY]
-    docker_hold = [c for c in box["holds"] if c in DOCKER_FAMILY]
-    policy_no = [c["name"] for c in box["containers"] if c["policy"] in ("no", "")]
-    port_c = [c["name"] for c in box["containers"] if c["network"] == "host" or any(p in ("53", "80", "443") for p in c["ports"].split(","))]
-    dis = {}
-
-    def sev(code, s, title, detail="", unknown=False, action="none", **data):
-        d = dict(unknown=unknown)
-        d.update(data)
-        dis[code] = dict(code=code, severity=s, title=title, detail=detail or title, data=d, action=action)
-
-    for code in OK_CODES:
-        sev(code, "ok", code.replace("_", " ") + " is fine")
-    if box["lock"] or box["unit_busy"]:
-        sev("busy", "refuse", "A package manager is working", "dpkg's lock is held or a package update is running", action="wait_for_package_manager")
-    if not box["am_up"]:
-        sev("apps", "refuse", "AppManagement does not answer", "the apps cannot be asked for, so the answer is no", unknown=True, action="wait_for_apps")
-        sev("backup_age", "refuse", "The backups cannot be listed", "AppManagement does not answer", unknown=True)
-    else:
-        sev("backup_age", "warn", "No backup of the apps", "AppManagement has made no backup yet")
-    if box["reboot"]:
-        sev("reboot_first", "refuse", "A reboot is pending", "/var/run/reboot-required exists", action="restart_machine")
-    if box["journal"]:
-        sev("broken_dpkg", "refuse", "dpkg has an unfinished operation", "dpkg was interrupted", action="finish_dpkg")
-    if other:
-        sev("held", "refuse", "Packages are on hold", "on hold: " + ", ".join(other), action="release_holds")
-    if docker_hold:
-        sev("held_docker", "info", "Docker's packages are on hold", "harmless: Docker's source is paused for the hop")
-    if "cdrom" in kinds:
-        sev("sources_cdrom", "refuse", "A source is a CD-ROM or a local file", "cdrom: or file:", action="review_sources")
-    if "alias" in kinds:
-        sev("sources_alias", "refuse", "A source names a suite alias", "stable in place of a codename", action="review_sources")
-    if box["default_release"] or box["pins"]:
-        sev("sources_pin", "refuse", "apt is pinned to a release", "Default-Release or a pin of the preferences", action="review_sources")
-    if "proposed" in kinds:
-        sev("sources_proposed", "refuse", "A source is proposed-updates", "proposed", action="review_sources")
-    files = ["docker.list"] + [f for (f, line), k in zip(box["sources"], kinds) if k in ("third", "cdrom")]
-    sev("sources_third_party", "warn", "Third-party sources", "files: " + ", ".join(files) + "; Docker's source will be rewritten after the hop", action="review_sources")
-    sev("sources_network_checked_later", "info", "The sources are checked on the network when the plan is made")
-    sev("network_names", "info", "The interface names are checked before the reboot")
-    sev("snapshot_reminder", "info", "Take a snapshot and keep console access", "the server cannot verify it")
-    if L["family"] == "ubuntu":
-        sev("sources_backports", "info", "Backports lines will be dropped")
-    if box["foreign_pkgs"]:
-        sev("foreign_arch", "refuse", "A package of a foreign architecture is installed", "i386: " + ", ".join(box["foreign_pkgs"]))
-    if box["fstab_bad"]:
-        sev("fstab_unresolved", "refuse", "An fstab device does not resolve", "a non-nofail line", action="none")
-    if free < 2048:
-        sev("disk_root", "refuse", "Less than 2 GiB free on /", "%d MiB free" % free, action="free_disk_space", free_mib=free)
-    if free < 1536:
-        sev("disk_archives", "refuse", "Less than 1.5 GiB free for apt's archives", "%d MiB free" % free, action="free_disk_space", free_mib=free)
-    if free < 300:
-        sev("disk_boot", "refuse", "Less than 300 MiB free on /boot", "%d MiB free" % free, action="free_disk_space", free_mib=free)
-    if L["family"] == "debian":
-        sev("docker_update_pending", "warn", "A Docker update is on offer", "28.0.4 to 29.8.0", action="none")
-    if not box["docker_up"]:
-        sev("docker_down", "warn", "Docker does not answer", "docker info failed")
-        sev("containers_policy", "refuse", "The containers cannot be listed", "Docker does not answer", unknown=True)
-        sev("containers_ports", "refuse", "The containers cannot be listed", "Docker does not answer", unknown=True)
-    else:
-        if policy_no:
-            sev("containers_policy", "warn", "Containers that will not come back", "restart policy no: " + ", ".join(policy_no))
-        if port_c:
-            sev("containers_ports", "warn", "Containers on the host's ports", "host network or 53, 80, 443: " + ", ".join(port_c))
-    if mode.startswith("nofire:"):
-        dis.pop(mode.split(":", 1)[1], None)
-    if mode.startswith("extra:"):
-        sev(mode.split(":", 1)[1], "refuse", "A check that should not fire")
-    if mode == "nobusy":
-        sev("busy", "ok", "busy is fine")
-    checks = list(dis.values())
-    counts = {s: sum(1 for c in checks if c["severity"] == s) for s in ("refuse", "warn", "ok", "info")}
-    state = "blocked" if counts["refuse"] else "attention" if counts["warn"] else "ready"
-    text = "OS upgrade readiness: %s\nFrom %s to %s.\n\n" % (state, L["pretty"], L["to"][3])
-    for c in checks:
-        if c["severity"] != "ok":
-            text += "[%s] %s: %s\n" % (c["severity"], c["code"], c["title"])
-    text += "\nThis check changes nothing on the machine.\n"
-    return {"success": 200, "message": "ok", "data": {"checked_at": at, "state": state, "hop": {
-        "from": {"id": L["family"], "version_id": L["version"], "codename": L["codename"], "pretty_name": L["pretty"]},
-        "to": {"id": L["to"][0], "version_id": L["to"][1], "codename": L["to"][2], "pretty_name": L["to"][3]}},
-        "counts": counts, "checks": checks, "text": text}}
-'''
-MODEL = {}
-exec(MODEL_SRC, MODEL)
 
 
 # ---- the dirty matrix of the report, as the harness knows it ---------------------------------------------------------------------------------------------
@@ -223,37 +143,18 @@ for s in STEPS:
     s.setdefault("needle", "")
     s.setdefault("forbid", ())
     s.setdefault("extras", ())
-    s.setdefault("only", None)
 STEP_BY_ID = {s["id"]: s for s in STEPS}
 
-# what each step does to the model's box (the stand-in tools of the end-to-end cases do the same to the files the stand-in core reads)
-DIRT = {
-    "held": lambda b: b["holds"].append("libc6"),
-    "held_docker": lambda b: b["holds"].append("docker-ce"),
-    "broken_dpkg": lambda b: b.update(journal=True),
-    "sources_cdrom": lambda b: b["sources"].append(("osr-cdrom.list", "deb cdrom:[Readiness proof disc 1]/ bullseye main")),
-    "sources_file": lambda b: b["sources"].append(("osr-file.list", "deb [trusted=yes] file:/srv/osr-local-repo ./")),
-    "sources_alias": lambda b: b["sources"].append(("osr-alias.list", "deb http://deb.debian.org/debian stable main")),
-    "sources_pin": lambda b: b.update(default_release=True),
-    "sources_pin_prefs": lambda b: b.update(pins=True),
-    "sources_proposed": lambda b: b["sources"].append(("osr-proposed.list", "deb http://deb.debian.org/debian bullseye-proposed-updates main")),
-    "sources_third_party": lambda b: b["sources"].append(("osr-third-party.list", "deb https://repo.example.invalid/osr-third-party stable main")),
-    "foreign_arch_empty": lambda b: None,
-    "foreign_arch": lambda b: b["foreign_pkgs"].append("osr-foreign"),
-    "reboot_first": lambda b: b.update(reboot=True),
-    "fstab_unresolved": lambda b: b.update(fstab_bad=True),
-    "containers_policy": lambda b: b["containers"].append(dict(name="p-no", policy="no", network="bridge", ports="")),
-    "containers_ports_host": lambda b: b["containers"].append(dict(name="p-hostnet", policy="unless-stopped", network="host", ports="")),
-    "containers_ports_publish": lambda b: b["containers"].append(dict(name="p-pub443", policy="unless-stopped", network="bridge", ports="443")),
-    "busy_lock": lambda b: b.update(lock=True),
-    "busy_unit": lambda b: b.update(unit_busy=True),
-    "disk_boot": lambda b: b.update(fill=MODEL["FREE_MB"] - 200),
-    "apps": lambda b: b.update(am_up=False),
-    "docker_down": lambda b: b.update(docker_up=False),
-}
 LEG = {"d11": dict(family="debian", version="11", codename="bullseye", pretty="Debian GNU/Linux 11 (bullseye)", to_version="12", to_codename="bookworm"),
        "u22": dict(family="ubuntu", version="22.04", codename="jammy", pretty="Ubuntu 22.04.5 LTS", to_version="24.04", to_codename="noble")}
 HOST, IPV4, IPV6, MAC, USER = "osr-1a2b3c4d", "10.0.2.15", "fe80::5054:ff:fe12:3456", "52:54:00:12:34:56", "casa"
+
+fixture_files = {leg_: sorted(f[:-5] for f in os.listdir(os.path.join(FIXTURES, leg_)) if f.endswith(".json")) for leg_ in LEG}
+check("the core's answers are there for the clean box and for each step of the matrix, on both systems, and for nothing else",
+      all(files == sorted(["clean"] + [s["id"] for s in STEPS]) for files in fixture_files.values()), fixture_files)
+check("the report says what the pin step names (the box's own release, which apt does not fail on) and the publish step takes (host port 53 on a loopback alias: the gateway holds 80 and 443)",
+      "own release" in STEP_BY_ID["sources_pin"]["what"] and "port 53" in STEP_BY_ID["containers_ports_publish"]["what"] and "443" in STEP_BY_ID["containers_ports_publish"]["what"]
+      and "loopback" in STEP_BY_ID["containers_ports_publish"]["what"], (STEP_BY_ID["sources_pin"]["what"], STEP_BY_ID["containers_ports_publish"]["what"]))
 
 
 # ---- the evidence directory a healthy leg leaves ----------------------------------------------------------------------------------------------------------
@@ -303,15 +204,9 @@ def api(d, name, code=200, body=None, t0=None, secs=1.2, curl=0, err=None, raw=N
     put(d, name + ".curl", "%d\n" % curl)
 
 
-def box_with(*ids):
-    b = MODEL["clean_box"]()
-    for i in ids:
-        DIRT[i](b)
-    return b
-
-
-def ready_body(leg, box, at, mode=""):
-    return MODEL["answer"](box, leg, iso(at), mode)
+def ready_body(leg, step, at, mode=""):
+    """the answer of the core for the box of the leg with the dirt of a step (none: the clean box), at a time"""
+    return ANSWERS["answer"](step, leg, iso(at), mode)
 
 
 TREE_ROWS = {
@@ -336,7 +231,8 @@ UNITS = {"casaos.service": ("active", "running", "811", "inv-core"), "casaos-gat
          "casaos-app-management.service": ("active", "running", "813", "inv-am"), "casaos-message-bus.service": ("active", "running", "814", "inv-mb"),
          "docker.service": ("active", "running", "900", "inv-docker"), "ssh.service": ("active", "running", "700", "inv-ssh"),
          "logrotate.service": ("inactive", "dead", "0", "inv-logrotate"), "systemd-tmpfiles-clean.service": ("inactive", "dead", "0", "inv-tmpfiles")}
-PORTS = ["tcp 0.0.0.0:22", "tcp *:80", "tcp 127.0.0.1:41873", "tcp 0.0.0.0:18081", "udp 0.0.0.0:68"]
+PORTS = ["tcp 0.0.0.0:22", "tcp *:80", "tcp *:443", "tcp 127.0.0.1:41873", "tcp 0.0.0.0:18081", "udp 0.0.0.0:68", "tcp 127.0.0.53:53", "udp 127.0.0.53:53"]
+LISTEN_SORTED = "".join(p + "\n" for p in sorted(PORTS))   # what `sort` says of them, in the C locale
 ALL_VERDICTS = None   # filled by the healthy cases
 
 
@@ -344,10 +240,9 @@ def manifest_text(rows):
     return "".join("\t".join([json.dumps(p)] + list(r)) + "\n" for p, r in sorted(rows.items()))
 
 
-def build(d, leg, boxes=None):
-    """the evidence of a healthy leg. boxes: {step id: the model's box the dirty answer is made from}, to change what a step did to the box"""
+def build(d, leg):
+    """the evidence of a healthy leg: the answers are the core's own (the fixtures), clean and with the dirt of each step"""
     L = LEG[leg]
-    boxes = boxes or {}
     put(d, "leg", leg + "\n")
     put(d, "os", L["pretty"] + "\n")
     put(d, "os-release", 'PRETTY_NAME="%s"\nNAME="%s"\nVERSION_ID="%s"\nVERSION_CODENAME=%s\nID=%s\n' % (L["pretty"], L["family"].title(), L["version"], L["codename"], L["family"]))
@@ -378,27 +273,23 @@ def build(d, leg, boxes=None):
                                                                               "arch": "amd64", "known": True, "next": {"id": L["family"], "version_id": L["to_version"], "codename": L["to_codename"], "state": "report"}}})
     for name in ("ready-inv-1", "ready-inv-2", "ready-inv-3"):
         t = at()
-        api(d, name, t0=t, body=ready_body(leg, box_with(), t + 1))
+        api(d, name, t0=t, body=ready_body(leg, "", t + 1))
     t = at()
-    api(d, "ready-inv-lock", t0=t, secs=2.0, body=ready_body(leg, box_with("busy_lock"), t + 1))
+    api(d, "ready-inv-lock", t0=t, secs=2.0, body=ready_body(leg, "busy_lock", t + 1))
     put(d, "lock-probe-during", "held\n")
     put(d, "lock-probe-after", "held\n")
     t = at()
-    api(d, "ready-base", t0=t, body=ready_body(leg, box_with(), t + 1))
+    api(d, "ready-base", t0=t, body=ready_body(leg, "", t + 1))
     put(d, "steps.list", "\n".join(s["id"] for s in STEPS) + "\n")
     for s in STEPS:
         sid = s["id"]
-        if s["only"] is not None and L["family"] not in s["only"]:
-            put(d, "step-%s.skipped" % sid, s.get("why", "not on this system") + "\n")
-            continue
         put(d, "step-%s.dirty-rc" % sid, "0\n")
         put(d, "step-%s.undo-rc" % sid, "0\n")
         put(d, "step-%s.undone" % sid, "yes\n")
-        box = boxes.get(sid) or box_with(sid)
         t = at()
-        api(d, "step-%s-dirty" % sid, t0=t, body=ready_body(leg, box, t + 1))
+        api(d, "step-%s-dirty" % sid, t0=t, body=ready_body(leg, sid, t + 1))
         t = at()
-        api(d, "step-%s-clean" % sid, t0=t, body=ready_body(leg, box_with(), t + 1))
+        api(d, "step-%s-clean" % sid, t0=t, body=ready_body(leg, "", t + 1))
 
 
 def jedit(d, name, fn):
@@ -409,11 +300,6 @@ def jedit(d, name, fn):
 
 def jdata(d, call, fn):
     jedit(d, call + ".json", lambda j: fn(j["data"]))
-
-
-def recount(data):
-    data["counts"] = {s: sum(1 for c in data["checks"] if c["severity"] == s) for s in ("refuse", "warn", "ok", "info")}
-    data["state"] = "blocked" if data["counts"]["refuse"] else "attention" if data["counts"]["warn"] else "ready"
 
 
 def set_sev(d, call, code, sev):
@@ -526,7 +412,7 @@ def run_report(d, leg):
     return code, buf.getvalue()
 
 
-def case(name, want_code, must_have=(), must_not_have=(), leg="d11", mutate=None, empty=False, boxes=None):
+def case(name, want_code, must_have=(), must_not_have=(), leg="d11", mutate=None, empty=False):
     if not wanted(name):
         return
     if VERDICT and not any(VERDICT in s for s in must_have):
@@ -534,7 +420,7 @@ def case(name, want_code, must_have=(), must_not_have=(), leg="d11", mutate=None
     count[0] += 1
     d = VDir()
     if not empty:
-        build(d, leg, boxes)
+        build(d, leg)
     if mutate:
         mutate(d)
     code, text = run_report(d, leg)
@@ -553,9 +439,9 @@ def case(name, want_code, must_have=(), must_not_have=(), leg="d11", mutate=None
         print("ok:", name)
 
 
-def fails(name, verdict, mutate, leg="d11", extra=(), boxes=None):
+def fails(name, verdict, mutate, leg="d11", extra=()):
     """a case in which one thing is wrong and the verdict of that name has to say FAIL (and the harness has nothing to say against the run)"""
-    case(name, 1, ["**FAIL** " + verdict] + list(extra), ["INVALID"], leg=leg, mutate=mutate, boxes=boxes)
+    case(name, 1, ["**FAIL** " + verdict] + list(extra), ["INVALID"], leg=leg, mutate=mutate)
 
 
 def invalid(name, reason, mutate, leg="d11", empty=False, silent=(), has=(), lacks=()):
@@ -567,7 +453,7 @@ V_ROUTE = "GET /v1/sys/os/readiness answers 200 with a JSON envelope on every ca
 V_SHAPE = "every answer has the contract's shape: state, hop, counts, checks, text, checked_at"
 V_COUNTS = "counts are the tally of the checks, and state follows them (blocked with a refuse, attention with a warn, ready with neither)"
 V_HOP = "hop.from is this box's os-release, hop.to is the release the leg goes to, and the state is that of a supported hop"
-V_FIELDS = "every check has a code (once), a severity, a title, a detail, an action of the list, and data of short strings and numbers"
+V_FIELDS = "every check has a code (once), a severity, a title (and a detail when it has one), an action of the list when it has one, and data of short strings, numbers, booleans and lists of short strings"
 V_TEXT = "text is plain ASCII, at most 8 KiB, and says nothing of the box's hostname, addresses, MAC or users, nor a URL with userinfo or a query"
 V_TIME = "checked_at is the time of the call"
 V_BUDGET = "every call answered within the core's 20 s budget (25 s allowed)"
@@ -610,7 +496,7 @@ def f_forbid(s, code):
 
 
 def steps_of(leg):
-    return [s for s in STEPS if s["only"] is None or LEG[leg]["family"] in s["only"]]
+    return list(STEPS)
 
 
 def step_verdicts(s):
@@ -637,8 +523,7 @@ if not os.environ.get("GUEST_ONLY"):
         case("a healthy %s leg passes, and every verdict says so by name" % leg_, 0,
              ["# OS readiness proof, %s leg: PASS" % leg_] + ["**PASS** " + v for v in healthy_verdicts(leg_)] + ["**NOT TESTABLE** " + n for n in NOT_TESTABLE_NAMES],
              ["FAIL", "INVALID", "Traceback"], leg=leg_)
-    case("a healthy u22 leg has nothing to say about Debian's aliases but that they do not exist: NOT TESTABLE with the reason", 0,
-         ["**NOT TESTABLE** step sources_alias (sources_alias): Ubuntu's archive has no stable/oldstable/testing alias"], ["step sources_alias: the dirty box"], leg="u22")
+    case("a healthy u22 leg runs the alias step, as Debian does (devel is Ubuntu's alias)", 0, ["**PASS** " + f_fires(STEP_BY_ID["sources_alias"])], ["NOT TESTABLE** step sources_alias"], leg="u22")
     case("a healthy d11 leg runs the alias step", 0, ["**PASS** " + f_fires(STEP_BY_ID["sources_alias"])], ["NOT TESTABLE** step sources_alias"])
     case("the report lists the clean box check by check, with the text of the clean answer and the codes the core added", 0,
          ["## The clean box, check by check", "| snapshot_reminder | info |", "Codes the core added to the spec's table: none.", "This check changes nothing on the machine."])
@@ -704,11 +589,40 @@ if not os.environ.get("GUEST_ONLY"):
     fails("a code that is not a code", V_FIELDS, lambda d: add_check(d, "ready-inv-1", "Not A Code", "ok"))
     fails("a severity that is not one", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(severity="fatal")))
     fails("an action that is not of the list", V_FIELDS, lambda d: jdata(d, "step-held-dirty", lambda x: [c.update(action="reboot_now") for c in x["checks"] if c["code"] == "held"]))
+    fails("an action that is a word near the list (reboot)", V_FIELDS, lambda d: jdata(d, "step-held-dirty", lambda x: [c.update(action="reboot") for c in x["checks"] if c["code"] == "held"]))
+    case("every action of the list is one", 0, ["**PASS** " + V_FIELDS], ["FAIL"],
+         mutate=lambda d: jdata(d, "ready-inv-1", lambda x: [c.update(action=a) for c, a in zip(x["checks"], ("restart_machine", "finish_dpkg", "wait_for_package_manager", "wait_for_apps", "free_disk_space", "release_holds", "review_sources", "none"))]))
+    case("a code of 40 characters is a code", 0, ["**PASS** " + V_FIELDS], ["FAIL"], mutate=lambda d: add_check(d, "step-held-dirty", "c" + "a" * 39, "ok"))
+    fails("a code of 41 characters is not a code", V_FIELDS, lambda d: add_check(d, "ready-inv-1", "c" + "a" * 40, "ok"))
+    fails("a code that starts with a digit", V_FIELDS, lambda d: add_check(d, "ready-inv-1", "1abc", "ok"))
     fails("a title that is empty", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(title="")))
+    fails("a title that is missing", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].pop("title")))
+    fails("a title that is not a string", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(title=["t"])))
+    fails("a title of 2001 characters", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(title="t" * 2001)))
+    case("a title of 2000 characters", 0, ["**PASS** " + V_FIELDS], ["FAIL"], mutate=lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(title="t" * 2000)))
     fails("a detail that is not a string", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(detail=5)))
+    fails("a detail that is null", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(detail=None)))
+    fails("a detail of 2001 characters", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(detail="d" * 2001)))
+    case("a detail of 2000 characters", 0, ["**PASS** " + V_FIELDS], ["FAIL"], mutate=lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(detail="d" * 2000)))
+    case("a detail that is missing is what the core sends of a check with nothing to say, and a detail that is empty is fine", 0, ["**PASS** " + V_FIELDS], ["FAIL"],
+         mutate=lambda d: [jdata(d, n, lambda x: (x["checks"][0].pop("detail", None), x["checks"][1].update(detail=""))) for n in all_calls(d)])
     fails("a data that is a list", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].update(data=[1])))
-    fails("a data value that is a list (raw tool output?)", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["a", "b"])))
+    fails("a check without data", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0].pop("data")))
+    case("a data value that is a list of short strings, as the core sends them, and an empty one", 0, ["**PASS** " + V_FIELDS], ["FAIL"],
+         mutate=lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["a", "b"], none=[], files=["docker.list"], mixed="x")))
+    case("a list of 50 strings", 0, ["**PASS** " + V_FIELDS], ["FAIL"], mutate=lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["n%d" % i for i in range(50)])))
+    fails("a list of 51 strings (raw tool output?)", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["n%d" % i for i in range(51)])), extra=["more than 50 items"])
+    case("a list with a string of 200 characters", 0, ["**PASS** " + V_FIELDS], ["FAIL"], mutate=lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["n" * 200])))
+    fails("a list with a string of 201 characters", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["n" * 201])))
+    fails("a list with a line break in a string", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["a", "b\nc"])))
+    fails("a list with a control character in a string", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["a\x1bb"])))
+    fails("a list with a number in it", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=["a", 5])))
+    fails("a list with a list in it", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=[["a"]])))
+    fails("a data value that is an object", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names={"a": "b"})))
+    fails("a data value that is null", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(names=None)))
     fails("a data value that is a long string", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(out="x" * 500)))
+    case("a data value that is a string of 200 characters", 0, ["**PASS** " + V_FIELDS], ["FAIL"], mutate=lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(out="x" * 200)))
+    fails("a data value that is a string of 201 characters", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(out="x" * 201)))
     fails("a data value with a line break in it (raw tool output)", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(out="a\nb")))
     fails("a data.unknown that is not true or false", V_FIELDS, lambda d: jdata(d, "ready-inv-1", lambda x: x["checks"][0]["data"].update(unknown="yes")))
     case("an action that is empty or `none`, and numbers and booleans in data, are fine", 0, ["**PASS** " + V_FIELDS], ["FAIL"],
@@ -747,6 +661,10 @@ if not os.environ.get("GUEST_ONLY"):
     # ---- the time and the budget ----
     fails("a checked_at an hour off the call", V_TIME, lambda d: jdata(d, "ready-inv-1", lambda x: x.update(checked_at=iso(T0 - 3600))))
     fails("a checked_at in the future", V_TIME, lambda d: jdata(d, "ready-inv-1", lambda x: x.update(checked_at=iso(T0 + 100000))))
+    fails("a checked_at ten seconds after the call", V_TIME, lambda d: jdata(d, "ready-inv-1", lambda x: x.update(checked_at=iso(float(slurp(d, "ready-inv-1.t1")) + 10))))
+    fails("a checked_at ten seconds before the call", V_TIME, lambda d: jdata(d, "ready-inv-1", lambda x: x.update(checked_at=iso(float(slurp(d, "ready-inv-1.t0")) - 10))))
+    case("a checked_at two seconds off the call is the clock of two machines", 0, ["**PASS** " + V_TIME], ["FAIL"],
+         mutate=lambda d: (jdata(d, "ready-inv-1", lambda x: x.update(checked_at=iso(float(slurp(d, "ready-inv-1.t1")) + 2))), jdata(d, "ready-inv-2", lambda x: x.update(checked_at=iso(float(slurp(d, "ready-inv-2.t0")) - 2)))))
     case("a checked_at with fractions of a second and an offset is read", 0, ["**PASS** " + V_TIME], ["FAIL"],
          mutate=lambda d: [jdata(d, "ready-inv-1", lambda x: x.update(checked_at=datetime.fromtimestamp(float(slurp(d, "ready-inv-1.t0")) + 0.5, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.123456+00:00")))])
     fails("a call that took 30 s and answered", V_BUDGET, lambda d: api(d, "step-held-dirty", t0=float(slurp(d, "step-held-dirty.t0")), secs=30.0, body=json.loads(slurp(d, "step-held-dirty.json"))))
@@ -867,6 +785,9 @@ if not os.environ.get("GUEST_ONLY"):
          mutate=lambda d: (ledit(d, "listen-ctl-b.txt", lambda t: t + "tcp 0.0.0.0:9999\n"), ledit(d, "listen-after.txt", lambda t: t + "tcp 0.0.0.0:9999\n")))
     invalid("invariance: no listening port recorded", "listen-before.txt is missing or empty", lambda d: put(d, "listen-before.txt", ""), silent=[V_INV_PORTS])
 
+    case("invariance: the verdict says which trees it looked at, and that /tmp and /run are not among them", 0,
+         ["**PASS** " + V_INV_FILES + ": %d paths looked at (these six trees only, not /tmp, /run or the rest of the machine)" % len(TREE_ROWS), "## What the invariance window looks at", "/etc, /var/lib/dpkg, /var/lib/apt, /var/cache/apt, /var/lib/casaos, /var/log/casaos",
+          "It does not look at /tmp, /run, /var/tmp, /home, /root, /proc or /sys"], ["FAIL"])
     # ---- the call under dpkg's lock ----
     fails("lock: the call that waited for the lock and gave up", V_LOCK_FAST, lambda d: api(d, "ready-inv-lock", code=0, curl=28, raw="", secs=45.0), extra=["curl gave up"])
     fails("lock: the call that took 40 s and answered", V_LOCK_FAST, lambda d: api(d, "ready-inv-lock", t0=float(slurp(d, "ready-inv-lock.t0")), secs=40.0, body=json.loads(slurp(d, "ready-inv-lock.json"))))
@@ -890,8 +811,9 @@ if not os.environ.get("GUEST_ONLY"):
     fails("clean: a state that is not ready or attention", V_CLEAN_STATE, lambda d: jdata(d, "ready-inv-1", lambda x: x.update(state="unsupported")))
     fails("clean: the four answers do not agree (a warning that comes and goes)", V_CLEAN_AGREE, lambda d: drop_check(d, "ready-inv-3", "backup_age"), extra=["backup_age"])
     fails("clean: the four answers do not agree (a severity that changed)", V_CLEAN_AGREE, lambda d: set_sev(d, "ready-base", "docker_update_pending", "info"), extra=["docker_update_pending"])
+    fails("clean: the four answers do not agree (a warning that is an info in one of them)", V_CLEAN_AGREE, lambda d: set_sev(d, "ready-inv-2", "backup_age", "info"), extra=["backup_age"])
     fails("clean: Docker's source is not named in the third-party warning", V_CLEAN_DOCKER,
-          lambda d: [jdata(d, n, lambda x: [c.update(title="Third-party sources", detail="one file") for c in x["checks"] if c["code"] == "sources_third_party"]) for n in ("ready-base",)])
+          lambda d: [jdata(d, n, lambda x: [c.update(title="Third-party sources", detail="one file", data={"unknown": False, "files": ["x.list"]}) for c in x["checks"] if c["code"] == "sources_third_party"]) for n in ("ready-base",)])
     fails("clean: the third-party source is only an info", V_CLEAN_DOCKER, lambda d: set_sev(d, "ready-base", "sources_third_party", "info"))
     fails("clean: no third-party check at all", V_CLEAN_DOCKER, lambda d: drop_check(d, "ready-base", "sources_third_party"))
     fails("clean: no reminder to take a snapshot", V_CLEAN_SNAPSHOT, lambda d: drop_check(d, "ready-base", "snapshot_reminder"))
@@ -902,7 +824,7 @@ if not os.environ.get("GUEST_ONLY"):
     for leg_ in ("d11", "u22"):
         for s in steps_of(leg_):
             sid, code_, sev_ = s["id"], s["code"], s["sev"]
-            if leg_ == "u22" and s["id"] not in ("held", "sources_third_party", "foreign_arch_empty", "containers_policy", "busy_lock", "disk_boot", "docker_down"):
+            if leg_ == "u22" and s["id"] not in ("held", "sources_alias", "sources_third_party", "foreign_arch_empty", "containers_policy", "busy_lock", "disk_boot", "docker_down"):
                 continue
             tag = "(%s)" % leg_
             D, C = "step-%s-dirty" % sid, "step-%s-clean" % sid
@@ -915,8 +837,9 @@ if not os.environ.get("GUEST_ONLY"):
                 fails("step %s: the code fires with another severity (%s instead of %s) %s" % (sid, other, sev_, tag), f_fires(s), lambda d, D=D, c=code_, o=other: set_sev(d, D, c, o), leg=leg_)
                 case("step %s: the code fires with the exact severity %s" % (sid, tag), 0, ["**PASS** " + f_fires(s)], ["FAIL"], leg=leg_)
             if s["mode"] == "names" or s["needle"]:
+                # the name is in the data (the file, the container), in the title or in the detail: it is taken out of all of them
                 fails("step %s: the code fires and does not name %s %s" % (sid, s["needle"], tag), f_fires(s),
-                      lambda d, D=D, c=code_, n=s["needle"]: jdata(d, D, lambda x: [cc.update(detail=cc["detail"].replace(n, "x"), title=cc["title"].replace(n, "x")) for cc in x["checks"] if cc["code"] == c]), leg=leg_)
+                      lambda d, D=D, c=code_, n=s["needle"]: jdata(d, D, lambda x: [cc.update(json.loads(json.dumps(cc).replace(n, "x"))) for cc in x["checks"] if cc["code"] == c]), leg=leg_)
             for fcode in s["forbid"]:
                 fails("step %s: %s fires where it must not %s" % (sid, fcode, tag), f_forbid(s, fcode), lambda d, D=D, c=fcode: make(d, D, c, "refuse"), leg=leg_)
             fails("step %s: a check nobody expected fires with it %s" % (sid, tag), f_alone(s), lambda d, D=D: make(d, D, "bootloader", "refuse"), leg=leg_, extra=["also fires: bootloader"])
@@ -937,6 +860,22 @@ if not os.environ.get("GUEST_ONLY"):
             invalid("step %s: the dirty call left no answer %s" % (sid, tag), "no answer was recorded for step-%s-dirty" % sid, lambda d, D=D: remove(d, D + ".code"), leg=leg_, silent=[f_fires(s)])
             invalid("step %s: the call after the undo left no answer %s" % (sid, tag), "no answer was recorded for step-%s-clean" % sid, lambda d, C=C: remove(d, C + ".code"), leg=leg_, silent=[f_undone(s)])
             invalid("step %s: skipped on a system where it exists %s" % (sid, tag), "step %s: the guest skipped it" % sid, lambda d, sid=sid: put(d, "step-%s.skipped" % sid, "no reason\n"), leg=leg_)
+    fails("step held: a warning of the clean box that is a refuse with the dirt is a check that fires with it", f_alone(STEP_BY_ID["held"]), lambda d: make(d, "step-held-dirty", "sources_third_party", "refuse"),
+          extra=["also fires: sources_third_party"])
+    fails("step held: a warning of the clean box that is a refuse with the dirt (`could not find out`) is one too", f_alone(STEP_BY_ID["held"]),
+          lambda d: [make(d, "step-held-dirty", "docker_update_pending", "refuse"), jdata(d, "step-held-dirty", lambda x: [c["data"].update(unknown=True) for c in x["checks"] if c["code"] == "docker_update_pending"])],
+          extra=["also fires: docker_update_pending"])
+    case("step held_docker: a warning of the clean box that becomes an info with the dirt is not held against it", 0, ["**PASS** " + f_alone(STEP_BY_ID["held_docker"])], ["FAIL"],
+         mutate=lambda d: set_sev(d, "step-held_docker-dirty", "backup_age", "info"))
+    fails("step held: after the undo a warning is an info (the same codes, another severity)", f_undone(STEP_BY_ID["held"]), lambda d: set_sev(d, "step-held-clean", "backup_age", "info"))
+    fails("step held: after the undo a warning is a refuse (the same codes, another severity)", f_undone(STEP_BY_ID["held"]), lambda d: set_sev(d, "step-held-clean", "backup_age", "refuse"))
+    fails("step fstab_unresolved: fstab_network fires with it (no tool is asked, nothing else is allowed to)", f_alone(STEP_BY_ID["fstab_unresolved"]), lambda d: make(d, "step-fstab_unresolved-dirty", "fstab_network", "warn"),
+          extra=["also fires: fstab_network"])
+    fails("step apps: backup_age that becomes a refuse with it is one that fires", f_alone(STEP_BY_ID["apps"]), lambda d: make(d, "step-apps-dirty", "backup_age", "refuse"), extra=["also fires: backup_age"])
+    fails("step docker_down: containers_policy fires with it (the daemon is not asked when it does not run)", f_alone(STEP_BY_ID["docker_down"]), lambda d: make(d, "step-docker_down-dirty", "containers_policy", "refuse"),
+          extra=["also fires: containers_policy"])
+    check("the report knows which steps may bring a check with them: only the disk steps, whose dirt is on the filesystem of /", {s["id"]: tuple(s["extras"]) for s in STEPS if s["extras"]} == {"disk_boot": ("disk_root", "disk_archives")},
+          {s["id"]: s["extras"] for s in STEPS if s["extras"]})
     # a step that is untestable because the clean box already fires its code is not a pass and not a fail
     case("step reboot_first: a clean box that already has the code cannot tell it from the dirt: NOT TESTABLE, and the clean box is a FAIL of its own", 1,
          ["**NOT TESTABLE** " + f_fires(STEP_BY_ID["reboot_first"]), "**FAIL** " + V_CLEAN_NO_REFUSE], ["INVALID"],
@@ -947,11 +886,10 @@ if not os.environ.get("GUEST_ONLY"):
          ["INVALID RUN", "step held: the undo failed", "not judged: the undo of step held failed"], ["**FAIL** step", "**PASS** step broken_dpkg"],
          mutate=lambda d: [put(d, "step-held.undo-rc", "1\n"), make(d, "step-held-clean", "held", "refuse"), make(d, "step-broken_dpkg-dirty", "held", "refuse"), make(d, "step-broken_dpkg-clean", "held", "refuse")])
     invalid("step sources_alias: skipped on Debian, where the alias exists", "step sources_alias: the guest skipped it", lambda d: put(d, "step-sources_alias.skipped", "x\n"))
-    invalid("step sources_alias: run on Ubuntu, where the alias does not exist", "step sources_alias: the guest ran it, and it does not exist on this system",
-            lambda d: [remove(d, "step-sources_alias.skipped"), put(d, "step-sources_alias.dirty-rc", "0\n"), put(d, "step-sources_alias.undo-rc", "0\n"), put(d, "step-sources_alias.undone", "yes\n")], leg="u22")
+    invalid("step sources_alias: skipped on Ubuntu, where the alias exists too (devel)", "step sources_alias: the guest skipped it", lambda d: put(d, "step-sources_alias.skipped", "x\n"), leg="u22")
     case("step held: whether the answer names libc6 is a fact in the table", 0, ["(names libc6: yes)"], ["FAIL"])
     case("step held: an answer that does not name libc6 passes, and the table says so", 0, ["(names libc6: no)", "**PASS** " + f_fires(STEP_BY_ID["held"])], ["FAIL"],
-         mutate=lambda d: jdata(d, "step-held-dirty", lambda x: [c.update(title="Packages are on hold", detail="some packages") for c in x["checks"] if c["code"] == "held"]))
+         mutate=lambda d: jdata(d, "step-held-dirty", lambda x: [c.update(title="Packages are on hold", detail="some packages", data={"unknown": False, "count": 1}) for c in x["checks"] if c["code"] == "held"]))
 
     # ---- what the run says of itself ----
     invalid("a guest that stopped early says why", "the guest stopped early: the installer failed", lambda d: put(d, "aborted", "the installer failed\n"))
@@ -1013,27 +951,23 @@ check("the guest runs the steps the report judges, in the same order", guest_ids
 check("every step has its dirt, its undo and its check that the undo held", all(("dirty_%s() " % i in guest_text and "undo_%s() " % i in guest_text and "undone_%s() " % i in guest_text) for i in guest_ids),
       [i for i in guest_ids if not all(("%s_%s() " % (p, i)) in guest_text for p in ("dirty", "undo", "undone"))])
 skip_ids = re.findall(r"^skip_(\w+)\(\)", guest_text, re.M)
-check("the guest skips exactly the steps that the report says exist on one family only", skip_ids == [s["id"] for s in STEPS if s["only"] is not None], skip_ids)
+check("the guest skips no step: every step of the matrix exists on both systems", skip_ids == [], skip_ids)
+check("the guest waits for AppManagement's own check of the images, and says why when it did not come, before the control and the window",
+      re.search(r'    wait_image_check 240 \|\| not_proven "[^"]*IMAGE_UPDATES[^"]*"\n    marker prepare_done\n[^\n]*\n    sleep 20\n\n    invariance\n', guest_text) is not None, "")
+check("the file the wait looks for is the one AppManagement renames into /var/lib/casaos", 'IMAGE_UPDATES="${IMAGE_UPDATES:-/var/lib/casaos/image_updates.json}"' in guest_text, "")
 check("the legs of the guest, of the report and of the workflow's file are the same", True)
 
 if have_bash() and not os.environ.get("REPORT_ONLY"):
     # fakes of the tools the guest script calls, over a box that lives in files ($FAKE); the model above is the core behind the fake curl
     FAKECORE = r'''
-import json, os, subprocess, sys, time
+import json, os, re, subprocess, sys, time
 from datetime import datetime, timezone
-src = open(os.path.join(os.environ["FAKE"], "model.py")).read()
-M = {}
-exec(src, M)
+M = {"FIXTURES_DIR": os.environ["FIXTURES"]}
+exec(open(os.path.join(os.environ["FAKE"], "model.py")).read(), M)
 F = os.environ["FAKE"]
 path, out = "/" + sys.argv[1], sys.argv[2]
 leg = os.environ["LEG"]
-
-
-def rd(name):
-    try:
-        return open(os.path.join(F, name)).read().split("\n")
-    except OSError:
-        return []
+L = json.loads(os.environ["LEG_JSON"])[leg]
 
 
 def lines(path):
@@ -1062,57 +996,85 @@ if path == "/v1/sys/version/current":
 if path == "/v2/app_management/categories":
     reply(200, {"success": 200, "data": []}) if active("casaos-app-management.service") else reply(0, "", 7)
 if path == "/v1/sys/os":
-    L = M["LEGS"][leg]
     reply(200, {"success": 200, "message": "ok", "data": {"id": L["family"], "version_id": L["version"], "codename": L["codename"], "pretty_name": L["pretty"], "arch": "amd64", "known": True,
-                                                         "next": {"id": L["to"][0], "version_id": L["to"][1], "codename": L["to"][2], "state": "report"}}})
+                                                         "next": {"id": L["family"], "version_id": L["to_version"], "codename": L["to_codename"], "state": "report"}}})
 if path != "/v1/sys/os/readiness":
     reply(404, {"success": 404})
 if mode == "route404":
     reply(404, {"message": "no"})
-box = M["clean_box"]()
-box["holds"] = [x for x in lines(os.path.join(F, "holds"))]
+
+# which step of the matrix has dirtied the box (the fixtures are of one dirt at a time): read from the files and the state the stand-in tools keep
+steps = []
+holds = lines(os.path.join(F, "holds"))
+if any(h not in M["DOCKER_FAMILY"] for h in holds):
+    steps.append("held")
+if any(h in M["DOCKER_FAMILY"] for h in holds):
+    steps.append("held_docker")
 upd = os.path.dirname(os.environ["DPKG_JOURNAL"])
-box["journal"] = any(n.isdigit() for n in (os.listdir(upd) if os.path.isdir(upd) else []))
+if any(n.isdigit() for n in (os.listdir(upd) if os.path.isdir(upd) else [])):
+    steps.append("broken_dpkg")
 sd = os.path.join(os.environ["APT_DIR"], "sources.list.d")
+FILES = {"osr-cdrom.list": "sources_cdrom", "osr-file.list": "sources_file", "osr-alias.list": "sources_alias", "osr-proposed.list": "sources_proposed", "osr-third-party.list": "sources_third_party"}
 for n in sorted(os.listdir(sd) if os.path.isdir(sd) else []):
-    for line in lines(os.path.join(sd, n)):
-        if not line.startswith("#"):
-            box["sources"].append((n, line))
+    if n in FILES and lines(os.path.join(sd, n)):
+        steps.append(FILES[n])
 ac = os.path.join(os.environ["APT_DIR"], "apt.conf.d")
-box["default_release"] = any("Default-Release" in open(os.path.join(ac, n)).read() for n in (os.listdir(ac) if os.path.isdir(ac) else []))
+release = None
+for n in (os.listdir(ac) if os.path.isdir(ac) else []):
+    m = re.search(r'Default-Release\s+"([^"]*)"', open(os.path.join(ac, n)).read())
+    release = m.group(1) if m else release
+if release is not None:
+    steps.append("sources_pin")
 pr = os.path.join(os.environ["APT_DIR"], "preferences.d")
-box["pins"] = any("Pin:" in open(os.path.join(pr, n)).read() for n in (os.listdir(pr) if os.path.isdir(pr) else []))
-box["foreign_pkgs"] = [l.split(":")[0] for l in lines(os.path.join(F, "pkgs")) if not l.endswith(":amd64")]
-box["reboot"] = os.path.exists(os.environ["REBOOT_REQUIRED"])
+if any("Pin:" in open(os.path.join(pr, n)).read() for n in (os.listdir(pr) if os.path.isdir(pr) else [])):
+    steps.append("sources_pin_prefs")
+if [l for l in lines(os.path.join(F, "pkgs")) if not l.endswith(":amd64")]:
+    steps.append("foreign_arch")
+elif lines(os.path.join(F, "archs")):
+    steps.append("foreign_arch_empty")
+if os.path.exists(os.environ["REBOOT_REQUIRED"]):
+    steps.append("reboot_first")
 if os.environ.get("HAVE_FCNTL") == "1":
-    box["lock"] = subprocess.run([sys.executable, os.path.join(os.environ["LIBDIR"], "lockprobe.py"), os.environ["DPKG_LOCK"]], capture_output=True, text=True).stdout.strip() == "held"
+    lock = subprocess.run([sys.executable, os.path.join(os.environ["LIBDIR"], "lockprobe.py"), os.environ["DPKG_LOCK"]], capture_output=True, text=True).stdout.strip() == "held"
 else:
-    box["lock"] = os.path.exists(os.path.join(F, "lock.held"))
-box["unit_busy"] = active("casaos-package-update.service")
-box["fstab_bad"] = any(l.startswith("UUID=") and "nofail" not in l and "root-uuid" not in l for l in lines(os.environ["FSTAB"]))
-box["containers"] = [dict(zip(("name", "policy", "network", "ports"), l.split("|"))) for l in lines(os.path.join(F, "containers"))]
+    lock = os.path.exists(os.path.join(F, "lock.held"))
+if lock:
+    steps.append("busy_lock")
+if active("casaos-package-update.service"):
+    steps.append("busy_unit")
+if any(l.startswith("UUID=") and "nofail" not in l and "root-uuid" not in l for l in lines(os.environ["FSTAB"])):
+    steps.append("fstab_unresolved")
+names = [l.split("|")[0] for l in lines(os.path.join(F, "containers"))]
+for name, step in (("p-no", "containers_policy"), ("p-hostnet", "containers_ports_host"), ("p-pub53", "containers_ports_publish")):
+    if name in names:
+        steps.append(step)
 fill = os.path.join(os.environ["BOOT_DIR"], "osr-fill")
-box["fill"] = int(open(fill).read().strip() or 0) if os.path.exists(fill) else 0
-box["am_up"] = active("casaos-app-management.service")
-box["docker_up"] = active("docker.service")
-now = time.time()
-at = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+if os.path.exists(fill) and int(open(fill).read().strip() or 0) > 0:
+    steps.append("disk_boot")
+if not active("casaos-app-management.service"):
+    steps.append("apps")
+if not active("docker.service"):
+    steps.append("docker_down")
+if len(steps) > 1:
+    reply(500, {"success": 500, "message": "the stand-in core knows one dirt at a time: %s" % ", ".join(steps)})
+at = datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 # the ways of being wrong
 w = os.environ.get("FAKE_CORE_WRITE")
 if w and mode == "write":
     open(w, "a").write("x")
 if mode == "restart":
-    open(os.path.join(F, "inv", os.environ["FAKE_CORE_UNIT"]), "w").write("restarted-%d" % now)
+    open(os.path.join(F, "inv", os.environ["FAKE_CORE_UNIT"]), "w").write("restarted-%d" % time.time())
 if mode == "listen":
     open(os.path.join(F, "ports"), "a").write("tcp 0.0.0.0:9999\n")
-if mode == "hang" and box["lock"]:
+if mode == "hang" and lock:
     reply(0, "", 28)
 if mode == "hang500":
     reply(500, {"success": 500, "message": "boom"})
-dirty = bool(box["holds"] or box["journal"] or any(f.startswith("osr-") for f, _ in box["sources"]) or box["default_release"] or box["pins"] or box["foreign_pkgs"] or box["reboot"] or box["lock"]
-             or box["unit_busy"] or box["fstab_bad"] or len(box["containers"]) != 4 or box["fill"] or not box["am_up"] or not box["docker_up"])
-wrong = "extra:" + os.environ["FAKE_CORE_CODE"] if mode == "extra" and dirty else "nobusy" if mode == "nobusy" else ""
-body = M["answer"](box, leg, at, wrong)
+wrong = "extra:" + os.environ["FAKE_CORE_CODE"] if mode == "extra" and steps else "nobusy" if mode == "nobusy" else ""
+# a Default-Release that no source offers makes apt fail, and the core with it
+if steps == ["sources_pin"] and release != L["codename"]:
+    wrong = "apt_fails"
+body = M["answer"](steps[0] if steps else "", leg, at, wrong)
 if mode == "leak":
     body["data"]["text"] += "host %s\n" % open(os.path.join(F, "hostname")).read().strip()
 reply(200, body)
@@ -1143,7 +1105,9 @@ case "$cmd" in
   start) for u in "$@"; do case "$u" in -*) ;; *) : >"$FAKE/active/$u" ;; esac; done ;;
   is-active) [ -e "$FAKE/active/$1" ] && echo active || { echo inactive; exit 3; } ;;
   is-system-running) echo running ;;
-  list-units) cat "$FAKE/units.list" ;;
+  list-units)
+    all=""; for a in "$@"; do [ "$a" != "--all" ] || all=1; done
+    while read -r u l a s rest; do [ -n "$all" ] || [ "$a" = active ] || continue; echo "$u $l $a $s $rest"; done <"$FAKE/units.list" ;;
   list-timers) printf 'Mon 2026-10-12 00:00:00 UTC 3h left Sun 2026-10-11 00:00:12 UTC 20h ago logrotate.timer logrotate.service\n' ;;
   show)
     while [ $# -gt 0 ]; do
@@ -1171,11 +1135,30 @@ case "$cmd" in
   run)
     name=""; policy="no"; net="bridge"; ports=""
     while [ $# -gt 0 ]; do case "$1" in --name) name="$2"; shift 2 ;; --restart) policy="$2"; shift 2 ;; --network) net="$2"; shift 2 ;;
-      -p) ports="${2%%:*}"; shift 2 ;; busybox|nginx:alpine) break ;; *) shift ;; esac; done
+      -p) spec="$2"; shift 2; ip=""; hp="${spec%%:*}"
+          case "$spec" in *:*:*) ip="${spec%%:*}"; rest="${spec#*:}"; hp="${rest%%:*}" ;; esac
+          # a port that something of the box listens on, on that address or on every one of them, cannot be bound again: Docker says so, and exits 125
+          while read -r proto addr; do
+            [ "$proto" = tcp ] && [ "${addr##*:}" = "$hp" ] || continue
+            case "${addr%:*}:$ip" in "*:"*|"0.0.0.0:"*|*":"|*":0.0.0.0"|"$ip:$ip") echo "docker: Error response from daemon: failed to bind host port for $spec: address already in use." >&2; exit 125 ;; esac
+          done <"$FAKE/ports"
+          ports="$hp" ;;
+      busybox|nginx:alpine) break ;; *) shift ;; esac; done
     echo "$name|$policy|$net|$ports" >>"$FAKE/containers"; echo "id-$name" ;;
   rm) shift; n="$1"; grep -v "^$n|" "$FAKE/containers" >"$FAKE/containers.new"; mv "$FAKE/containers.new" "$FAKE/containers" ;;
   *) ;;
 esac
+''',
+        "apt-config": r'''#!/bin/sh
+# apt-config dump: the Default-Release of apt.conf.d, and what apt does with one that no source of the box offers: it fails, as every command that opens its cache does
+rel="$(cat "$APT_DIR"/apt.conf.d/* 2>/dev/null | sed -n 's/^APT::Default-Release "\([^"]*\)";$/\1/p' | sed -n '$p')"
+if [ -n "$rel" ]; then
+  if ! cat "$APT_DIR/sources.list" "$APT_DIR"/sources.list.d/* 2>/dev/null | grep -Eq "^deb[[:space:]].*[[:space:]]$rel(-[a-z-]+)?[[:space:]]"; then
+    echo "E: The value '$rel' is invalid for APT::Default-Release as such a release is not available in the sources" >&2
+    exit 100
+  fi
+  echo "APT::Default-Release \"$rel\";"
+fi
 ''',
         "apt-mark": r'''#!/bin/sh
 case "$1" in
@@ -1239,7 +1222,6 @@ esac
         "apt-get": "#!/bin/sh\necho 'apt 2.2.4 (amd64)'\n",
     }
     HAVE_FCNTL = subprocess.run([sys.executable, "-c", "import fcntl"], capture_output=True).returncode == 0
-    MODEL_PY = MODEL_SRC
 
     def sandbox(tmp):
         """the box of the guest in a directory of its own: the fake tools in front of PATH, the files the guest script's variables point at, the state the tools keep"""
@@ -1251,7 +1233,7 @@ esac
             with open(j("fake", name), "w", newline="\n") as f:
                 f.write(text)
             os.chmod(j("fake", name), 0o755)
-        for name, text in (("fakecore.py", FAKECORE), ("model.py", MODEL_PY)):
+        for name, text in (("fakecore.py", FAKECORE), ("model.py", ANSWERS_SRC)):
             with open(j("fake", name), "w", newline="\n") as f:
                 f.write(text)
         for unit in list(UNITS) + ["docker.socket", "containerd.service"]:
@@ -1260,7 +1242,7 @@ esac
         with open(j("fake", "units.list"), "w", newline="\n") as f:
             f.write("".join("%s loaded %s %s x\n" % (u, v[0], v[1]) for u, v in sorted(UNITS.items())))
         for name, text in (("holds", ""), ("archs", ""), ("pkgs", ""), ("ports", "\n".join(PORTS) + "\n"), ("hostname", HOST + "\n"),
-                           ("containers", "".join("%s|%s|%s|%s\n" % (c["name"], c["policy"], c["network"], c["ports"]) for c in MODEL["WITNESSES"]))):
+                           ("containers", "".join("%s|%s|%s|%s\n" % (c["name"], c["policy"], c["network"], c["ports"]) for c in WITNESSES))):
             with open(j("fake", name), "w", newline="\n") as f:
                 f.write(text)
         with open(j("root/etc/fstab"), "w", newline="\n") as f:
@@ -1275,6 +1257,7 @@ esac
         env = dict(ENV, PATH=j("fake") + os.pathsep + os.environ["PATH"], FAKE=j("fake"), LEG="d11", HAVE_FCNTL="1" if HAVE_FCNTL else "0", APT_DIR=j("root/etc/apt"), FSTAB=j("root/etc/fstab"),
                    BOOT_DIR=j("root/boot"), OS_RELEASE=j("root/etc/os-release"), DPKG_JOURNAL=j("root/var/lib/dpkg/updates/0001"), DPKG_LOCK=j("root/var/lib/dpkg/lock-frontend"),
                    REBOOT_REQUIRED=j("root/run/reboot-required"), INTERNAL_SECRET_FILE=j("root/run/casaos/internal.secret"), LIBDIR=j("lib"), AUTH_DIR=j("auth"), OUT=j("out"),
+                   IMAGE_UPDATES=j("root/var/lib/casaos/image_updates.json"), FIXTURES=FIXTURES.replace("\\", "/"), LEG_JSON=json.dumps(LEG),
                    INV_ROOT=j("root"), INV_TREES=j("root/etc"))
         return env, j
 
@@ -1391,12 +1374,18 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
               files={"out/rc1": "0\n", "out/line": want_line + "\n", "out/left": "docker.list\n", "out/rc2": "0\n"})
     gcase("sources_proposed on Ubuntu: jammy-proposed, with universe", 'FAMILY=ubuntu; FROM_CODENAME=jammy; in_subshell dirty_sources_proposed; cp "$APT_DIR/sources.list.d/osr-proposed.list" "$OUT/line"',
           files={"out/line": "deb http://archive.ubuntu.com/ubuntu jammy-proposed main universe\n"})
-    gcase("sources_alias: skipped on Ubuntu with its reason, and not on Debian", 'FAMILY=ubuntu; skip_sources_alias >"$OUT/u"; FAMILY=debian; skip_sources_alias >"$OUT/d"',
-          files={"out/u": "Ubuntu's archive has no stable, oldstable or testing alias to name in place of a codename\n", "out/d": ""})
-    gcase("sources_pin: a Default-Release naming the target release, and a pin of the preferences naming it, and both undone", 'in_subshell dirty_sources_pin; in_subshell dirty_sources_pin_prefs; cp "$APT_DIR/apt.conf.d/99osr-default-release" "$OUT/dr"; '
+    gcase("sources_alias on Ubuntu: `devel`, an alias of Ubuntu's archive (dists/devel is there), and the file goes with the undo", 'FAMILY=ubuntu; in_subshell dirty_sources_alias; echo "$STATUS" >"$OUT/rc1"; cp "$APT_DIR/sources.list.d/osr-alias.list" "$OUT/line"; in_subshell undo_sources_alias; in_subshell undone_sources_alias; echo "$STATUS" >"$OUT/rc2"',
+          files={"out/rc1": "0\n", "out/line": "deb http://archive.ubuntu.com/ubuntu devel main\n", "out/rc2": "0\n"})
+    gcase("sources_alias on Debian: `stable`", 'FAMILY=debian; in_subshell dirty_sources_alias; cp "$APT_DIR/sources.list.d/osr-alias.list" "$OUT/line"', files={"out/line": "deb http://deb.debian.org/debian stable main\n"})
+    gcase("sources_pin: a Default-Release naming the box's own release, and a pin of the preferences naming the target, and both undone", 'in_subshell dirty_sources_pin; in_subshell dirty_sources_pin_prefs; cp "$APT_DIR/apt.conf.d/99osr-default-release" "$OUT/dr"; '
           'cp "$APT_DIR/preferences.d/99osr-pin" "$OUT/pin"; in_subshell undo_sources_pin; in_subshell undo_sources_pin_prefs; ls "$APT_DIR/apt.conf.d" "$APT_DIR/preferences.d" >"$OUT/left"',
-          files={"out/dr": 'APT::Default-Release "bookworm";\n', "out/pin": "Package: *\nPin: release n=bookworm\nPin-Priority: 100\n", "out/left": "*"})
-    gcase("sources_pin on Ubuntu names noble", 'TO_CODENAME=noble; in_subshell dirty_sources_pin; cp "$APT_DIR/apt.conf.d/99osr-default-release" "$OUT/dr"', files={"out/dr": 'APT::Default-Release "noble";\n'})
+          files={"out/dr": 'APT::Default-Release "bullseye";\n', "out/pin": "Package: *\nPin: release n=bookworm\nPin-Priority: 100\n", "out/left": "*"})
+    gcase("sources_pin on Ubuntu names jammy", 'FROM_CODENAME=jammy; in_subshell dirty_sources_pin; cp "$APT_DIR/apt.conf.d/99osr-default-release" "$OUT/dr"', files={"out/dr": 'APT::Default-Release "jammy";\n'})
+    gcase("sources_pin: a Default-Release that the sources of the box offer is one apt does not fail on (the stand-in apt fails as apt does on one that no source offers)",
+          'in_subshell dirty_sources_pin; apt-config dump >"$OUT/dump" 2>"$OUT/err"; echo "$?" >"$OUT/rc"', files={"out/rc": "0\n", "out/dump": 'APT::Default-Release "bullseye";\n', "out/err": ""})
+    gcase("the stand-in apt fails, as apt does, on the Default-Release of the target (which no source of the box carries before the hop): status 100, in every command that opens its cache",
+          'printf \'APT::Default-Release "bookworm";\\n\' >"$APT_DIR/apt.conf.d/99osr-default-release"; apt-config dump >"$OUT/dump" 2>"$OUT/err"; echo "$?" >"$OUT/rc"',
+          files={"out/rc": "100\n", "out/dump": "", "out/err": "E: The value 'bookworm' is invalid for APT::Default-Release*"})
     gcase("broken_dpkg: the file is made empty, with a name of digits only (apt counts it as an unfinished journal), and the undo takes it away",
           'in_subshell dirty_broken_dpkg; echo "$STATUS" >"$OUT/rc1"; basename "$DPKG_JOURNAL" >"$OUT/name"; [ -e "$DPKG_JOURNAL" ] && echo there >"$OUT/there"; in_subshell undo_broken_dpkg; [ ! -e "$DPKG_JOURNAL" ] && echo gone >"$OUT/gone"',
           files={"out/rc1": "0\n", "out/name": "0001\n", "out/there": "there\n", "out/gone": "gone\n"})
@@ -1408,10 +1397,18 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
           files={"out/rc1": "0\n", "out/orig": "UUID=root-uuid / ext4 defaults 0 1\n", "out/dirty": "UUID=root-uuid / ext4 defaults 0 1\nUUID=0a1b2c3d-0000-4000-8000-000000000001 /mnt/osr-missing ext4 defaults 0 2\n",
                  "out/back": "UUID=root-uuid / ext4 defaults 0 1\n", "out/rc2": "0\n"})
     gcase("fstab_unresolved: a copy of the original that is already there is not overwritten (a dirt that was not undone)", 'echo old >"$AUTH_DIR/fstab.orig"; in_subshell dirty_fstab_unresolved; echo "$STATUS" >"$OUT/rc1"', files={"out/rc1": "1\n"})
-    gcase("containers_policy, containers_ports_host, containers_ports_publish: the containers that dirty the box, and their removal", 'in_subshell dirty_containers_policy; in_subshell dirty_containers_ports_host; in_subshell dirty_containers_ports_publish; '
+    gcase("containers_policy, containers_ports_host, containers_ports_publish: the containers that dirty the box (the last on port 53 of a loopback alias), and their removal", 'in_subshell dirty_containers_policy; in_subshell dirty_containers_ports_host; in_subshell dirty_containers_ports_publish; echo "$STATUS" >"$OUT/rcp"; '
           'cat "$FAKE/containers" >"$OUT/c"; in_subshell undo_containers_policy; in_subshell undo_containers_ports_host; in_subshell undo_containers_ports_publish; cat "$FAKE/containers" >"$OUT/c2"; in_subshell undone_containers_policy; echo "$STATUS" >"$OUT/rc"',
-          files={"out/c": "p-always|always|bridge|\np-unless-stopped|unless-stopped|bridge|\np-db|unless-stopped|bridge|\np-web|unless-stopped|bridge|18081\np-no|no|bridge|\np-hostnet|unless-stopped|host|\np-pub443|unless-stopped|bridge|443\n",
-                 "out/c2": "p-always|always|bridge|\np-unless-stopped|unless-stopped|bridge|\np-db|unless-stopped|bridge|\np-web|unless-stopped|bridge|18081\n", "out/rc": "0\n"})
+          files={"out/c": "p-always|always|bridge|\np-unless-stopped|unless-stopped|bridge|\np-db|unless-stopped|bridge|\np-web|unless-stopped|bridge|18081\np-no|no|bridge|\np-hostnet|unless-stopped|host|\np-pub53|unless-stopped|bridge|53\n",
+                 "out/c2": "p-always|always|bridge|\np-unless-stopped|unless-stopped|bridge|\np-db|unless-stopped|bridge|\np-web|unless-stopped|bridge|18081\n", "out/rc": "0\n", "out/rcp": "0\n"})
+    gcase("the stand-in Docker cannot publish a port the box listens on, as Docker cannot: not 443 or 80 (the gateway), not 53 on every address (systemd-resolved is on 127.0.0.53), and can on 127.0.0.2:53",
+          'docker run -d --name a -p 443:80 nginx:alpine 2>/dev/null; echo "$?" >"$OUT/a"; docker run -d --name b -p 80:80 nginx:alpine 2>/dev/null; echo "$?" >"$OUT/b"; docker run -d --name c -p 0.0.0.0:53:80 nginx:alpine 2>/dev/null; echo "$?" >"$OUT/c"; '
+          'docker run -d --name d -p 53:80 nginx:alpine 2>/dev/null; echo "$?" >"$OUT/d"; docker run -d --name e -p 127.0.0.2:53:80 nginx:alpine >/dev/null; echo "$?" >"$OUT/e"; docker run -d --name f -p 127.0.0.1:41873:80 nginx:alpine 2>/dev/null; echo "$?" >"$OUT/f"; '
+          'docker run -d --name g -p 127.0.0.2:18081:80 nginx:alpine 2>/dev/null; echo "$?" >"$OUT/g"; docker run -d --name h -p 8080:80 nginx:alpine >/dev/null; echo "$?" >"$OUT/h"; cat "$FAKE/containers" >"$OUT/c1"',
+          files={"out/a": "125\n", "out/b": "125\n", "out/c": "125\n", "out/d": "125\n", "out/e": "0\n", "out/f": "125\n", "out/g": "125\n", "out/h": "0\n",
+                 "out/c1": "p-always|always|bridge|\np-unless-stopped|unless-stopped|bridge|\np-db|unless-stopped|bridge|\np-web|unless-stopped|bridge|18081\ne|no|bridge|53\nh|no|bridge|8080\n"})
+    gcase("containers_ports_publish: the dirt is made (status 0) where the gateway holds 80 and 443, and nothing is bound twice", 'in_subshell dirty_containers_ports_publish; echo "$STATUS" >"$OUT/rc"; docker ps -aq --filter name=^p-pub53$ >"$OUT/id"',
+          files={"out/rc": "0\n", "out/id": "id-p-pub53\n"})
     gcase("busy_unit: a unit that holds the package update's name, stopped by the undo", 'in_subshell dirty_busy_unit; echo "$STATUS" >"$OUT/rc1"; in_subshell undone_busy_unit; echo "$STATUS" >"$OUT/d"; in_subshell undo_busy_unit; in_subshell undone_busy_unit; echo "$STATUS" >"$OUT/u"',
           files={"out/rc1": "0\n", "out/d": "1\n", "out/u": "0\n"})
     gcase("busy_lock: the lock is taken by another process and given back by the undo", 'in_subshell dirty_busy_lock; echo "$STATUS" >"$OUT/rc1"; lock_state >"$OUT/during"; in_subshell undone_busy_lock; echo "$STATUS" >"$OUT/d"; in_subshell undo_busy_lock; in_subshell undone_busy_lock; echo "$STATUS" >"$OUT/u"',
@@ -1432,11 +1429,18 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
           files={"out/rc1": "0\n", "out/pkgs": "osr-foreign:i386\n", "out/d": "1\n", "out/rc2": "0\n", "out/u": "0\n"})
     gcase("foreign_arch: an undo that cannot remove the architecture (a package of it is left) fails", 'dpkg() { case "$1" in --purge) return 0 ;; --remove-architecture) return 2 ;; *) command dpkg "$@" ;; esac; }; in_subshell undo_foreign_arch; echo "$STATUS" >"$OUT/rc"', files={"out/rc": "2\n"})
 
+    # ---- the wait for AppManagement's own check of the images ----
+    gcase("wait_image_check: the file is there, no wait", 'wait_image_check 5; echo "$?" >"$OUT/rc"', setup=lambda tmp, j: open(j("root/var/lib/casaos/image_updates.json"), "w").write("{}"), files={"out/rc": "0\n"})
+    gcase("wait_image_check: the file comes while it waits", '( command sleep 0.4; echo "{}" >"$IMAGE_UPDATES" ) & wait_image_check 20; echo "$?" >"$OUT/rc"; wait', files={"out/rc": "0\n"})
+    gcase("wait_image_check: the file never comes, and it says so when its time is over", 'wait_image_check 1; echo "$?" >"$OUT/rc"', files={"out/rc": "1\n"})
+
     # ---- the facts of the box ----
     gcase("leak_needles: the name of the run, every address and MAC but the loopback's, and the user", 'HOST_NAME=osr-abc; SUDO_USER=casa; leak_needles; cat "$OUT/leak-needles.tsv" >"$OUT/n"',
           files={"out/n": "hostname\tosr-abc\nipv4\t10.0.2.15\nipv4\t172.17.0.1\nipv6\tfe80::5054:ff:fe12:3456\nmac\t52:54:00:12:34:56\nuser\tcasa\n"})
     gcase("units_dump: one row a unit, with its state, its main pid and its invocation id, tab separated", 'units_dump t', files={"out/units-t.tsv": "casaos-app-management.service\tactive\trunning\t*"})
-    gcase("listen_dump: the sockets as `<protocol> <address:port>`, sorted", 'listen_dump t', files={"out/listen-t.txt": "tcp *:80\ntcp 0.0.0.0:18081\ntcp 0.0.0.0:22\ntcp 127.0.0.1:41873\nudp 0.0.0.0:68\n"})
+    gcase("units_dump: the units that are not running are listed too (--all): a unit that a call started and that ended in between is seen", 'units_dump t; grep -c "^logrotate.service" "$OUT/units-t.tsv" >"$OUT/n"',
+          files={"out/n": "1\n"})
+    gcase("listen_dump: the sockets as `<protocol> <address:port>`, sorted", 'listen_dump t', files={"out/listen-t.txt": LISTEN_SORTED})
     gcase("box_facts: the kernel, the boot mode, where /boot is, what the tools are; and a copy of os-release", 'box_facts', files={"out/box-facts": "kernel 5.10.0-46-cloud-amd64\ncpus 4\nmemory_mb 5943\nboot *", "out/os-release": "PRETTY_NAME=*"})
 
     # ---- api(): what a call leaves ----
@@ -1465,7 +1469,7 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
     gcase("docker_down: the socket is stopped with the service, so that the first request does not start Docker again", 'in_subshell dirty_docker_down; ls "$FAKE/active" >"$OUT/active"; in_subshell undo_docker_down; ls "$FAKE/active" >"$OUT/active2"',
           files={"out/active": "casaos-app-management.service\ncasaos-gateway.service\ncasaos-message-bus.service\ncasaos.service\ncontainerd.service\nssh.service\n"})
     gcase("units_dump: the invocation id is the fifth column", 'units_dump t; awk -F"\\t" \'$1 == "casaos.service" {print NF, $2, $3, $5}\' "$OUT/units-t.tsv" >"$OUT/row"', files={"out/row": "5 active running inv-casaos.service\n"})
-    gcase("listen_dump: TCP and UDP both", 'listen_dump t', files={"out/listen-t.txt": "tcp *:80\ntcp 0.0.0.0:18081\ntcp 0.0.0.0:22\ntcp 127.0.0.1:41873\nudp 0.0.0.0:68\n"})
+    gcase("listen_dump: TCP and UDP both", 'listen_dump t', files={"out/listen-t.txt": LISTEN_SORTED})
     # the real lock_hold_start, lock_state and lock_hold_stop over a stand-in for python3 that holds the lock as a process does (alive: held; killed: free), where fcntl is not
     FAKE_PY = r'''#!/bin/sh
 case "$1" in
@@ -1639,7 +1643,7 @@ esac
                 print("ok: end to end, " + label)
 
     e2e("the real guest functions, a stand-in core, the real report: a healthy Debian 11 leg passes with every verdict", 0, ["# OS readiness proof, d11 leg: PASS"] + ["**PASS** " + v for v in healthy_verdicts("d11")], ["FAIL", "INVALID"])
-    e2e("the same on Ubuntu 22.04: the alias step is skipped with its reason, and the leg passes", 0, ["# OS readiness proof, u22 leg: PASS", "**NOT TESTABLE** step sources_alias"], ["FAIL", "INVALID"], leg="u22")
+    e2e("the same on Ubuntu 22.04: every step runs, the alias step with `devel`, and the leg passes with every verdict", 0, ["# OS readiness proof, u22 leg: PASS"] + ["**PASS** " + v for v in healthy_verdicts("u22")], ["FAIL", "INVALID"], leg="u22")
     e2e("a core that writes a file of /etc during the call is caught by the invariance, naming the file", 1, ["**FAIL** " + V_INV_FILES, "/etc/osr-written"], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "write", "FAKE_CORE_WRITE": "{root}/etc/osr-written"}, snippet=E2E)
     e2e("a core that restarts a service during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "restart", "FAKE_CORE_UNIT": "casaos-gateway.service"})
@@ -1652,6 +1656,11 @@ esac
     e2e("a core that fires a check nobody expected with every dirt is caught step by step", 1, ["**FAIL** " + f_alone(STEP_BY_ID["held"]), "also fires: network_uplink"], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "extra", "FAKE_CORE_CODE": "network_uplink"})
     e2e("a core that answers 500 is caught as a route that fails", 1, ["**FAIL** " + V_ROUTE], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang500"})
+    e2e("a guest whose Default-Release names a release that no source offers makes apt fail, and the core with it: broken_dpkg, docker_origin and docker_update_pending could not be asked, and the proof says so", 1,
+        ["**FAIL** " + f_alone(STEP_BY_ID["sources_pin"]), "also fires: broken_dpkg, docker_origin"], ["Traceback"],
+        snippet=E2E.replace("guard_run;", "guard_run; dirty_sources_pin() { mkdir -p \"$APT_DIR/apt.conf.d\" && printf 'APT::Default-Release \"%s\";\\n' \"$TO_CODENAME\" >\"$APT_DIR/apt.conf.d/99osr-default-release\"; };"))
+    e2e("a guest whose Docker cannot publish the port it asked for (443 is the gateway's) could not dirty the box: an invalid run, and not a FAIL of the feature", 1, ["INVALID RUN", "step containers_ports_publish: the box could not be dirtied (exit 125)"], ["Traceback"],
+        snippet=E2E.replace("guard_run;", "guard_run; dirty_containers_ports_publish() { docker run -d --init --name p-pub53 --restart unless-stopped -p 443:80 nginx:alpine >/dev/null; };"))
     e2e("a guest whose undo fails is an invalid run and not a FAIL of the feature", 1, ["INVALID RUN", "step reboot_first: the undo failed"], ["**FAIL** " + f_undone(STEP_BY_ID["reboot_first"])],
         snippet=E2E.replace("guard_run;", "guard_run; undo_reboot_first() { return 1; }; undone_reboot_first() { return 1; };"))
     e2e("a guest whose dirt does nothing is an invalid run for that step (the dirt could not be made)", 1, ["INVALID RUN", "step held: the box could not be dirtied"], [],
