@@ -264,8 +264,9 @@ jobs:
           source scripts/os-upgrade-measure.sh
           runner_guest after
 
-      # Red for a run that proves nothing (INVALID RUN); a hop that fails, or a refusal that is not one, is a finding and not a broken harness. An Ubuntu hop
-      # Canonical has not opened (NOT_OFFERED) is neutral: the job stays green, with a warning that says so.
+      # Red for a run that proves nothing (INVALID RUN: a unit that ended itself, a launcher that refused, a tool that could not ask Canonical); a hop that fails, or a refusal
+      # that is not one, is a finding and not a broken harness. An Ubuntu hop that Canonical has not opened (NOT_OFFERED: the tool's own answer that there is no new release)
+      # is neutral: the job stays green, with a warning that says so (on the headline of the report only).
       - name: Report
         if: always()
         run: |
@@ -276,7 +277,7 @@ jobs:
           df -h . /mnt >out/host-df-end.txt 2>&1 || true
           test -s out/timeline.tsv || { { echo "the run left no evidence: nothing to report"; cat out/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
           python3 scripts/os-upgrade-measure-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
-          if grep -q 'NOT_OFFERED' out/report.md; then echo "::warning title=NOT_OFFERED::Canonical does not offer this Ubuntu upgrade on the guest: nothing of the hop was measured"; fi
+          if grep -q '^# .*: NOT_OFFERED$' out/report.md; then echo "::warning title=NOT_OFFERED::Canonical does not offer this Ubuntu upgrade on the guest: nothing of the hop was measured"; fi
 
       - name: What the machine says when it is not well
         if: always()

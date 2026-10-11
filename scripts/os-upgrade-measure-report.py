@@ -114,6 +114,20 @@ def open_q(why):
     undecided.append(why)
 
 
+hop_ran = False
+hop_why = ""
+
+
+def hop_answer(question, ans, evidence):
+    """a row about what the hop did to something (Docker, a hold, the core, a token): answered only when the hop ran to its end and the box is on the target release; otherwise OPEN,
+    with the reason, and what was seen all the same. A hop that did nothing leaves everything as it was, and 'nothing was removed' is not an answer about the hop."""
+    if hop_ran:
+        answer(question, ans, evidence)
+    else:
+        answer(question, "OPEN", "the hop did not run to its end (%s); what was seen all the same: %s" % (hop_why, evidence))
+        open_q("%s: the hop did not run to its end (%s)" % (question.split(" (")[0], hop_why))
+
+
 def kv(name):
     """'key value' lines -> {key: value}"""
     out = {}
@@ -455,14 +469,41 @@ for t, w, rest in unit_log:
             steps[parts[0]]["end"] = t
             steps[parts[0]]["rc"] = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
 unit_done = unit_time("DONE") is not None
+# the unit's own code ends it (ABORTED ..., ENDED n) when it could not do what it was started for; the upgrader's own status is its UPGRADER_EXIT line
+unit_ended = [(w, rest.strip()) for _, w, rest in unit_log if w in ("ABORTED", "ENDED")]
+up_exit = next((int(rest.split()[0]) for _, w, rest in reversed(unit_log) if w == "UPGRADER_EXIT" and rest.split()[:1] and rest.split()[0].isdigit()), None)
+after_os = osrel("os-after")
+version_ok = after_os.get("VERSION_ID") == L["new"] and after_os.get("VERSION_CODENAME") == L["new_code"]
+# the tool's own log (dist-upgrade/main.log) exists when the tool got as far as opening it: a launcher that refuses leaves none
+tool_log = read("dist-upgrade-main.log").strip()
 if ran_hop:
     if unit_time("START") is None:
         invalid("hop-unit.log has no START line: the unit of the hop did not start")
+    if unit_ended:
+        invalid("the unit of the hop ended on its own account (%s): it stopped before it could do what it was started for, and nothing of the hop was measured" % "; ".join(("%s %s" % x).strip() for x in unit_ended))
+    if not DEBIAN and steps.get("upgrader", {}).get("end") is not None and not tool_log:
+        first = " / ".join(ln.strip() for ln in read("step-upgrader.log").splitlines() if ln.strip())[:200] or "no output"
+        waiting = len([ln for ln in read("upgradable-unit.txt").splitlines() if "[upgradable from" in ln])
+        if steps["upgrader"]["rc"] not in (0, None):
+            invalid("the upgrader refused to start (exit %s, and it left no main.log): %s%s" % (
+                steps["upgrader"]["rc"], first, (" (%d package(s) were upgradable when the unit started: something became upgradable between the refresh and the hop, so dispatch the leg again)" % waiting) if waiting else ""))
+        else:
+            invalid("the upgrader exited 0 and left no main.log (/var/log/dist-upgrade/main.log): nothing says that it ran")
     for name, s in steps.items():
         if s["end"] is None:
             continue
         if not has("step-%s.log" % name) or rc_of("step-%s" % name) is None:
             invalid("step %s of the unit has no log or no status" % name)
+
+
+# the hop RAN when the unit wrote DONE (it did not end itself), the Ubuntu tool went to its end (its exit is recorded, and it left its own log), and the box is on the target release
+hop_ran = bool(ran_hop and unit_done and not unit_ended and (DEBIAN or (up_exit is not None and tool_log)) and version_ok)
+hop_why = "; ".join(w for w in (
+    ("the unit ended on its own account (%s)" % "; ".join(("%s %s" % x).strip() for x in unit_ended)) if unit_ended else "",
+    "the unit wrote neither DONE nor ENDED" if not unit_done and not unit_ended else "",
+    "the upgrader's exit was not recorded" if not DEBIAN and up_exit is None else "",
+    "the upgrader left no main.log" if not DEBIAN and not tool_log else "",
+    ("the box is %s %s after the reboot, not %s %s" % (after_os.get("VERSION_ID"), after_os.get("VERSION_CODENAME"), L["new"], L["new_code"])) if not version_ok else "") if w)
 
 
 def step_text(name):
@@ -475,6 +516,8 @@ def step_rc(name):
 
 # ---- the Ubuntu offer ---------------------------------------------------------------------------------------------------
 
+NO_RELEASE = re.compile(r"No new release found\.|There is no development version of an LTS available\.|Release upgrade not possible right now")
+TOOL_BROKEN = re.compile(r"Failed to connect|Check your Internet connection|Traceback|parse failed")
 offered = None
 if not DEBIAN:
     chk = read("ubuntu-check.txt")
@@ -487,6 +530,23 @@ if not DEBIAN:
         invalid("do-release-upgrade -c offered %s and the hop was skipped all the same" % L["new"])
     if skipped and read("hop-skipped").strip() != "not_offered":
         invalid("hop-skipped says %r, not not_offered" % read("hop-skipped").strip())
+    # NOT_OFFERED says that Canonical has not opened this upgrade: only the tool's own answer proves it (exit 1 and one of its phrases for "no new release": the first is what a box on
+    # Prompt=normal prints, the second is what the stock Prompt=lts prints, the third is what Canonical's UpgradeBroken prints), made with Canonical's metadata read (the probe's own fetch
+    # of it worked, and the tool did not complain of its network). A network failure, a tool that is not there (127), a crash, Prompt=never or another release on offer proves nothing
+    # about Canonical: an invalid run, never a neutral one
+    if (skipped or offered is False) and chk_rc is not None:
+        say = " ".join(chk.split())[:160] or "no output"
+        why = []
+        if chk_rc != 1:
+            why.append("exit %s, not 1" % chk_rc)
+        elif TOOL_BROKEN.search(chk):
+            why.append("it could not read Canonical's metadata")
+        elif not NO_RELEASE.search(chk):
+            why.append("it did not say that there is no new release")
+        if rc_of("meta-release") != 0:
+            why.append("the probe's own fetch of meta-release-lts failed (exit %s)" % rc_of("meta-release"))
+        if why:
+            invalid("do-release-upgrade -c did not answer that there is no new release (%s), so that Canonical has not opened %s is not proven; it said: %s" % ("; ".join(why), L["new"], say))
 
 # ---- the hop's facts (need the after-reboot evidence) -------------------------------------------------------------------------
 
@@ -556,7 +616,6 @@ else:
 
 # ---- the report -----------------------------------------------------------------------------------------------------------
 
-after_os = osrel("os-after")
 head_name = "%s %s to %s %s" % (L["family"].title(), L["old"], L["family"].title(), L["new"])
 
 
@@ -1056,9 +1115,11 @@ if ran_hop:
     us, ue = kv("unit-start.txt"), kv("unit-end.txt")
     up = {n: (d_before.get(n), d_hop.get(n)) for n in ("systemd", "dbus", "libc6") if d_before.get(n) != d_hop.get(n)}
     same_pid = bool(us.get("pid")) and us.get("pid") == ue.get("pid")
-    if not unit_done:
-        where = ", ".join(n for n, st in steps.items() if st["end"] is None) or "its first step"
-        answer("The transient unit survives the upgrade of systemd, dbus and libc6", "NO-GO", "the unit never wrote DONE: it was in %s when it ended" % where)
+    if unit_ended:
+        pass    # an invalid run (above): the unit stopped on its own account before it did anything, and nothing can be said of its survival
+    elif not unit_done:
+        where = ", ".join(n for n, st in steps.items() if st["end"] is None) or "between two steps"
+        answer("The transient unit survives the upgrade of systemd, dbus and libc6", "NO-GO", "the unit was cut: it wrote neither DONE nor ENDED, and it was in %s when it stopped" % where)
     elif not up:
         answer("The transient unit survives the upgrade of systemd, dbus and libc6", "OPEN", "none of systemd, dbus, libc6 was upgraded in this leg")
         open_q("the unit's survival: systemd, dbus and libc6 were not upgraded by this hop")
@@ -1088,7 +1149,7 @@ if ran_hop:
     if DEBIAN and sandbox_ok is not None:
         no_remv = not pr_rem
         okay = no_remv and dock_kept_after and dsv["before"] == dsv["after"]
-        answer("The docker-ce built for %s survives the hop (its source paused)" % L["old_code"], "GO" if okay else "NO-GO",
+        hop_answer("The docker-ce built for %s survives the hop (its source paused)" % L["old_code"], "GO" if okay else "NO-GO",
                "the paused simulation removes %s; after the reboot docker-ce/-cli/containerd.io are %s; the engine answers %s (before %s)" % (
                    ("an engine package: " + ", ".join(sorted(set(pr_rem)))) if pr_rem else "no engine package", "the same installed versions" if dock_kept_after else "NOT all the same installed versions", dsv["after"] or "nothing", dsv["before"]))
     elif DEBIAN:
@@ -1105,7 +1166,7 @@ if ran_hop:
     P("")
     P("The after phase starts nothing: it reads the units first (`units-boot`), waits, then asks. (The harness's own test checks that the phase has no start, restart or enable of a unit.)")
     P("")
-    P("| unit | before | first look | settled | restarted between the first look and settled |")
+    P("| unit | before | first look | settled | restarted by systemd after the first look |")
     P("|---|---|---|---|---|")
     down_after, moved = [], []
     for n in casa:
@@ -1115,21 +1176,25 @@ if ran_hop:
             down_after.append(n)
         if again:
             moved.append(n)
-        show_row(n, ub[n]["active"], a.get("active", "?"), b.get("active", "?"), "YES" if again else "no")
+        show_row(n, ub[n]["active"], a.get("active", "?"), b.get("active", "?"), "yes" if again else "no")
     P("")
     codes = {k: read("%s-after.code" % k).strip() for k in ("gateway", "core", "internal", "am", "jwt")}
     P("Asked once settled: gateway %s, core %s, core with the loopback secret %s, AppManagement with the token of the baseline's login %s." % (codes["gateway"], codes["core"], codes["internal"], codes["am"]))
     P("")
     answered = {k: reboot_times.get(lbl) for k, lbl in (("gateway", "the gateway answers 200"), ("core", "the core answers 200"), ("am", "AppManagement answers 200"))} if boot_row is not None else {}
-    unaided = bool(casa) and not down_after and not moved and all(answered.get(k) is not None for k in ("gateway", "core", "am"))
+    # the harness starts nothing in this phase, so a unit with another InvocationID was brought back by systemd's own Restart=: that is coming back by itself, and it is said, not failed.
+    # What decides is that every unit is active, that each answered after the reboot, and that all three still answer 200 once settled
+    unaided = bool(casa) and not down_after and all(answered.get(k) is not None for k in ("gateway", "core", "am")) and all(codes[k] == "200" for k in ("gateway", "core", "am"))
     if not casa:
         answer("The core, the gateway and AppManagement come back by themselves", "OPEN", "no active casaos service in units-before")
         open_q("the core coming back: units-before lists no casaos service")
     else:
-        answer("The core, the gateway and AppManagement come back by themselves", "GO" if unaided else "NO-GO",
-               ("all %d casaos units active and not restarted by the harness; first answer after the first sample of the box: gateway %s, core %s, AppManagement %s" % (
-                   len(casa), fmt_s(answered.get("gateway")), fmt_s(answered.get("core")), fmt_s(answered.get("am")))) if unaided else
-               "not active after the reboot: %s; restarted after the first look: %s; answered: %s" % (", ".join(down_after) or "none", ", ".join(moved) or "none", ", ".join("%s %s" % (k, fmt_s(v)) for k, v in answered.items()) or "n/a"))
+        note = ("restarted by systemd after the first look (its Restart= brought %s back): %s" % ("it" if len(moved) == 1 else "them", ", ".join(moved))) if moved else "none restarted after the first look"
+        hop_answer("The core, the gateway and AppManagement come back by themselves", "GO" if unaided else "NO-GO",
+                   ("all %d casaos units active; %s; first answer after the first sample of the box: gateway %s, core %s, AppManagement %s; asked once settled: %s, %s, %s" % (
+                       len(casa), note, fmt_s(answered.get("gateway")), fmt_s(answered.get("core")), fmt_s(answered.get("am")), codes["gateway"], codes["core"], codes["am"])) if unaided else
+                   "not active after the reboot: %s; %s; answered: %s; asked once settled: gateway %s, core %s, AppManagement %s" % (
+                       ", ".join(down_after) or "none", note, ", ".join("%s %s" % (k, fmt_s(v)) for k, v in answered.items()) or "n/a", codes["gateway"], codes["core"], codes["am"]))
     # a token issued before the hop
     claims = {}
     try:
@@ -1147,7 +1212,7 @@ if ran_hop:
     else:
         tok = "unknown (%s)" % (codes["jwt"] or "no answer")
     fresh = read("jwt-fresh.code").strip()
-    answer("A token issued before the hop is still accepted afterwards (the browser session survives the reboot)", {"accepted": "GO", "rejected": "NO-GO"}.get(tok, "OPEN"),
+    hop_answer("A token issued before the hop is still accepted afterwards (the browser session survives the reboot)", {"accepted": "GO", "rejected": "NO-GO"}.get(tok, "OPEN"),
            "the token of the baseline: %s%s; a new login afterwards: %s" % (tok, (" (it expired at %s)" % datetime.utcfromtimestamp(exp).strftime("%H:%M:%S")) if tok == "expired" and exp else "", "accepted" if fresh == "200" else "NOT accepted (%s)" % fresh))
     if tok.startswith(("expired", "unknown")):
         open_q("the browser session surviving the reboot: the token of the baseline %s" % tok)
@@ -1163,7 +1228,6 @@ if ran_hop:
     bad_steps = [n for n, s in steps.items() if s["rc"] not in (0, None) and not n.startswith(("recover", "converge", "catchup"))]
     if ladder:
         bad_steps = [n for n in bad_steps if n != "full"]
-    version_ok = after_os.get("VERSION_ID") == L["new"] and after_os.get("VERSION_CODENAME") == L["new_code"]
     clean = audit_clean("after") is True and aptcheck_ok("after") is True
     ev = ["os-release says %s %s (%s)" % (after_os.get("ID"), after_os.get("VERSION_ID"), after_os.get("VERSION_CODENAME")), "dpkg --audit and apt-get check %s" % ("clean" if clean else "NOT clean")]
     if DEBIAN:
@@ -1202,6 +1266,8 @@ if not DEBIAN:
     if on_offer:
         P("meta-release-lts (what Canonical says is on offer): " + "; ".join("%s %s%s" % (n, v, "" if s == "1" else " (Supported: %s)" % s) for n, v, s in on_offer))
     fact("meta-release-lts for %s and %s" % (L["old_code"], L["new_code"]), "; ".join("%s %s Supported=%s" % x for x in on_offer) or "not read, or not listed (exit %s)" % read("meta-release.rc").strip())
+    if (skipped or offered is False) and any(z.get("Dist") == L["new_code"] and z.get("Supported") == "1" for z in stanzas):
+        open_q("meta-release-lts lists %s as Supported=1 while `do-release-upgrade -c` offers nothing to this box: which of the two is right is not decided" % L["new_code"])
     tb = read("upgrader-tarball.txt")
     lm = re.search(r"^[Ll]ast-[Mm]odified: (.*)$", tb, re.M)
     fact("the dist-upgrader tarball of %s: Last-Modified" % L["new_code"], lm.group(1).strip() if lm else "not read (%s)" % (rc_of("upgrader-tarball"),))
@@ -1228,7 +1294,6 @@ if not DEBIAN:
         screen = [s for s in samples if "screen=1" in s]
         s1022 = [s for s in samples if "sshd1022=1" in s]
         tty = kv("unit-start.txt").get("tty", "")
-        version_ok = after_os.get("VERSION_ID") == L["new"] and after_os.get("VERSION_CODENAME") == L["new_code"]
         clean = audit_clean("after") is True and aptcheck_ok("after") is True
         driven = unit_done and up_rc is not None and version_ok and clean
         P("The unit's `tty`: `%s`. Samples every 20 s of `screen` and of an sshd on 1022 while the tool ran: %d samples, screen seen in %d, sshd 1022 seen in %d." % (tty, len(samples), len(screen), len(s1022)))
@@ -1266,17 +1331,23 @@ if not DEBIAN:
         fact("obsolete packages are removed without a question (the control that no repository has)", "yes: osm-orphan was removed" if orphan_gone else "no: osm-orphan is still installed")
         fact("apt-mark hold on a package the tool wants to remove", ("kept: osm-orphan-held is still installed" if not orphan_held_gone else "NOT respected: osm-orphan-held was removed") + "; held engine packages removed: %s" % (", ".join(sorted(held_removed)) or "none"))
         if variant == "hold":
-            answer("apt-mark hold keeps Docker's engine through the tool", "GO" if not held_removed and not orphan_held_gone else "NO-GO",
-                   "held and removed: %s; the unheld Docker packages removed: %s (the same rule that removes osm-orphan: %s)" % (", ".join(sorted(held_removed)) or "none", ", ".join(unheld_removed) or "none", "removed" if orphan_gone else "not removed"))
+            # the tool removing what no repository has (osm-orphan, held by nothing) is the positive control of the hold: without it nothing says that the hold was ever exercised
+            hold_ans = "NO-GO" if held_removed or orphan_held_gone else "GO" if orphan_gone else "OPEN"
+            hop_answer("apt-mark hold keeps Docker's engine through the tool", hold_ans,
+                       "held and removed: %s; the unheld Docker packages removed: %s (the same rule that removes osm-orphan: %s)" % (
+                           ", ".join(sorted(held_removed)) or "none", ", ".join(unheld_removed) or "none", "removed" if orphan_gone else "NOT removed: the tool removed nothing, so the hold was not exercised"))
+            if hold_ans == "OPEN" and hop_ran:
+                open_q("apt-mark hold on the engine: the tool did not remove osm-orphan (the unheld control), so the hold was not exercised")
             answer("RemoveObsoletes=no in release-upgrades.d/*.cfg is honoured", "OPEN", "not tested in this run: run it again with ubuntu_variant keep")
             open_q("RemoveObsoletes=no and release-upgrades.d/*.cfg: this run is the `hold` variant; run the workflow again with ubuntu_variant keep")
         elif variant == "keep":
             honoured = not orphan_gone
-            answer("RemoveObsoletes=no in release-upgrades.d/*.cfg is honoured", "GO" if honoured else "NO-GO",
-                   "osm-orphan (held by nothing) is %s; Docker's packages removed: %s" % ("still installed" if honoured else "REMOVED anyway", ", ".join(unheld_removed) or "none"))
+            hop_answer("RemoveObsoletes=no in release-upgrades.d/*.cfg is honoured", "GO" if honoured else "NO-GO",
+                       "osm-orphan (held by nothing) is %s; Docker's packages removed: %s" % ("still installed" if honoured else "REMOVED anyway", ", ".join(unheld_removed) or "none"))
+            open_q("RemoveObsoletes=no: this run alone cannot tell 'the drop-in is honoured' from 'the tool removes nothing'; the control that the tool removes osm-orphan is the hold run's")
             answer("apt-mark hold keeps Docker's engine through the tool", "OPEN", "not tested in this run: run it again with ubuntu_variant hold")
             open_q("apt-mark hold on the engine: this run is the `keep` variant; run the workflow again with ubuntu_variant hold")
-        answer("What the tool does to Docker: the engine survives (docker-ce installed, the daemon answering after the reboot)", "GO" if survive else "NO-GO",
+        hop_answer("What the tool does to Docker: the engine survives (docker-ce installed, the daemon answering after the reboot)", "GO" if survive else "NO-GO",
                "docker-ce %s -> %s; the daemon %s; removed: %s%s" % (d_before.get("docker-ce"), d_ce or "REMOVED", ("answers " + dsv["after"]) if answers_after else "does NOT answer", ", ".join(sorted(n for n in engine_before if n not in d_after)) or "no engine package",
                                                                       "; the unheld ones among them: " + ", ".join(unheld_removed) if unheld_removed else ""))
         if not survive:

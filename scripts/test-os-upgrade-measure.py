@@ -358,7 +358,8 @@ def build(d, s, spec=None):
     else:
         rec(d, "ubuntu-check", "Checking for a new Ubuntu release\nNew release '%s.5 LTS' available.\nRun 'do-release-upgrade' to upgrade to it.\n" % s["new"] if not skipped else "Checking for a new Ubuntu release\nNo new release found.\n", 0 if not skipped else 1)
         rec(d, "release-upgrades-before", "[DEFAULT]\nPrompt=lts\n")
-        rec(d, "meta-release", "Dist: %s\nName: X\nVersion: %s.5 LTS\nDate: Thu, 21 Apr 2022 00:00:00 UTC\nSupported: 1\n\nDist: %s\nName: Y\nVersion: %s.1 LTS\nDate: Thu, 25 Apr 2024 00:00:00 UTC\nSupported: 1\n" % (s["old_code"], s["old"], s["new_code"], s["new"]))
+        rec(d, "meta-release", "Dist: %s\nName: X\nVersion: %s.5 LTS\nDate: Thu, 21 Apr 2022 00:00:00 UTC\nSupported: 1\n" % (s["old_code"], s["old"]) +
+            ("" if skipped else "\nDist: %s\nName: Y\nVersion: %s.1 LTS\nDate: Thu, 25 Apr 2024 00:00:00 UTC\nSupported: 1\n" % (s["new_code"], s["new"])))
         rec(d, "upgrader-tarball", "HTTP/1.1 200 OK\nLast-Modified: Mon, 07 Sep 2026 10:00:00 GMT\n")
         rec(d, "pro-status", '{"attached": false}\n')
         rec(d, "upgradable-before", "Listing...\n")
@@ -398,6 +399,7 @@ def build(d, s, spec=None):
     else:
         put(d, "controls.txt", "variant %s\nheld %s\n" % (variant, "osm-orphan-held docker-ce docker-ce-cli containerd.io" if variant == "hold" else "osm-orphan-held"))
         rec(d, "ubuntu-check-unit", "New release '%s.5 LTS' available.\n" % s["new"])
+        rec(d, "upgradable-unit", "Listing...\n")
         rec(d, "release-upgrades-after", "[DEFAULT]\nPrompt=lts\n")
         rec(d, "pro-status-after", '{"attached": false}\n')
         put(d, "hop-sample.log", "".join("%.6f screen=0 sshd1022=0\n" % (T0 + S["hop_start"] + 100 * i) for i in range(1, 8)))
@@ -454,7 +456,7 @@ def case(name, leg, want_code, mutate=None, spec=None, must_have=(), must_not_ha
             got, ev = table_row(text, q)
             if got != a:
                 problems.append("row %r is %r, wanted %r (%s)" % (q, got, a, ev[:160]))
-        if "Traceback" in text:
+        if re.search(r"^Traceback \(most recent call last\)", text, re.M):     # the report's own crash, not a tool's crash that the report quotes
             problems.append("crashed")
         if problems:
             failures.append("%s: %s\n%s" % (name, "; ".join(problems), text[-2200:]))
@@ -597,8 +599,14 @@ case("frozen Docker: with the frozen repository kept, the plan includes Docker (
      must_have=["the plan includes Docker | yes: docker-ce", "the same with the source paused | no"])
 case("frozen Docker: on Debian 12 the Docker repository is not frozen: no Docker in either plan", "d12-13", 0, must_have=["the plan includes Docker | no"])
 flips("core: casaos is not active after the reboot", L, Q_CORE, "NO-GO", lambda d: unit_set(d, "units-after.tsv", lambda n, f: [f[0], "inactive", "dead", "0", ""] if n == "casaos.service" else f), must_have=["casaos.service"])
-flips("core: the gateway was started again between the first look and settled", L, Q_CORE, "NO-GO",
-      lambda d: unit_set(d, "units-after.tsv", lambda n, f: f[:4] + [hex32("again")] if n == "casaos-gateway.service" else f), must_have=["casaos-gateway.service"])
+def restarted_gateway(d):
+    unit_set(d, "units-after.tsv", lambda n, f: f[:4] + [hex32("again")] if n == "casaos-gateway.service" else f)
+
+
+flips("core: the gateway was restarted by systemd after the first look: it came back by itself, and the row says so instead of failing it", L, Q_CORE, "GO", restarted_gateway,
+      must_have=["restarted by systemd after the first look (its Restart= brought it back): casaos-gateway.service"])
+flips("core: restarted by systemd and not answering 200 once settled is still a NO-GO", L, Q_CORE, "NO-GO", seq(restarted_gateway, lambda d: put(d, "am-after.code", "502\n")),
+      must_have=["asked once settled: gateway 200, core 200, AppManagement 502", "casaos-gateway.service"])
 flips("core: the core never answers 200 after the reboot", L, Q_CORE, "NO-GO", lambda d: timeline_edit(d, lambda f: f[:5] + ["502"] + f[6:] if float(f[0]) > T0 + S["reboot_post"] and f[5] == "200" else f))
 flips("core: AppManagement never answers 200, with either credential, after the reboot", L, Q_CORE, "NO-GO",
       lambda d: timeline_edit(d, lambda f: f[:6] + ["401", "401"] + f[8:] if float(f[0]) > T0 + S["reboot_post"] else f))
@@ -669,8 +677,92 @@ def unit_aborted(d):
         remove(d, "step-%s.log" % n, "step-%s.rc" % n)
 
 
-case("a unit that stopped before its steps (nothing to rewrite) is a finding: the rows say NO-GO, and the run is not invalid", L, 0, mutate=unit_aborted, rows={Q_UNIT: "NO-GO", Q_HOP: "NO-GO"}, must_not_have=["INVALID"],
-     must_have=["the unit never wrote DONE"])
+U = "u22-24"
+
+
+case("a unit that ended itself before its steps (no source names the target) is an invalid run: nothing of the hop was measured, and nothing says the unit never wrote DONE", L, 1, mutate=unit_aborted,
+     must_have=["INVALID RUN", "the unit of the hop ended on its own account (ABORTED no source names bookworm after the rewrite; ENDED 1)"], must_not_have=["never wrote DONE", "**GO**", "## The go/no-go table"])
+case("a unit that ended itself with a status (ENDED 3) is an invalid run too", L, 1, mutate=lambda d: replace(d, "hop-unit.log", " DONE", " ENDED 3"),
+     must_have=["INVALID RUN", "the unit of the hop ended on its own account (ENDED 3)"], must_not_have=["**GO**"])
+
+
+def box_unmoved(d):
+    """the hop changed nothing: the release and the packages are the ones of before"""
+    for n in ("os-after", "os-hop"):
+        put(d, n, get(d, "os-before"))
+    for t in ("hop", "after"):
+        put(d, "dpkg-%s.tsv" % t, get(d, "dpkg-before.tsv"))
+
+
+def tool_exit(rc, log=True):
+    """the Ubuntu tool's exit; log False is a launcher that refused: it opened no main.log"""
+    def m(d):
+        put(d, "step-upgrader.rc", "%d\n" % rc)
+        replace(d, "hop-unit.log", "STEP_END upgrader 0", "STEP_END upgrader %d" % rc)
+        replace(d, "hop-unit.log", "UPGRADER_EXIT 0", "UPGRADER_EXIT %d" % rc)
+        if not log:
+            remove(d, "dist-upgrade-main.log")
+            put(d, "step-upgrader.log", "Checking for a new Ubuntu release\nPlease install all available updates for your release before upgrading.\n")
+    return m
+
+
+OPEN_ROWS = {Q_TOOL: "NO-GO", Q_DOCKER: "OPEN", Q_HOLD: "OPEN", Q_CFG: "OPEN", Q_CORE: "OPEN", Q_TOKEN: "OPEN", Q_HOP: "NO-GO"}
+for variant in ("hold", "keep"):
+    case("ubuntu %s: the tool ran, failed, and the box did not move: the row of the tool says NO-GO and every row about what it did to Docker, the hold or the core is OPEN, never a GO" % variant, U, 0,
+         spec={"variant": variant}, mutate=seq(tool_exit(1), box_unmoved), rows=OPEN_ROWS, must_have=["the hop did not run to its end", "the box is 22.04 jammy after the reboot, not 24.04 noble"], must_not_have=["INVALID RUN", "**GO**"])
+case("ubuntu: the tool exited 0 with its log and the box is still the old release: the same, OPEN", U, 0, mutate=box_unmoved, rows=OPEN_ROWS, must_not_have=["INVALID RUN", "**GO**"])
+case("ubuntu: a tool that removed docker-ce and then failed: the Docker row is OPEN (the hop did not run to its end) and says what was seen all the same", U, 0, rows={Q_DOCKER: "OPEN", Q_TOOL: "NO-GO"},
+     mutate=seq(tool_exit(1), lambda d: put(d, "os-after", get(d, "os-before")), lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")]),
+                lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")])),
+     must_have=["what was seen all the same: docker-ce 5:29.8.0-1~ubuntu.22.04~jammy -> REMOVED"])
+case("ubuntu: no exit of the tool recorded and no DONE (the unit was cut): the rows about what it did are OPEN", U, 0, rows={Q_DOCKER: "OPEN", Q_HOLD: "OPEN", Q_UNIT: "NO-GO"},
+     mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith((" DONE", "UPGRADER_EXIT 0"))]), must_have=["the unit wrote neither DONE nor ENDED", "the upgrader's exit was not recorded"], must_not_have=["INVALID RUN"])
+case("ubuntu: the unit reached DONE but the exit of the tool was not recorded: the rows about what it did are OPEN", U, 0, rows={Q_DOCKER: "OPEN", Q_HOLD: "OPEN"},
+     mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if "UPGRADER_EXIT" not in ln]), must_have=["the upgrader's exit was not recorded"], must_not_have=["INVALID RUN"])
+invalid("ubuntu: the launcher refused (exit 1, no main.log): the run proves nothing about the tool, and says what to do", U,
+        "the upgrader refused to start (exit 1, and it left no main.log): Checking for a new Ubuntu release / Please install all available updates",
+        seq(tool_exit(1, log=False), box_unmoved, lambda d: rec(d, "upgradable-unit", "Listing...\nlibfoo9/jammy-updates 2.9 amd64 [upgradable from: 1.9]\n")),
+        has=["1 package(s) were upgradable when the unit started", "dispatch the leg again"])
+invalid("ubuntu: the launcher refused and nothing was upgradable on record: the refusal is still an invalid run", U, "the upgrader refused to start (exit 1, and it left no main.log)", seq(tool_exit(1, log=False), box_unmoved))
+invalid("ubuntu: the tool exited 0 and left no main.log: nothing says that it ran", U, "the upgrader exited 0 and left no main.log", lambda d: remove(d, "dist-upgrade-main.log"))
+
+
+def hop_did_nothing(d):
+    """the unit ran to its DONE but its first step failed, and the release stayed the old one"""
+    put(d, "step-update.rc", "100\n")
+    replace(d, "hop-unit.log", "STEP_END update 0", "STEP_END update 100")
+    box_unmoved(d)
+
+
+case("debian: the unit reached DONE, its update failed and the box is still the old release: every row about what the hop did is OPEN, the hop row is NO-GO", L, 0, mutate=hop_did_nothing,
+     rows={Q_FROZEN: "OPEN", Q_CORE: "OPEN", Q_TOKEN: "OPEN", Q_UNIT: "OPEN", Q_HOP: "NO-GO", Q_SANDBOX: "GO"}, must_have=["the hop did not run to its end", "the box is 11 bullseye after the reboot, not 12 bookworm"], must_not_have=["INVALID RUN"])
+case("debian: the unit was cut in the middle of the full upgrade (no DONE, no ENDED): the unit row is the NO-GO it exists for, and says where, and the rows about Docker are OPEN", L, 0,
+     rows={Q_UNIT: "NO-GO", Q_FROZEN: "OPEN", Q_HOP: "NO-GO"}, must_have=["the unit was cut: it wrote neither DONE nor ENDED, and it was in full when it stopped"], must_not_have=["INVALID RUN"],
+     mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" DONE") and "STEP_END full " not in ln and "converge1" not in ln]))
+case("debian: a hop that failed halfway with docker-ce gone is OPEN on the Docker row, with what was seen: not a GO and not hidden", L, 0, rows={Q_FROZEN: "OPEN"},
+     mutate=seq(lambda d: put(d, "os-after", get(d, "os-before")), lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")])), must_have=["what was seen all the same", "NOT all the same installed versions"])
+case("ubuntu hold: a tool that removed nothing at all, not even the control, did not exercise the hold: OPEN, and it says why", U, 0, rows={Q_HOLD: "OPEN", Q_DOCKER: "GO"},
+     mutate=seq(*[(lambda t: lambda d: put(d, "dpkg-%s.tsv" % t, get(d, "dpkg-%s.tsv" % t) + "osm-orphan\t1.0\tii \n" + "".join("%s\t5:29.8.0-1~ubuntu.22.04~jammy\tii \n" % n for n in ("docker-buildx-plugin", "docker-compose-plugin", "docker-ce-rootless-extras"))))(t) for t in ("hop", "after")]),
+     must_have=["NOT removed: the tool removed nothing, so the hold was not exercised"])
+case("ubuntu keep: the drop-in row says what a keep run alone cannot", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "GO"}, must_have=["cannot tell 'the drop-in is honoured' from 'the tool removes nothing'"])
+
+# ---- NOT_OFFERED is the tool's own answer ----
+NOT_ON_OFFER = {"offered": False}
+for leg in ("u22-24", "u24-26"):
+    for label, text in (("the stock Prompt=lts answer", "Checking for a new Ubuntu release\nThere is no development version of an LTS available.\nTo upgrade to the latest non-LTS development release set Prompt=normal in /etc/update-manager/release-upgrades.\n"),
+                        ("Canonical's suspension of the upgrade", "Checking for a new Ubuntu release\nRelease upgrade not possible right now\nThe release upgrade can not be performed currently, please try again later. The server reported: 'x'\n")):
+        case("%s: %s is the tool saying that nothing is on offer: NOT_OFFERED" % (leg, label), leg, 0, spec=NOT_ON_OFFER, mutate=lambda d, t=text: rec(d, "ubuntu-check", t, 1), must_have=["NOT_OFFERED"], must_not_have=["INVALID", "**GO**"],
+             rows={"The Ubuntu tool can be driven from a unit, and what it does to Docker": "NOT_OFFERED"})
+    for label, text, rc, why in (("a network failure of the tool", "Checking for a new Ubuntu release\nFailed to connect to https://changelogs.ubuntu.com/meta-release-lts. Check your Internet connection or proxy settings\nNo new release found.\n", 1, "it could not read Canonical's metadata"),
+                                 ("a crash of the tool", "Traceback (most recent call last):\n  File \"/usr/bin/do-release-upgrade\", line 3\nImportError: no module\n", 1, "it could not read Canonical's metadata"),
+                                 ("a tool that is not there (exit 127)", "", 127, "exit 127, not 1"),
+                                 ("Prompt=never", "Checking for a new Ubuntu release\nIn /etc/update-manager/release-upgrades Prompt \nis set to never so upgrading is not possible.\n", 1, "it did not say that there is no new release"),
+                                 ("another release on offer (Prompt=normal offering 26.10)", "New release '26.10' available.\nRun 'do-release-upgrade' to upgrade to it.\n", 0, "exit 0, not 1")):
+        invalid("%s: %s is not 'Canonical has not opened it': an invalid run, never a neutral one" % (leg, label), leg, "so that Canonical has not opened %s is not proven" % LEGS[leg]["new"], lambda d, t=text, r=rc: rec(d, "ubuntu-check", t, r), spec=NOT_ON_OFFER,
+                has=[why])
+    invalid("%s: the tool says that nothing is on offer but the probe could not fetch Canonical's metadata: nothing is proven" % leg, leg, "the probe's own fetch of meta-release-lts failed (exit 6)", lambda d: put(d, "meta-release.rc", "6\n"), spec=NOT_ON_OFFER)
+case("u22-24: the metadata lists the target as supported while the tool offers nothing: still NOT_OFFERED (the tool's answer is what is asked), and the contradiction is said", "u22-24", 0, spec=NOT_ON_OFFER,
+     mutate=lambda d: put(d, "meta-release.txt", get(d, "meta-release.txt") + "\nDist: noble\nName: Y\nVersion: 24.04.1 LTS\nSupported: 1\n"), must_have=["NOT_OFFERED", "which of the two is right is not decided"], must_not_have=["INVALID"])
 
 # Ubuntu
 U = "u22-24"
@@ -689,8 +781,6 @@ case("ubuntu: the tool removes what no repository has, and says it (the control)
      must_have=["yes: osm-orphan was removed", "kept: osm-orphan-held is still installed", "the unheld ones among them: docker-ce-rootless-extras, docker-buildx-plugin, docker-compose-plugin", "docker.list.casaos-paused"], must_not_have=["INVALID"])
 case("ubuntu keep: nothing is removed when the drop-in is read", U, 0, spec={"variant": "keep"}, must_have=["osm-orphan (held by nothing) is still installed", "no: osm-orphan is still installed"])
 case("ubuntu: the hop that was offered and run is not a NOT_OFFERED", U, 0, must_not_have=["NOT_OFFERED"])
-case("ubuntu: Prompt=normal offering 26.10 to a 26.04-bound box is not an offer of 26.04", "u24-26", 0, spec={"offered": False}, rows={"The Ubuntu tool can be driven from a unit, and what it does to Docker": "NOT_OFFERED"},
-     mutate=seq(lambda d: rec(d, "ubuntu-check", "New release '26.10' available.\n", 0)), must_have=["NOT_OFFERED"])
 case("ubuntu: the unit asked Canonical's tool again and the answer is in the facts", U, 0, must_have=["do-release-upgrade -c asked again inside the unit"])
 case("ubuntu: Pro is said not attached, and that the attached case was not measured", U, 0, must_have=["not attached (a cloud image, no token): the behaviour with Pro attached was NOT measured", "Ubuntu Pro/ESM attached: not measured"])
 case("ubuntu: what could not be decided names the other variant", U, 0, must_have=["run the workflow again with ubuntu_variant keep"])
@@ -1560,7 +1650,7 @@ CALLS = {"Root's reboot under an inhibitor": "runner_inhibit reboot", "Root's fo
 check("each step that drives the guest makes the call of its name, and nothing else", all(wf_runs[n].rstrip("\n").endswith(call) and wf_runs[n].count("runner_") == call.count("runner_") for n, call in CALLS.items()), {n: wf_runs[n] for n, c_ in CALLS.items() if not wf_runs[n].rstrip("\n").endswith(c_)})
 check("the guest steps come in the order: inhibitor, inhibitor with --force, reboot, refresh, baseline and probes, hop, reboot, after", [n for n in wf_runs if n in STEPS[5:13]] == STEPS[5:13])
 check("the refresh comes after the rehearsal reboot and right before the baseline, so that little can become upgradable before the hop", STEPS.index("Reboot before the hop") + 1 == STEPS.index("Refresh the old release") == STEPS.index("Baseline and read-only probes") - 1)
-check("NOT_OFFERED stays green and says so with a warning annotation", "::warning title=NOT_OFFERED" in wf_runs["Report"])
+check("NOT_OFFERED stays green and says so with a warning annotation, for the headline of the report only (an invalid run that mentions it is red and has none)", "::warning title=NOT_OFFERED" in wf_runs["Report"] and "grep -q '^# .*: NOT_OFFERED$' out/report.md" in wf_runs["Report"])
 
 if have_bash():
     # the report step, against a stand-in for ssh that hands over the evidence of a leg
@@ -1585,6 +1675,8 @@ if have_bash():
     check("the report step: a measured leg is green, its report is in the summary", p.returncode == 0 and "MEASURED" in summary and "::warning" not in p.stdout, (p.returncode, p.stdout[-300:], p.stderr[-300:]))
     p, summary = report_step("u22-24", {"offered": False})
     check("the report step: NOT_OFFERED is green and has its annotation", p.returncode == 0 and "::warning title=NOT_OFFERED" in p.stdout and "NOT_OFFERED" in summary, (p.returncode, p.stdout[-300:]))
+    p, summary = report_step("u22-24", {"offered": False}, lambda d_: rec(d_, "ubuntu-check", "Failed to connect to https://changelogs.ubuntu.com/meta-release-lts\nNo new release found.\n", 1))
+    check("the report step: a tool that could not ask Canonical is red, says INVALID RUN, and has no NOT_OFFERED annotation", p.returncode != 0 and "INVALID RUN" in summary and "::warning title=NOT_OFFERED" not in p.stdout, (p.returncode, p.stdout[-300:], summary[:300]))
     p, summary = report_step("d11-12", {}, lambda d_: put(d_, "aborted", "boom\n"))
     check("the report step: an invalid run is red and says so in the summary", p.returncode != 0 and "INVALID RUN" in summary, (p.returncode, summary[:200]))
     p, summary = report_step("d11-12", {}, lambda d_: os.remove(os.path.join(d_, "timeline.tsv")))
