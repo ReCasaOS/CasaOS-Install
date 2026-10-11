@@ -1,0 +1,217 @@
+name: os-readiness-proof
+
+# Proof that the READINESS report of an operating system upgrade (GET /v1/sys/os/readiness, the second rung of the OS upgrade work) changes nothing on the machine
+# and says what it should, on real guests. The report is read-only by contract: no write under /etc, /var/lib/dpkg, /var/lib/apt or /var/cache/apt, no
+# `apt-get update`, no network request, no service started or stopped, no file created outside /var/lib/casaos (and nothing there either in this rung); the
+# only place it may write is its log, /var/log/casaos. It is the first thing the owner reads about his own Debian 11 box, and the machine is not his to
+# gamble with, so the contract is proved on a machine that is not his.
+#
+# Each leg is a QEMU guest booted with KVM from the cloud image of the system the report is about (the way install-check.yml, docker-update-proof.yml and
+# os-upgrade-measure.yml boot theirs). scripts/os-readiness-proof.sh installs Docker and the published ReCasaOS release on it (Debian 11 with
+# --use-debian-archive and Docker 28.0.4 with a 29 on offer: the owner's box), starts a few witness containers, and then, through the gateway with the
+# loopback secret:
+#   - the INVARIANCE window: a hash (names, sizes, times, mode, owner, contents) of /etc, /var/lib/dpkg, /var/lib/apt, /var/cache/apt, /var/lib/casaos and
+#     /var/log/casaos, the service units with their invocation ids, and the listening sockets, before and after GET /v1/sys/os and three calls of
+#     GET /v1/sys/os/readiness (one of them while another process holds dpkg's lock: the call must neither wait for it nor take it). Only /var/log/casaos may
+#     differ. A control (two snapshots a few seconds apart) tells what changes by itself, and that is left out and named;
+#   - the CLEAN box: a clean cloud image with ReCasaOS and Docker has no refuse, and every warning and every info is written down: they are the first data
+#     of the report on a real guest;
+#   - the DIRTY MATRIX: the guest is dirtied in one way at a time (a hold, an unfinished dpkg journal, a cdrom, file, stable-alias, proposed and third-party
+#     source, a Default-Release and a pin, a foreign architecture, a reboot flag, a lock, a running package update, a missing fstab device, containers that
+#     will not come back or that take the host's ports, a nearly full disk, AppManagement and Docker stopped...), the report is asked, the dirt is undone (a
+#     trap runs the undo when the script dies in the middle), and the report is asked again: the exact code with the exact severity has to appear, nothing
+#     else may appear with it, and after the undo the answer has to be the clean one again.
+# scripts/os-readiness-proof-report.py judges what the guest recorded (PASS, FAIL, NOT TESTABLE with its reason, or INVALID RUN), and fails the job for a FAIL
+# and for an INVALID RUN alike. Nothing is judged in the guest. A step whose undo failed is an INVALID RUN, never a FAIL of the feature.
+#
+#   d11  Debian 11, to Debian 12 (the installer's --use-debian-archive, Docker 28.0.4)
+#   u22  Ubuntu 22.04, to Ubuntu 24.04
+# `legs` chooses the cells (scripts/os-readiness-proof-legs.json): all of them or one. What these guests cannot do is listed in the report as NOT TESTABLE with
+# the reason (uptime_long, container, virt_xen, unproven_arch, an AppManagement operation in progress, an alias of Ubuntu's archive).
+#
+# It installs a release that has the route (a release before it answers 404 on the first call: an INVALID RUN, by name). Left empty, the tag is the latest
+# published release; a candidate that is a pre-release is proved by its tag before it is made the latest. By hand only; it publishes nothing and changes
+# nothing outside the guests.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The installer release to install, a tag of this repository (a pre-release when it is a candidate); empty for the latest published release
+        required: false
+        default: ''
+        type: string
+      legs:
+        description: Which legs to run, all of them or one (d11 is Debian 11, u22 is Ubuntu 22.04)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - d11
+          - u22
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: The legs of this run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    env:
+      LEGS: ${{ inputs.legs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The legs this run proves
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >>"${GITHUB_OUTPUT}"
+          import json
+          import os
+          want = os.environ["LEGS"]
+          chosen = [c for c in json.load(open("scripts/os-readiness-proof-legs.json")) if want == "all" or c["leg"] == want]
+          if not chosen:
+              raise SystemExit("no leg is %r" % want)
+          print("matrix=" + json.dumps({"include": chosen}, separators=(",", ":")))
+          PY
+          echo "legs of this run: ${LEGS}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  vm:
+    name: ${{ matrix.name }}, ${{ matrix.label }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      TAG: ${{ inputs.tag }}
+      LEG: ${{ matrix.leg }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      INSTALLER_ARGS: ${{ matrix.args }}
+      DOCKER_FROM: ${{ matrix.docker_from }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The proof can say no
+        run: |
+          set -euo pipefail
+          python3 scripts/test-os-readiness-proof.py
+          bash -n scripts/os-readiness-proof.sh
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG}" ]; then
+            TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          fi
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
+          # a candidate is a pre-release: GitHub does not call it the latest release, so nothing installs it by itself
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
+          mkdir published
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          # The runner's apt sometimes stalls without a word (it has taken a whole job
+          # before): a few bounded tries, for that and for nothing else.
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize disk.img 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      # The values reach the guest through the environment of this step, which the matrix of this file sets; none of them is typed by whoever dispatches the run
+      # (the tag is checked against the shape of a release tag before it is used, and reaches nothing but gh).
+      - name: Prove it
+        timeout-minutes: 50
+        run: |
+          set -euo pipefail
+          scp -F ssh_config published/install.sh scripts/os-readiness-proof.sh vm:
+          ssh -F ssh_config vm "sudo env READINESS_DISPOSABLE=1 INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' OUT=/home/casa/osr-out bash os-readiness-proof.sh ${LEG}"
+
+      # Red for a verdict that fails and for a run that proves nothing alike.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ssh -F ssh_config vm 'sudo tar -C /home/casa/osr-out -cf - .' | tar -xf - -C out || true
+          test -s out/timeline.tsv || { { echo "the run left no evidence: nothing to report"; cat out/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
+          python3 scripts/os-readiness-proof-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: What the machine says when it is not well
+        if: always()
+        run: |
+          ssh -F ssh_config vm 'systemctl --failed --no-pager; sudo journalctl -u casaos.service -u casaos-app-management.service -u docker.service --no-pager -o short-iso | tail -150' || true
+          tail -30 serial.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: os-readiness-proof-${{ matrix.leg }}
+          path: |
+            out
+            serial.log
+          if-no-files-found: ignore
