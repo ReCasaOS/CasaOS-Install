@@ -1,0 +1,2087 @@
+#!/usr/bin/env python3
+"""The measurement has to be able to say no. Each case below builds the directory a leg would leave, in a state that must come out a given
+way, and checks what os-upgrade-measure-report.py says and its exit status:
+
+    python3 scripts/test-os-upgrade-measure.py
+
+A healthy leg of each of the four (d11-12, d12-13, u22-24, u24-26) is measured, and every row of its go/no-go table has a case in which only
+the thing it decides is wrong, and that row must flip by name. A run that did not get as far as it should, or started from a box that was not
+what the leg needs, must be INVALID and never GO. An Ubuntu hop that Canonical has not opened is NOT_OFFERED, neutral and visible.
+
+The text-only functions of os-upgrade-measure.sh (the leg table, the guard on `do-release-upgrade -c`, the tool that rewrites apt's sources, the
+probes made of bash alone), its phases run against stand-ins for apt, systemctl, dpkg and the rest (the hop's unit, the sandbox, the Ubuntu unit,
+the poller), its runner functions run against a stand-in for ssh, and the workflow are tested too, when bash is here. No VM leg can run here: what
+the real apt, systemd and Canonical's tool print is what the first dispatch of the workflow measures.
+
+REPORT=<path>, MEASURE_SCRIPT=<path> and WORKFLOW=<path> run the cases against other copies, to see that a broken one is caught. CASES=<regex> runs
+the cases whose name matches. REPORT_ONLY=1 stops after the cases of the report, GUEST_ONLY=1 skips them. TEST_BASH=<path> names a bash where plain
+`bash` is not the one.
+"""
+import ast
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPORT = os.environ.get("REPORT") or os.path.join(HERE, "os-upgrade-measure-report.py")
+SCRIPT = os.environ.get("MEASURE_SCRIPT") or os.path.join(HERE, "os-upgrade-measure.sh")
+WORKFLOW = os.environ.get("WORKFLOW") or os.path.join(HERE, "..", ".github", "workflows", "os-upgrade-measure.yml")
+ONLY = os.environ.get("CASES")
+BASH = os.environ.get("TEST_BASH") or "bash"
+T0 = 1790000000.0
+ENV = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+
+failures = []
+count = [0]
+
+
+def wanted(name):
+    return not ONLY or re.search(ONLY, name) is not None
+
+
+def report_cases_wanted():
+    return not os.environ.get("GUEST_ONLY")
+
+
+def ok_line(name):
+    print("ok:", name)
+
+
+# ---- the legs ---------------------------------------------------------------------------------------------------------------
+
+DEB11 = dict(leg="d11-12", family="debian", old="11", new="12", old_code="bullseye", new_code="bookworm", old_pretty="Debian GNU/Linux 11 (bullseye)", new_pretty="Debian GNU/Linux 12 (bookworm)",
+             apt="apt 2.2.4 (amd64)", libc=("2.31-13+deb11u11", "2.36-9+deb12u10"), systemd=("247.3-7+deb11u6", "252.39-1~deb12u1"), dbus=("1.12.28-0+deb11u1", "1.14.10-1~deb12u1"),
+             kernel=("5.10.0-35-cloud-amd64", "6.1.0-37-cloud-amd64"), docker="28.0.4", dockerpkg="5:28.0.4-1~debian.11~bullseye", dockernew="5:29.8.0-1~debian.11~bullseye", frozen=True)
+DEB12 = dict(leg="d12-13", family="debian", old="12", new="13", old_code="bookworm", new_code="trixie", old_pretty="Debian GNU/Linux 12 (bookworm)", new_pretty="Debian GNU/Linux 13 (trixie)",
+             apt="apt 2.6.1 (amd64)", libc=("2.36-9+deb12u10", "2.41-12+deb13u1"), systemd=("252.39-1~deb12u1", "257.9-1~deb13u1"), dbus=("1.14.10-1~deb12u1", "1.16.2-2"),
+             kernel=("6.1.0-37-cloud-amd64", "6.12.48+deb13-cloud-amd64"), docker="29.8.0", dockerpkg="5:29.8.0-1~debian.12~bookworm", dockernew="5:29.9.0-1~debian.13~trixie", frozen=False)
+UBU22 = dict(leg="u22-24", family="ubuntu", old="22.04", new="24.04", old_code="jammy", new_code="noble", old_pretty="Ubuntu 22.04.5 LTS", new_pretty="Ubuntu 24.04.3 LTS",
+             apt="apt 2.4.14 (amd64)", libc=("2.35-0ubuntu3.11", "2.39-0ubuntu8.6"), systemd=("249.11-0ubuntu3.16", "255.4-1ubuntu8.10"), dbus=("1.12.20-2ubuntu4.1", "1.14.10-4ubuntu4.1"),
+             kernel=("5.15.0-1090-kvm", "6.8.0-1040-kvm"), docker="29.8.0", dockerpkg="5:29.8.0-1~ubuntu.22.04~jammy", dockernew="5:29.8.0-1~ubuntu.24.04~noble", frozen=False)
+UBU24 = dict(leg="u24-26", family="ubuntu", old="24.04", new="26.04", old_code="noble", new_code="resolute", old_pretty="Ubuntu 24.04.3 LTS", new_pretty="Ubuntu 26.04.1 LTS",
+             apt="apt 2.7.14 (amd64)", libc=("2.39-0ubuntu8.6", "2.43-1ubuntu1"), systemd=("255.4-1ubuntu8.10", "259-1ubuntu1"), dbus=("1.14.10-4ubuntu4.1", "1.16.2-1ubuntu2"),
+             kernel=("6.8.0-1040-kvm", "7.0.0-12-kvm"), docker="29.8.0", dockerpkg="5:29.8.0-1~ubuntu.24.04~noble", dockernew="5:29.8.0-1~ubuntu.26.04~resolute", frozen=False)
+LEGS = {s["leg"]: s for s in (DEB11, DEB12, UBU22, UBU24)}
+CONTAINERS = {"p-always": "always", "p-unless-stopped": "unless-stopped", "p-no": "no", "p-on-failure": "on-failure", "p-db": "unless-stopped", "p-web": "unless-stopped", "p-host": "unless-stopped"}
+STAYS = ("p-no", "p-on-failure")     # what does not start again by itself
+ENGINE = ["docker-ce", "docker-ce-cli", "containerd.io", "docker-ce-rootless-extras", "docker-buildx-plugin", "docker-compose-plugin"]
+CASA_DEPS = ["wget", "curl", "smartmontools", "parted", "ntfs-3g", "net-tools", "udevil", "samba", "cifs-utils", "mergerfs", "unzip", "git", "wsdd"]
+CASA_UNITS = ["casaos.service", "casaos-gateway.service", "casaos-app-management.service", "casaos-message-bus.service", "casaos-user-service.service", "casaos-local-storage.service"]
+OTHER_UNITS = ["ssh.service", "smbd.service", "nmbd.service", "docker.service", "containerd.service", "cron.service", "dbus.service", "systemd-logind.service", "osm-poller.service"]
+
+# the time of everything, in seconds from T0
+S = dict(prepare_start=0, prepare_done=900, inh1=920, inh1_back=1000, inh2=1030, inh2_back=1100, reboot_pre=1130, reboot_pre_back=1200,
+         refresh_start=1215, refresh_update_done=1260, refresh_done=1400, reboot_refresh=1405, reboot_refresh_back=1460,
+         baseline_start=1480, baseline_done=1525, probe_start=1527, probe_done=1965, hop_start=1975, hop_unit_end=3765, hop_done=3785, reboot_post=3795, reboot_post_back=3865,
+         after_start=3880, after_settled=3905, after_done=3945)
+REBOOTS = [("inh1", "inh1_back"), ("inh2", "inh2_back"), ("reboot_pre", "reboot_pre_back"), ("reboot_post", "reboot_post_back")]
+
+
+def reboots(spec):
+    """the reboots of a leg, in time: the inhibitor's two, the rehearsal's, the one the refresh asks for (when it does), the one after the hop"""
+    return REBOOTS[:3] + ([("reboot_refresh", "reboot_refresh_back")] if (spec or {}).get("refresh_reboot") else []) + REBOOTS[3:]
+
+
+def put(d, name, text):
+    with open(os.path.join(d, name), "w", newline="") as f:
+        f.write(text)
+
+
+def get(d, name):
+    try:
+        with open(os.path.join(d, name), newline="") as f:
+            return f.read().replace("\r\n", "\n")   # what a guest on Windows (this harness, when it runs there) wrote with Python's own newlines
+    except OSError:
+        return ""
+
+
+def rec(d, name, text="", rc=0):
+    put(d, name + ".txt", text)
+    put(d, name + ".rc", "%d\n" % rc)
+
+
+def hex32(seed):
+    return ("%032x" % (abs(hash(("osm", seed))) % (16 ** 32)))
+
+
+def iso(t):
+    return datetime.fromtimestamp(T0 + t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + ".%06dZ" % int((T0 + t) % 1 * 1e6)
+
+
+def os_release(pretty, id_, ver, code):
+    return 'PRETTY_NAME="%s"\nNAME="%s"\nVERSION_ID="%s"\nVERSION_CODENAME=%s\nID=%s\n' % (pretty, id_.title(), ver, code, id_)
+
+
+def apt_summary(up, new, rem, nu, need_mb=None, disk_mb=None, total=True):
+    out = ["%d upgraded, %d newly installed, %d to remove and %d not upgraded." % (up, new, rem, nu)]
+    if need_mb is not None:
+        out.append("Need to get %s MB of archives." % format(need_mb, ",") if not total else "Need to get 0 B/%s MB of archives." % format(need_mb, ","))
+    if disk_mb is not None:
+        out.append("After this operation, %s MB of additional disk space will be used." % format(disk_mb, ","))
+    return "\n".join(out) + "\n"
+
+
+def sim_text(s, up, new, rem, need, disk, docker_inst=False, docker_remv=False):
+    lines = ["Reading package lists...", "Building dependency tree...", "Calculating upgrade...", "The following packages will be REMOVED:", "  libaio1 libgcrypt20-dev",
+             "The following NEW packages will be installed:", "  libnftables1 nftables", "The following packages will be upgraded:", "  libc6 systemd dbus bash apt"]
+    lines += [apt_summary(up, new, rem, 0, need, disk, total=False).rstrip("\n")]
+    lines += ["Inst libc6 [%s] (%s Debian:12 [amd64])" % (s["libc"][0], s["libc"][1]), "Remv libaio1 [0.3.112-9]"]
+    if docker_inst:
+        lines.append("Inst docker-ce [%s] (%s Docker CE:%s [amd64])" % (s["dockerpkg"], s["dockernew"], s["old_code"]))
+    if docker_remv:
+        lines.append("Remv docker-ce [%s]" % s["dockerpkg"])
+    lines.append("Conf libc6 (%s Debian:12 [amd64])" % s["libc"][1])
+    return "\n".join(lines) + "\n"
+
+
+def package_set(s, when, spec):
+    """what dpkg-query -W says: before, hop (after the unit), after (after the reboot)"""
+    new = when != "before"
+    pk = {"libc6": s["libc"][1 if new else 0], "systemd": s["systemd"][1 if new else 0], "dbus": s["dbus"][1 if new else 0], "bash": "5.2" if new else "5.1", "apt": "2.9" if new else "2.2",
+          "openssh-server": "1:9.2p1-2" if new else "1:8.4p1-5", "linux-image-cloud-amd64": s["kernel"][1 if new else 0], "osm-orphan": "1.0", "osm-orphan-held": "1.0"}
+    for n in CASA_DEPS[:-1]:
+        pk[n] = "1.0"
+    for n in ENGINE:
+        pk[n] = s["dockerpkg"]
+    for i in range(30):
+        pk["libfoo%d" % i] = "2.%d" % i if new else "1.%d" % i
+    if new:
+        pk["libnftables1"] = "1.0"
+        pk["nftables"] = "1.0"
+        pk.pop("libfoo1")
+    if s["family"] == "ubuntu" and when != "before":
+        pk.pop("osm-orphan", None)                  # the tool removes what no repository has
+        if spec.get("variant", "hold") == "hold":
+            pk.pop("docker-buildx-plugin", None)    # the unheld ones go, the held ones stay
+            pk.pop("docker-compose-plugin", None)
+            pk.pop("docker-ce-rootless-extras", None)
+        else:
+            pk["osm-orphan"] = "1.0"                 # RemoveObsoletes=no: nothing is removed
+    return pk
+
+
+def sandbox_logs(d, s):
+    for v in ("paused", "kept"):
+        frozen_inst = s["frozen"] and v == "kept"
+        rec(d, "sandbox-%s-update" % v, "Hit:1 http://deb.debian.org/debian %s InRelease\nReading package lists...\n" % s["new_code"])
+        rec(d, "sandbox-%s-upgrade" % v, sim_text(s, 120, 4, 0, 160, 60))
+        rec(d, "sandbox-%s-dist-upgrade" % v, sim_text(s, 350, 38, 4, 412, 610, docker_inst=frozen_inst))
+        put(d, "sandbox-%s-sources.txt" % v, "==> sources.list <==\ndeb http://deb.debian.org/debian %s main\n" % s["new_code"] + ("==> parts/docker.list <==\ndeb https://download.docker.com/linux/debian %s stable\n" % s["old_code"] if v == "kept" else ""))
+        put(d, "sandbox-%s-size.txt" % v, "143\t/var/tmp/osm-sandbox.abc\n")
+    rec(d, "without-new-pkgs", sim_text(s, 120, 4, 0, 160, 60))
+    for h in ("etc-apt-before.sha", "etc-apt-after-sandbox.sha"):
+        put(d, h, "a" * 64 + "\n")
+    for h in ("lists-before.sha", "lists-after-sandbox.sha"):
+        put(d, h, "b" * 64 + "\n")
+    for f in ("suite", "version", "label", "codename", "origin"):
+        if f in ("suite", "version"):    # allowed by default (apt 2.2.4 and 2.6.1): a notice, and the update goes on
+            rec(d, "allow-%s-plain" % f, "Get:1 http://deb.debian.org/debian %s InRelease\nN: Repository 'http://deb.debian.org/debian %s InRelease' changed its '%s' value from 'osm-changed' to 'x'\nReading package lists...\n" % (s["new_code"], s["new_code"], f.capitalize()), 0)
+        else:
+            rec(d, "allow-%s-plain" % f, "E: Repository 'http://deb.debian.org/debian %s InRelease' changed its '%s' value from 'osm-changed' to 'x'\nE: This must be accepted explicitly before updates for this repository can be applied.\n" % (s["new_code"], f.capitalize()), 100)
+        rec(d, "allow-%s-field" % f, "Get:1 http://deb.debian.org/debian %s InRelease\nReading package lists...\n" % s["new_code"], 0)
+        rec(d, "allow-%s-all" % f, "Get:1 http://deb.debian.org/debian %s InRelease\nReading package lists...\n" % s["new_code"], 0)
+
+
+def step_log(s, name):
+    if name in ("minimal", "minimal_dl"):
+        return "Reading package lists...\nThe following packages will be upgraded:\n  apt bash libc6 systemd dbus\n" + apt_summary(120, 4, 0, 230, 160, 60) + "Setting up apt (2.6) ...\n"
+    if name in ("full", "full_dl"):
+        lib = ("Preparing to unpack .../libc6_%s_amd64.deb ...\nUnpacking libc6:amd64 (%s) over (%s) ...\nSetting up libc6:amd64 (%s) ...\n"
+               "Checking for services that may need to be restarted...\nChecking init scripts...\nRestarting services possibly affected by the upgrade:\n"
+               "  cron: restarting...done.\n  ssh: restarting...done.\n  smbd: restarting...done.\nServices restarted successfully.\nSetting up libc-bin (%s) ...\n") % (s["libc"][1], s["libc"][1], s["libc"][0], s["libc"][1], s["libc"][1])
+        return ("Reading package lists...\nThe following packages will be REMOVED:\n  libaio1 libgcrypt20-dev\nThe following NEW packages will be installed:\n  libnftables1 nftables\n"
+                "The following packages will be upgraded:\n  libc6 systemd\n" + apt_summary(230, 36, 3, 0, 252, 540) + lib)
+    if name.startswith(("converge", "catchup")):
+        return "Reading package lists...\n" + apt_summary(0, 0, 0, 0)
+    return "Reading package lists...\nDone\n"
+
+
+# what the core answers to GET /v1/sys/os on the day of the fixture's calls, written out here by hand from the spec (os-upgrade-pr01-spec.md, PR 1 core, and the core's route test),
+# not worked out by the code under test: the support of a release and the release after it
+RUN_STAMP = datetime(2026, 10, 11, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+RELEASE_CYCLE = "https://ubuntu.com/about/release-cycle"
+
+
+def esm(ends):
+    return {"name": "Ubuntu Pro (ESM)", "ends": ends, "precision": "month"}
+
+
+def nxt(family, version, codename, pretty):
+    return {"id": family, "version_id": version, "codename": codename, "pretty_name": pretty, "state": "report"}
+
+
+CORE_SUPPORT = {
+    ("debian", "11"): ({"state": "security_ended", "ends": "2026-08-31", "precision": "day", "extended": {"name": "Debian ELTS (Freexian)", "ends": "2031-06-30", "precision": "day"},
+                        "source": "https://www.debian.org/News/2026/20260831"}, nxt("debian", "12", "bookworm", "Debian 12 (bookworm)")),
+    ("debian", "12"): ({"state": "supported", "ends": "2028-06-30", "precision": "day", "source": "https://www.debian.org/News/2026/20260712"}, nxt("debian", "13", "trixie", "Debian 13 (trixie)")),
+    ("debian", "13"): ({"state": "supported", "ends": "2030-06-30", "precision": "day", "source": "https://www.debian.org/releases/"}, None),
+    ("ubuntu", "22.04"): ({"state": "supported", "ends": "2027-05-31", "precision": "month", "extended": esm("2032-04-21"), "source": RELEASE_CYCLE}, nxt("ubuntu", "24.04", "noble", "Ubuntu 24.04 LTS (noble)")),
+    ("ubuntu", "24.04"): ({"state": "supported", "ends": "2029-05-31", "precision": "month", "extended": esm("2034-04-25"), "source": RELEASE_CYCLE}, nxt("ubuntu", "26.04", "resolute", "Ubuntu 26.04 LTS (resolute)")),
+    ("ubuntu", "26.04"): ({"state": "supported", "ends": "2031-05-29", "precision": "month", "extended": esm("2036-04-23"), "source": RELEASE_CYCLE}, None),
+}
+
+
+def core_answer(family, version, codename, pretty, arch="amd64"):
+    """the envelope the route answers for a plain Debian or Ubuntu"""
+    support, nxt_ = json.loads(json.dumps(CORE_SUPPORT[(family, version)]))
+    data = {"id": family, "version_id": version, "codename": codename, "pretty_name": pretty, "arch": arch, "known": True, "support": support}
+    if nxt_:
+        data["next"] = nxt_
+    return {"success": 200, "message": "ok", "data": data}
+
+
+def sysos_files(d, tag, osr, answer, stamp=RUN_STAMP, code="200", rc=0, err=""):
+    """what the guest keeps of one call of GET /v1/sys/os"""
+    put(d, "sysos-%s.os-release" % tag, osr)
+    put(d, "sysos-%s.time" % tag, "%.6f\n" % stamp)
+    put(d, "sysos-%s.code" % tag, code + "\n")
+    put(d, "sysos-%s.rc" % tag, "%d\n" % rc)
+    put(d, "sysos-%s.err" % tag, err)
+    if answer is not None:
+        put(d, "sysos-%s.json" % tag, json.dumps(answer, separators=(",", ":")))
+
+
+def build(d, s, spec=None):
+    """the directory a healthy leg leaves; spec: variant (hold|keep), offered (False: an Ubuntu hop Canonical has not opened)"""
+    spec = spec or {}
+    deb = s["family"] == "debian"
+    variant = spec.get("variant", "hold")
+    skipped = not deb and spec.get("offered") is False
+    put(d, "leg", s["leg"] + "\n")
+    put(d, "os-before", os_release(s["old_pretty"], s["family"], s["old"], s["old_code"]))
+    new_os = os_release(s["new_pretty"], s["family"], s["new"], s["new_code"])
+    put(d, "start-version", s["docker"] + "\n")
+    put(d, "steps.log", "[measure] prepared\n")
+    put(d, "box-facts", "apt %s\ndpkg Debian 'dpkg' package management program version 1.20.14 (amd64).\nsystemd systemd 247 (%s)\nlibc6 %s\nbash 5.1.4(1)-release\npython3 Python 3.9.2\nkernel %s\nsh /usr/bin/dash\ntz +0000\ncpus 4\nmemory_mb 5900\ncloud-init /usr/bin/cloud-init 22.4.2\nneedrestart none\nupgrader %s\n" % (
+        s["apt"], s["systemd"][0], s["libc"][0], s["kernel"][0], "1:22.04.21" if not deb else "none"))
+    for tag, mounts in (("start", 25000), ("prepared", 21000), ("before", 20800), ("probed", 20500), ("hop", 14000), ("after", 14500)):
+        put(d, "df-%s.txt" % tag, "Filesystem 1048576-blocks Used Available Capacity Mounted on\n/dev/vda1 30000 %d %d 30%% /\n/dev/vda1 30000 %d %d 30%% /boot\n/dev/vda1 30000 %d %d 30%% /var\n" % ((30000 - mounts, mounts) * 3))
+    put(d, "df-steps.txt", "update / 20000\nfull / 14000\n")
+    # the refresh of the old release: what it upgraded, added and removed (the packages after it are the baseline's), and whether it asked for a reboot
+    stale = dict(package_set(s, "before", spec))
+    for i in range(5, 10):
+        stale["libfoo%d" % i] = "0.%d" % i
+    stale.pop("libfoo20")
+    stale["oldpkg"] = "1.0"
+    if spec.get("refresh_reboot"):
+        stale["linux-image-cloud-amd64"] = "0~" + stale["linux-image-cloud-amd64"]
+    put(d, "dpkg-refresh-before.tsv", "".join("%s\t%s\tii \n" % (n, v) for n, v in sorted(stale.items())))
+    put(d, "dpkg-refresh-after.tsv", "".join("%s\t%s\tii \n" % (n, v) for n, v in sorted(package_set(s, "before", spec).items())))
+    put(d, "refresh-update.log", "Hit:1 http://deb.debian.org/debian %s InRelease\nReading package lists...\n" % s["old_code"])
+    put(d, "refresh-upgrade.log", "Reading package lists...\nThe following packages will be upgraded:\n  libfoo5 libfoo6 libfoo7 libfoo8 libfoo9\n" + apt_summary(5, 1, 1, 0, 12, 3))
+    put(d, "refresh-reboot.txt", "yes kernel (1 linux-image package(s) new or changed)\n" if spec.get("refresh_reboot") else "no\n")
+    put(d, "sources-paused-refresh.txt", "/etc/apt/sources.list.d/docker.list\n")
+    rec(d, "upgradable-refresh", "Listing...\n")
+    for tag, req in (("refresh-before", "no"), ("refresh-after", "no")):
+        put(d, "kernel-%s.txt" % tag, "uname %s\nboot-file /boot/vmlinuz-%s 8000000\nboot-total 70000000\ndf-boot 900 650 250 /boot\nimages linux-image-cloud-amd64=%s\nreboot-required %s\n" % (
+            s["kernel"][0], s["kernel"][0], ("0~" if tag == "refresh-before" and spec.get("refresh_reboot") else "") + s["kernel"][0], req))
+    # the timeline
+    items = []
+
+    def mark(t, name):
+        items.append((t, "#\t%.6f\t%s" % (T0 + t, name)))
+    rb = reboots(spec)
+    for name, key in (("prepare_start", "prepare_start"), ("prepare_done", "prepare_done"), ("inhibit_reboot_start", "inh1"), ("inhibit_force_start", "inh2"), ("reboot_pre_start", "reboot_pre"),
+                      ("refresh_start", "refresh_start"), ("refresh_update_done", "refresh_update_done"), ("refresh_done", "refresh_done"), ("baseline_start", "baseline_start"), ("baseline_done", "baseline_done"),
+                      ("probe_start", "probe_start"), ("probe_done", "probe_done")):
+        mark(S[key], name)
+    if spec.get("refresh_reboot"):
+        mark(S["reboot_refresh"], "reboot_refresh_start")
+    for key, back in rb[:-1]:
+        mark(S[back] + 12, "boot_changed aaa bbb")
+    if skipped:
+        mark(S["hop_start"], "hop_skipped")
+        put(d, "hop-skipped", "not_offered\n")
+    else:
+        mark(S["hop_start"], "hop_start")
+        for name in ("hop_unit_end", "hop_done", "reboot_post_start", "after_start", "after_settled", "after_done"):
+            mark(S[{"reboot_post_start": "reboot_post"}.get(name, name)], name)
+        mark(S["reboot_post_back"] + 15, "boot_changed ccc ddd")
+    # a sample a second, but where the box is down
+    down = [(S[a] + 3, S[b]) for a, b in rb] if not skipped else [(S[a] + 3, S[b]) for a, b in rb[:-1]]
+    end = S["after_done"] if not skipped else S["hop_start"] + 30
+    names = ",".join(sorted(CONTAINERS))
+    t = 0
+    while t <= end:
+        t += 1
+        if any(a <= t < b for a, b in down):
+            continue
+        row = dict(docker=s["docker"], ssh="up", smb="up", gw="200", core="200", am="200", ami="401", web="200", host="200", names=names)
+        for _, back in rb:
+            r = t - S[back]
+            if 0 <= r < 30:       # the box just booted: what answers first
+                row.update(docker="-" if r < 4 else s["docker"], ssh="up" if r >= 2 else "down", smb="up" if r >= 6 else "down", gw="200" if r >= 18 else "000", core="200" if r >= 20 else "000",
+                           am="200" if r >= 24 else "000", ami="401" if r >= 24 else "000", web="200" if r >= 28 else "000", host="200" if r >= 28 else "000",
+                           names="-" if r < 4 else ",".join(n for n in sorted(CONTAINERS) if n not in STAYS) if r >= 28 else "p-always")
+        if S["hop_start"] + 800 <= t < S["hop_start"] + 803 and not skipped:
+            row["ssh"] = "down"
+        if S["hop_start"] + 800 <= t < S["hop_start"] + 805 and not skipped:
+            row["smb"] = "down"
+        if t > S["reboot_pre_back"] + 30 or t < S["inh1"]:
+            pass
+        # the containers that do not start by themselves are gone for good after the first reboot
+        if t >= S["inh1_back"]:
+            row["names"] = ",".join(n for n in names.split(",") if n not in STAYS) if row["names"] == names else row["names"]
+        items.append((T0 + t - T0, "%.6f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" % (T0 + t, row["docker"], row["ssh"], row["smb"], row["gw"], row["core"], row["am"], row["ami"], row["web"], row["host"], row["names"])))
+    put(d, "timeline.tsv", "\n".join(ln for _, ln in sorted(items, key=lambda x: x[0])) + "\n")
+    # units
+    def units(tag, gen, casa_gen):
+        out = []
+        for n in OTHER_UNITS + CASA_UNITS:
+            inv = (casa_gen if n in CASA_UNITS else gen)
+            out.append("%s\tactive\trunning\t%d\t%s" % (n, 100 + len(out), hex32((n, inv))))
+        put(d, "units-%s.tsv" % tag, "\n".join(out) + "\n")
+        put(d, "listen-%s.txt" % tag, "0.0.0.0:22\n0.0.0.0:80\n0.0.0.0:445\n")
+    units("before", 1, 1)
+    # the hop restarted what libc6's postinst restarts (cron, ssh, smbd, nmbd); the core and Docker were not touched
+    out = []
+    for n in OTHER_UNITS + CASA_UNITS:
+        inv = 2 if n in ("ssh.service", "smbd.service", "nmbd.service", "cron.service") else 1
+        out.append("%s\tactive\trunning\t%d\t%s" % (n, 100 + len(out), hex32((n, inv))))
+    put(d, "units-hop.tsv", "\n".join(out) + "\n")
+    units("boot", 3, 3)
+    units("after", 3, 3)
+    # packages
+    for tag, when in (("before", "before"), ("hop", "hop"), ("after", "after")):
+        pk = package_set(s, when, spec)
+        put(d, "dpkg-%s.tsv" % tag, "".join("%s\t%s\tii \n" % (n, v) for n, v in sorted(pk.items())))
+    put(d, "dpkg-hop.log", "%s 12:00:01 status half-configured libc6:amd64 %s\n%s 12:00:09 status installed libc6:amd64 %s\n" % (
+        datetime.fromtimestamp(T0 + S["hop_start"] + 700, timezone.utc).strftime("%Y-%m-%d"), s["libc"][1], datetime.fromtimestamp(T0 + S["hop_start"] + 700, timezone.utc).strftime("%Y-%m-%d"), s["libc"][1]))
+    # containers
+    for tag, running in (("before", set(CONTAINERS)), ("hop", set(CONTAINERS)), ("boot", {n for n in CONTAINERS if n not in STAYS} - {"p-web"}), ("after", {n for n in CONTAINERS if n not in STAYS})):
+        put(d, "containers-%s.txt" % tag, "".join("/%s policy=%s state=%s started=2026-10-10T19:14:01.1Z restarts=0\n" % (n, CONTAINERS[n], "running" if n in running else "exited") for n in CONTAINERS))
+    for tag, ver in (("before", s["docker"]), ("hop", s["docker"]), ("after", s["docker"])):
+        put(d, "docker-%s.txt" % tag, "server %s\ndriver overlay2\nactive active\npackages docker-ce=%s\n" % (ver, s["dockerpkg"]))
+    # health
+    for tag in ("before", "hop", "after"):
+        rec(d, "audit-" + tag)
+        rec(d, "aptcheck-" + tag, "Reading package lists...\n")
+        rec(d, "failed-" + tag)
+        rec(d, "sysstate-" + tag, "running\n")
+        rec(d, "holds-" + tag, "osm-orphan-held\n")
+    for tag, k in (("before", 0), ("hop", 0), ("after", 1)):
+        put(d, "kernel-%s.txt" % tag, "uname %s\nboot-file /boot/vmlinuz-%s %d\nboot-file /boot/initrd.img-%s %d\nboot-total %d\ndf-boot 900 %d %d /boot\nimages linux-image-cloud-amd64=%s\nreboot-required %s\n" % (
+            s["kernel"][k], s["kernel"][k], 8000000, s["kernel"][k], 60000000, 70000000 * (2 if tag != "before" else 1), 250 * (2 if tag != "before" else 1), 650, s["kernel"][k], "yes" if tag == "hop" else "no"))
+    for tag in ("before", "hop", "after"):
+        put(d, "deps-%s.txt" % tag, "".join("%s %s\n" % (n, "none" if n == "wsdd" else "ii ") for n in CASA_DEPS))
+    put(d, "settle-baseline", "2\n")
+    put(d, "baseline-started", "p-no\np-on-failure\n")
+    put(d, "settle-after", "9\n")
+    put(d, "jwt-claims-jwt-before.json", json.dumps({"issued": T0 + S["baseline_start"] + 20, "claims": {"id": 1, "exp": int(T0 + S["baseline_start"] + 20 + 10800), "iss": "casaos"}}) + "\n")
+    for n in ("gateway", "core", "am", "jwt", "internal"):
+        put(d, "%s-before.code" % n, "200\n")
+        put(d, "%s-after.code" % n, "200\n")
+    put(d, "jwt-fresh.code", "200\n")
+    put(d, "sysstate-wait.txt", "running\n")
+    sysos_files(d, "before", os_release(s["old_pretty"], s["family"], s["old"], s["old_code"]), core_answer(s["family"], s["old"], s["old_code"], s["old_pretty"]))
+    put(d, "sysstate-wait.rc", "0\n")
+    put(d, "analyze.txt", "Startup finished in 3.2s (kernel) + 10.1s (userspace) = 13.3s\n")
+    # witnesses: an acknowledged write every 2 s, none while the box is down
+    acks, t = [], 905.0
+    gaps = [(S[a] + 2, S[b] + 35) for a, b in rb]
+    while t < S["after_done"]:
+        t += 2
+        if not any(a <= t < b for a, b in gaps) and not (skipped and t > S["hop_start"] + 30):
+            acks.append((t, "%d-%d" % (T0 + t, len(acks) + 1)))
+    ids = "".join(i + "\n" for _, i in acks)
+    for tag, cut in (("before", S["baseline_done"]), ("hop", S["hop_done"]), ("after", 1e9)):
+        sel = [(t_, i) for t_, i in acks if t_ <= cut]
+        put(d, "db-%s-logs.txt" % tag, "".join("%s ack %s\n" % (iso(t_), i) for t_, i in sel))
+        put(d, "db-%s-file.txt" % tag, "".join(i + "\n" for _, i in sel))
+        put(d, "db-%s-logs.exit" % tag, "0\n")
+        put(d, "db-%s-file.exit" % tag, "0\n")
+    # the inhibitor: not refused (root goes round it): the guest writes the attempt, and the box goes down under it
+    for v, key in (("reboot", "inh1"), ("force", "inh2")):
+        put(d, "inhibit-%s.txt" % v, "variant %s\ncommand systemd-inhibit --what=shutdown --mode=block -- systemctl reboot\nboot_id aaa\nstart %.6f\n" % (v, T0 + S[key]))
+        put(d, "inhibit-%s.out" % v, "")
+    # the reboots
+    put(d, "reboot-pre.txt", "boot_id bbb\nissued %.6f\nmethod timer\n" % (T0 + S["reboot_pre"]))
+    put(d, "reboot-post.txt", "boot_id ccc\nissued %.6f\nmethod timer\n" % (T0 + S["reboot_post"]))
+    # the probes
+    if deb:
+        sandbox_logs(d, s)
+    else:
+        rec(d, "ubuntu-check", "Checking for a new Ubuntu release\nNew release '%s.5 LTS' available.\nRun 'do-release-upgrade' to upgrade to it.\n" % s["new"] if not skipped else "Checking for a new Ubuntu release\nNo new release found.\n", 0 if not skipped else 1)
+        rec(d, "release-upgrades-before", "[DEFAULT]\nPrompt=lts\n")
+        rec(d, "meta-release", "Dist: %s\nName: X\nVersion: %s.5 LTS\nDate: Thu, 21 Apr 2022 00:00:00 UTC\nSupported: 1\n" % (s["old_code"], s["old"]) +
+            ("" if skipped else "\nDist: %s\nName: Y\nVersion: %s.1 LTS\nDate: Thu, 25 Apr 2024 00:00:00 UTC\nSupported: 1\n" % (s["new_code"], s["new"])))
+        rec(d, "upgrader-tarball", "HTTP/1.1 200 OK\nLast-Modified: Mon, 07 Sep 2026 10:00:00 GMT\n")
+        rec(d, "pro-status", '{"attached": false}\n')
+        rec(d, "upgradable-before", "Listing...\n")
+    # the hop
+    if skipped:
+        return
+    ul = [(S["hop_start"] + 1, "START")]
+    if deb:
+        names_ = ["update", "minimal_dl", "minimal", "full_dl", "full", "converge1"]
+    else:
+        names_ = ["update", "upgrader"]
+    ul.append((S["hop_start"] + 2, "SRC_START"))
+    ul.append((S["hop_start"] + 4, "SRC_END"))
+    tcur = S["hop_start"] + 10
+    for n in names_:
+        ul.append((tcur, "STEP_START %s" % n))
+        put(d, "step-%s.log" % n, step_log(s, n) if deb else ("Checking for a new Ubuntu release\nrunning...\n" if n == "upgrader" else "Reading package lists...\n"))
+        put(d, "step-%s.rc" % n, "0\n")
+        tcur += 120 if n in ("minimal", "full") else 20
+        ul.append((tcur, "STEP_END %s 0" % n))
+        if n == "upgrader":
+            ul.append((tcur + 1, "UPGRADER_EXIT 0"))
+    ul.append((S["hop_unit_end"] - 5, "DONE"))
+    put(d, "hop-unit.log", "".join("%.6f %s\n" % (T0 + t_, w) for t_, w in ul))
+    for tag in ("start", "end"):
+        put(d, "unit-%s.txt" % tag, "pid 4242\ninvocation %s\nmanager %s\nsystemd %s\ndbus %s\nlibc6 %s\ntty not a tty\n" % (hex32("inv"), "247" if tag == "start" else "252", s["systemd"][0 if tag == "start" else 1], s["dbus"][0 if tag == "start" else 1], s["libc"][0 if tag == "start" else 1]))
+    put(d, "os-hop", new_os)
+    put(d, "os-after", new_os)
+    sysos_files(d, "after", new_os, core_answer(s["family"], s["new"], s["new_code"], s["new_pretty"]))
+    jd = datetime.fromtimestamp(T0 + S["hop_start"] + 700, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    put(d, "hop-journal.txt", "%s.123456+00:00 host systemd[1]: Stopping OpenBSD Secure Shell server...\n%s.223456+00:00 host systemd[1]: Started OpenBSD Secure Shell server.\n" % (jd, jd))
+    put(d, "apt-history.log", "Start-Date: 2026-10-10  12:00:00\nCommandline: apt-get dist-upgrade\n")
+    rec(d, "unit-state", "ActiveState=inactive\nResult=success\n")
+    if deb:
+        put(d, "sources-before.txt", "==> /etc/apt/sources.list <==\ndeb http://deb.debian.org/debian %s main\ndeb https://download.docker.com/linux/debian %s stable\n" % (s["old_code"], s["old_code"]))
+        put(d, "sources-after.txt", "==> /etc/apt/sources.list <==\ndeb http://deb.debian.org/debian %s main\n" % s["new_code"])
+        put(d, "sources-paused.txt", "/etc/apt/sources.list.d/docker.list\n")
+    else:
+        put(d, "controls.txt", "variant %s\nheld %s\n" % (variant, "osm-orphan-held docker-ce docker-ce-cli containerd.io" if variant == "hold" else "osm-orphan-held"))
+        rec(d, "ubuntu-check-unit", "New release '%s.5 LTS' available.\n" % s["new"])
+        rec(d, "upgradable-unit", "Listing...\n")
+        rec(d, "release-upgrades-after", "[DEFAULT]\nPrompt=lts\n")
+        rec(d, "pro-status-after", '{"attached": false}\n')
+        put(d, "hop-sample.log", "".join("%.6f screen=0 sshd1022=0\n" % (T0 + S["hop_start"] + 100 * i) for i in range(1, 8)))
+        put(d, "dist-upgrade-main.log", "2026-10-10 12:00:00,000 INFO Using ubuntu-release-upgrader 1:24.04.27\n2026-10-10 12:00:01,000 INFO release-upgrader: starting\n")
+        listing = "total 8\n-rw-r--r-- 1 root root 200 Oct 10 12:00 docker.list.casaos-paused\n-rw-r--r-- 1 root root 190 Oct 10 12:30 docker.sources\n"
+        rec(d, "sources-dir-after", listing)
+        rec(d, "sources-dir-end", listing)
+    put(d, "analyze.txt", "Startup finished in 3.2s (kernel) + 10.1s (userspace) = 13.3s\n")
+    put(d, "uptime-since.txt", "2026-10-10 13:00:00\n")
+
+
+# ---- the cases ----------------------------------------------------------------------------------------------------------------
+
+_templates = {}
+
+
+def run_report(d, leg):
+    # a time zone 14 hours ahead of UTC (POSIX form: XXX-14), whatever this machine's own is: the day of a call of GET /v1/sys/os is its UTC day, and a report that took the local day
+    # of the machine it runs on would see the next day for 14 hours of every day, here as well as on a runner whose clock is UTC
+    p = subprocess.run([sys.executable, REPORT, d, leg], capture_output=True, text=True, env=dict(ENV, TZ="XXX-14"), encoding="utf-8")
+    return p.returncode, p.stdout + p.stderr
+
+
+def table_row(text, question):
+    """the answer of the go/no-go table's row whose question starts with the text"""
+    for ln in text.splitlines():
+        m = re.match(r"^\| (.*?) \| \*\*([A-Z_-]+)\*\* \| (.*) \|$", ln)
+        if m and m.group(1).startswith(question):
+            return m.group(2), m.group(3)
+    return None, ""
+
+
+def case(name, leg, want_code, mutate=None, spec=None, must_have=(), must_not_have=(), rows=None, empty=False):
+    """rows: {question prefix: answer} the go/no-go table has to give"""
+    if not wanted(name) or not report_cases_wanted():
+        return
+    count[0] += 1
+    s = LEGS[leg]
+    key = (leg, json.dumps(spec or {}, sort_keys=True))
+    if key not in _templates:
+        t = tempfile.mkdtemp()
+        build(t, s, spec)
+        _templates[key] = t
+    with tempfile.TemporaryDirectory() as d:
+        if not empty:
+            shutil.copytree(_templates[key], d, dirs_exist_ok=True)
+        if mutate:
+            mutate(d)
+        code, text = run_report(d, leg)
+        problems = []
+        if code != want_code:
+            problems.append("exit %d, wanted %d" % (code, want_code))
+        problems += ["missing %r" % x for x in must_have if x not in text]
+        problems += ["should not say %r" % x for x in must_not_have if x in text]
+        for q, a in (rows or {}).items():
+            got, ev = table_row(text, q)
+            if got != a:
+                problems.append("row %r is %r, wanted %r (%s)" % (q, got, a, ev[:160]))
+        if re.search(r"^Traceback \(most recent call last\)", text, re.M):     # the report's own crash, not a tool's crash that the report quotes
+            problems.append("crashed")
+        if problems:
+            failures.append("%s: %s\n%s" % (name, "; ".join(problems), text[-2200:]))
+        else:
+            ok_line(name)
+
+
+def flips(name, leg, question, want, mutate, spec=None, must_have=()):
+    """one thing is wrong, and the row that decides it says so (and the run is still a measured one, not an invalid one)"""
+    case(name, leg, 0, mutate=mutate, spec=spec, rows={question: want}, must_have=list(must_have), must_not_have=["INVALID RUN"])
+
+
+def invalid(name, leg, reason, mutate, spec=None, empty=False, has=()):
+    """a run that proves nothing: exit 1, INVALID RUN, the reason, and not one GO"""
+    case(name, leg, 1, mutate=mutate, spec=spec, empty=empty, must_have=["INVALID RUN", reason] + list(has), must_not_have=["**GO**", "## The go/no-go table"])
+
+
+def jedit(d, name, fn):
+    j = json.loads(get(d, name))
+    fn(j)
+    put(d, name, json.dumps(j))
+
+
+def replace(d, name, old, new, n=-1):
+    text = get(d, name)
+    assert old in text, "%r is not in %s" % (old, name)
+    put(d, name, text.replace(old, new, n))
+
+
+def ledit(d, name, fn):
+    put(d, name, "\n".join(fn(get(d, name).splitlines())) + "\n")
+
+
+def remove(d, *names):
+    for n in names:
+        os.remove(os.path.join(d, n))
+
+
+def timeline_edit(d, fn):
+    """fn(fields) -> fields | None (drop) for the samples of the poller; the markers are left alone"""
+    out = []
+    for ln in get(d, "timeline.tsv").splitlines():
+        f = ln.split("\t")
+        if f[0] == "#":
+            out.append(ln)
+            continue
+        f = fn(f)
+        if f is not None:
+            out.append("\t".join(f))
+    put(d, "timeline.tsv", "\n".join(out) + "\n")
+
+
+def drop_marker(name):
+    return lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if not re.match(r"^#\t[0-9.]+\t%s( |$)" % re.escape(name), ln)])
+
+
+def unit_set(d, name, fn):
+    """fn(unit, fields) -> fields for the rows of a units file"""
+    def each(ls):
+        out = []
+        for ln in ls:
+            f = ln.split("\t")
+            out.append("\t".join(fn(f[0], f)))
+        return out
+    ledit(d, name, each)
+
+
+Q_SANDBOX = "The sandbox plan works"
+Q_FROZEN = "The docker-ce built for"
+Q_CORE = "The core, the gateway and AppManagement come back by themselves"
+Q_TOKEN = "A token issued before the hop"
+Q_UNIT = "The transient unit survives"
+Q_HOP = "The hop did what it set out to"
+Q_INH = "The product can rely on the block inhibitor"
+Q_TOOL = "The Ubuntu tool can be driven from a unit (no terminal"
+Q_DOCKER = "What the tool does to Docker"
+Q_HOLD = "apt-mark hold keeps Docker's engine"
+Q_CFG = "RemoveObsoletes=no in release-upgrades.d"
+
+# ---- healthy legs ----------------------------------------------------------------------------------------------------------------
+
+for leg in ("d11-12", "d12-13"):
+    s = LEGS[leg]
+    case("a healthy %s leg is measured: every row of the table is answered, and the inhibitor does not keep root out" % leg, leg, 0,
+         must_have=["MEASURED", "## The go/no-go table", "How close the plan is to the transaction that was done", "libc6 %s to %s" % s["libc"], "cron, smbd, ssh",
+                    "as apt's own table says", "The lowest free space seen in the guest is 14000 MB"],
+         must_not_have=["INVALID", "NOT_OFFERED", "Traceback"],
+         rows={Q_SANDBOX: "GO", Q_FROZEN: "GO", Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_INH: "NO-GO"})
+for leg, variant in (("u22-24", "hold"), ("u24-26", "hold"), ("u22-24", "keep")):
+    case("a healthy %s leg, variant %s, is measured" % (leg, variant), leg, 0, spec={"variant": variant},
+         must_have=["MEASURED", "## The go/no-go table", "Canonical's side", "Last-Modified", "Mon, 07 Sep 2026"], must_not_have=["INVALID", "NOT_OFFERED", "Traceback"],
+         rows=dict({Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_TOOL: "GO", Q_DOCKER: "GO"}, **({Q_HOLD: "GO", Q_CFG: "OPEN"} if variant == "hold" else {Q_HOLD: "OPEN", Q_CFG: "GO"})))
+for leg in ("u22-24", "u24-26"):
+    case("%s: an upgrade Canonical has not opened is NOT_OFFERED, neutral and visible, and no row is a GO" % leg, leg, 0, spec={"offered": False},
+         must_have=["NOT_OFFERED", "neither a pass nor a failure", "No new release found"], must_not_have=["INVALID", "**GO**"],
+         rows={"The Ubuntu tool can be driven from a unit, and what it does to Docker": "NOT_OFFERED"})
+case("the report is ASCII (a runner's console may not be UTF-8)", "d11-12", 0, must_not_have=[], mutate=None)
+for leg in ("d11-12", "u24-26"):
+    case("%s: the refresh of the old release is reported on its own: its durations, its package lists, and that it needed no reboot" % leg, leg, 0,
+         must_have=["## The refresh of the old release", "5 upgraded, 1 added, 1 removed", "Upgraded: libfoo5, libfoo6, libfoo7, libfoo8, libfoo9.", "Added: libfoo20.", "Removed: oldpkg.", "  of which apt update",
+                    "  of which the full upgrade", "a reboot is not needed", "Still upgradable after the refresh: nothing"], must_not_have=["INVALID", "the reboot the refresh asked for"])
+case("d12-13: a refresh that changes the kernel asks for a reboot, the guest makes it, and the report says so", "d12-13", 0, spec={"refresh_reboot": True},
+     must_have=["a reboot is needed: kernel (1 linux-image package(s) new or changed)", "the reboot the refresh asked for"], must_not_have=["INVALID"], rows={Q_CORE: "GO"})
+case("the refresh leaves packages upgradable: they are said", "d11-12", 0, must_have=["Still upgradable after the refresh: 1 (libfoo9)"],
+     mutate=lambda d: rec(d, "upgradable-refresh", "Listing...\nlibfoo9/stable 2.9 amd64 [upgradable from: 1.9]\n"))
+
+# ---- the rows flip ---------------------------------------------------------------------------------------------------------------------
+
+def seq(*fns):
+    return lambda d: [f(d) for f in fns] and None
+
+
+def fill_boot_gap(d):
+    """the box did not go down: samples through the gap of the reboot after the hop"""
+    rows_ = []
+    for t_ in range(S["reboot_post"] + 3, S["reboot_post_back"]):
+        rows_.append("%.6f\t28.0.4\tup\tup\t200\t200\t200\t401\t200\t200\t%s" % (T0 + t_, ",".join(sorted(CONTAINERS))))
+    ledit(d, "timeline.tsv", lambda ls: ls + rows_)
+
+
+def no_boot_change_after(name):
+    return lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if not (ln.startswith("#") and "boot_changed" in ln and float(ln.split("\t")[1]) > T0 + S[name])])
+
+
+L = "d11-12"
+flips("sandbox: the sandbox's update fails", L, Q_SANDBOX, "NO-GO", lambda d: rec(d, "sandbox-paused-update", "E: The repository does not have a Release file.\n", 100), must_have=["The repository does not have a Release file"])
+flips("sandbox: its sources do not name the target (the rewriter left the old suite): OPEN, not a GO, and the Docker row that reads its plan is OPEN too", L, Q_SANDBOX, "OPEN",
+      lambda d: put(d, "sandbox-paused-sources.txt", "==> sources.list <==\ndeb http://deb.debian.org/debian bullseye main\n"), must_have=["the sandbox did not see bookworm: its sources do not name it"])
+case("sandbox: ... and the frozen Docker row, which reads that plan, is OPEN with it", L, 0, rows={Q_SANDBOX: "OPEN", Q_FROZEN: "OPEN"}, mutate=lambda d: put(d, "sandbox-paused-sources.txt", "==> sources.list <==\ndeb http://deb.debian.org/debian bullseye main\n"),
+     must_have=["the sandbox plan could not be read, or did not see bookworm"], must_not_have=["INVALID RUN"])
+flips("sandbox: its plan has nothing to do (0 upgraded, 0 new): OPEN", L, Q_SANDBOX, "OPEN", lambda d: rec(d, "sandbox-paused-dist-upgrade", apt_summary(0, 0, 0, 0)), must_have=["its plan has nothing to do"])
+case("sandbox: a comment that names the target is not a source", L, 0, rows={Q_SANDBOX: "OPEN"}, mutate=lambda d: put(d, "sandbox-paused-sources.txt", "==> sources.list <==\n# deb http://deb.debian.org/debian bookworm main\ndeb http://deb.debian.org/debian bullseye main\n"))
+invalid("sandbox: a mirror that could not be reached during the update of the sandbox is invalid, not a NO-GO", L, "the mirror could not be reached while the sandbox updated (sandbox-paused-update: Temporary failure resolving 'deb.debian.org')",
+        lambda d: rec(d, "sandbox-paused-update", "Err:1 http://deb.debian.org/debian bookworm InRelease\n  Temporary failure resolving 'deb.debian.org'\nE: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Temporary failure resolving 'deb.debian.org'\n", 100))
+invalid("sandbox: the same for the sandbox that keeps Docker's source", L, "the mirror could not be reached while the sandbox updated (sandbox-kept-update",
+        lambda d: rec(d, "sandbox-kept-update", "E: Failed to fetch https://download.docker.com/linux/debian/dists/bullseye/InRelease  Could not connect to download.docker.com:443 (1.2.3.4), connection timed out\nConnection timed out\n", 100))
+case("sandbox: an update that fails because the repository has no Release file is a real answer: NO-GO, and not an invalid run", L, 0, rows={Q_SANDBOX: "NO-GO"}, must_not_have=["INVALID RUN"],
+     mutate=lambda d: rec(d, "sandbox-paused-update", "E: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  404  Not Found\nE: The repository 'http://deb.debian.org/debian bookworm InRelease' does not have a Release file.\n", 100))
+flips("sandbox: -s dist-upgrade fails", L, Q_SANDBOX, "NO-GO", lambda d: rec(d, "sandbox-paused-dist-upgrade", "E: Unable to correct problems, you have held broken packages.\n", 100))
+flips("sandbox: -s upgrade fails", L, Q_SANDBOX, "NO-GO", lambda d: rec(d, "sandbox-paused-upgrade", "E: x\n", 100))
+flips("sandbox: /etc/apt is not as it was", L, Q_SANDBOX, "NO-GO", lambda d: put(d, "etc-apt-after-sandbox.sha", "c" * 64 + "\n"), must_have=["/etc/apt CHANGED"])
+flips("sandbox: apt's lists are not as they were", L, Q_SANDBOX, "NO-GO", lambda d: put(d, "lists-after-sandbox.sha", "c" * 64 + "\n"))
+case("sandbox: the kept-source plan may remove Docker and the row (which asks about the paused source) does not change", L, 0,
+     mutate=lambda d: replace(d, "sandbox-kept-dist-upgrade.txt", "Conf libc6", "Remv docker-ce [x]\nConf libc6"), rows={Q_SANDBOX: "GO", Q_FROZEN: "GO"},
+     must_have=["the kept-source simulation removes an engine package | docker-ce"])
+flips("frozen Docker: the paused simulation removes docker-ce", L, Q_FROZEN, "NO-GO", lambda d: replace(d, "sandbox-paused-dist-upgrade.txt", "Conf libc6", "Remv docker-ce [x]\nConf libc6"), must_have=["an engine package: docker-ce"])
+flips("frozen Docker: the paused -s upgrade purges containerd.io", L, Q_FROZEN, "NO-GO", lambda d: replace(d, "sandbox-paused-upgrade.txt", "Conf libc6", "Purg containerd.io [x]\nConf libc6"))
+flips("frozen Docker: docker-ce is not the same version after the reboot", L, Q_FROZEN, "NO-GO", lambda d: replace(d, "dpkg-after.tsv", "docker-ce\t5:28.0.4-1~debian.11~bullseye", "docker-ce\t5:29.8.0-1~debian.11~bullseye"))
+flips("frozen Docker: containerd.io is gone after the reboot", L, Q_FROZEN, "NO-GO", lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("containerd.io\t")]))
+flips("frozen Docker: the daemon does not answer after the reboot", L, Q_FROZEN, "NO-GO", lambda d: replace(d, "docker-after.txt", "server 28.0.4", "server unavailable"))
+case("frozen Docker: with the frozen repository kept, the plan includes Docker (the owner's box: 28.0.4 with a 29 on offer), and with it paused it does not", L, 0,
+     must_have=["the plan includes Docker | yes: docker-ce", "the same with the source paused | no"])
+case("frozen Docker: on Debian 12 the Docker repository is not frozen: no Docker in either plan", "d12-13", 0, must_have=["the plan includes Docker | no"])
+flips("core: casaos is not active after the reboot", L, Q_CORE, "NO-GO", lambda d: unit_set(d, "units-after.tsv", lambda n, f: [f[0], "inactive", "dead", "0", ""] if n == "casaos.service" else f), must_have=["casaos.service"])
+def restarted_gateway(d):
+    unit_set(d, "units-after.tsv", lambda n, f: f[:4] + [hex32("again")] if n == "casaos-gateway.service" else f)
+
+
+flips("core: the gateway was restarted by systemd after the first look: it came back by itself, and the row says so instead of failing it", L, Q_CORE, "GO", restarted_gateway,
+      must_have=["restarted by systemd after the first look (its Restart= brought it back): casaos-gateway.service"])
+flips("core: restarted by systemd and not answering 200 once settled is still a NO-GO", L, Q_CORE, "NO-GO", seq(restarted_gateway, lambda d: put(d, "am-after.code", "502\n")),
+      must_have=["asked once settled: gateway 200, core 200, AppManagement 502", "casaos-gateway.service"])
+flips("core: the core never answers 200 after the reboot", L, Q_CORE, "NO-GO", lambda d: timeline_edit(d, lambda f: f[:5] + ["502"] + f[6:] if float(f[0]) > T0 + S["reboot_post"] and f[5] == "200" else f))
+flips("core: AppManagement never answers 200, with either credential, after the reboot", L, Q_CORE, "NO-GO",
+      lambda d: timeline_edit(d, lambda f: f[:6] + ["401", "401"] + f[8:] if float(f[0]) > T0 + S["reboot_post"] else f))
+case("core: AppManagement answering only with the loopback secret is answering", L, 0, rows={Q_CORE: "GO"},
+     mutate=lambda d: timeline_edit(d, lambda f: f[:6] + ["401", "200"] + f[8:] if float(f[0]) > T0 + S["reboot_post"] else f))
+flips("core: no casaos service was active before: nothing to say", L, Q_CORE, "OPEN", lambda d: unit_set(d, "units-before.tsv", lambda n, f: [f[0], "inactive"] + f[2:] if n.startswith("casaos") else f))
+flips("token: refused after the reboot, and not expired", L, Q_TOKEN, "NO-GO", lambda d: put(d, "jwt-after.code", "401\n"), must_have=["the token of the baseline: rejected"])
+flips("token: refused after the reboot because it expired: not decidable", L, Q_TOKEN, "OPEN",
+      seq(lambda d: put(d, "jwt-after.code", "401\n"), lambda d: put(d, "jwt-claims-jwt-before.json", json.dumps({"issued": T0 + 100, "claims": {"exp": int(T0 + 200)}}))), must_have=["the token of the baseline: expired"])
+flips("token: a new login is refused too, which the row says", L, Q_TOKEN, "GO", lambda d: put(d, "jwt-fresh.code", "401\n"), must_have=["a new login afterwards: NOT accepted"])
+flips("unit: it never wrote DONE", L, Q_UNIT, "NO-GO", lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" DONE")]))
+flips("unit: it is not the same process at the end", L, Q_UNIT, "NO-GO", lambda d: replace(d, "unit-end.txt", "pid 4242", "pid 9999"))
+flips("unit: neither systemd, nor dbus, nor libc6 was upgraded: the question was not asked", L, Q_UNIT, "OPEN", seq(lambda d: put(d, "dpkg-hop.tsv", get(d, "dpkg-before.tsv")), lambda d: put(d, "dpkg-after.tsv", get(d, "dpkg-before.tsv"))))
+flips("hop: the release after the reboot is still the old one", L, Q_HOP, "NO-GO", lambda d: put(d, "os-after", get(d, "os-before")))
+flips("hop: dpkg --audit has something to say after the reboot", L, Q_HOP, "NO-GO", lambda d: rec(d, "audit-after", "The following packages are only half configured: libc6\n", 1))
+flips("hop: apt-get check fails after the reboot", L, Q_HOP, "NO-GO", lambda d: rec(d, "aptcheck-after", "E: Unmet dependencies.\n", 100))
+flips("hop: the last simulation has things left to do", L, Q_HOP, "NO-GO", lambda d: put(d, "step-converge1.log", "Reading package lists...\n" + apt_summary(3, 0, 0, 0)))
+flips("hop: the full upgrade failed and nothing repaired it", L, Q_HOP, "NO-GO", seq(lambda d: put(d, "step-full.rc", "100\n"), lambda d: replace(d, "hop-unit.log", "STEP_END full 0", "STEP_END full 100")))
+case("hop: the full upgrade failed once and the notes' failure ladder completed it: a GO that says so", L, 0, rows={Q_HOP: "GO"}, must_have=["failure ladder"],
+     mutate=seq(lambda d: put(d, "step-full.rc", "100\n"), lambda d: replace(d, "hop-unit.log", "STEP_END full 0", "STEP_END full 100"), lambda d: put(d, "step-recover_full.log", "ok\n"),
+                lambda d: put(d, "step-recover_full.rc", "0\n"),
+                lambda d: put(d, "hop-unit.log", get(d, "hop-unit.log") + "%.6f STEP_START recover_full\n%.6f STEP_END recover_full 0\n" % (T0 + S["hop_start"] + 1000, T0 + S["hop_start"] + 1100))))
+case("hop: the release was reached and the box is clean, but the unit never reached DONE", L, 0, rows={Q_HOP: "NO-GO"}, must_have=["the unit did not reach DONE"],
+     mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" DONE")]))
+
+
+def refused(variant):
+    """root's reboot refused: the guest wrote rc 1 and survived, the box never went down (no gap, no new boot)"""
+    def m(d):
+        put(d, "inhibit-%s.txt" % variant, get(d, "inhibit-%s.txt" % variant) + "rc 1\nsurvived yes\n")
+        put(d, "inhibit-%s.out" % variant, "Operation inhibited by \"os-upgrade-measure\" (reason: refusal probe)\n")
+        key, back = ("inh1", "inh1_back") if variant == "reboot" else ("inh2", "inh2_back")
+        ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if not (ln.startswith("#") and "boot_changed" in ln and abs(float(ln.split("\t")[1]) - T0 - S[back] - 12) < 1)])
+        ledit(d, "timeline.tsv", lambda ls: ls + ["%.6f\t28.0.4\tup\tup\t200\t200\t200\t401\t200\t200\t%s" % (T0 + t_, ",".join(sorted(CONTAINERS))) for t_ in range(S[key] + 3, S[back])])
+    return m
+
+
+case("inhibitor: root's reboot refused, and --force refused too", L, 0, rows={Q_INH: "GO"}, mutate=seq(refused("reboot"), refused("force")), must_have=["reboot: REFUSED; --force: REFUSED"])
+case("inhibitor: refused for the plain reboot and not for --force: --force goes round the lock, so it is not a GO, and the row says what is open", L, 0, rows={Q_INH: "OPEN"}, mutate=refused("reboot"),
+     must_have=["--force goes round the lock", "reboot: REFUSED; --force: NOT REFUSED"], must_not_have=["INVALID RUN"])
+case("inhibitor: not refused for the plain reboot: NO-GO", L, 0, rows={Q_INH: "NO-GO"})
+
+
+def inhibit_result(variant, rc, text):
+    """the attempt returned with this status and this output, and the box stayed up"""
+    return seq(refused(variant), lambda d: put(d, "inhibit-%s.txt" % variant, get(d, "inhibit-%s.txt" % variant).replace("rc 1\n", "rc %d\n" % rc)), lambda d: put(d, "inhibit-%s.out" % variant, text))
+
+
+for label, rc, text in (("a command that is not there (127)", 127, "systemd-inhibit: command not found\n"), ("a timeout (124)", 124, ""), ("a bus that does not answer", 1, "Failed to connect to bus: No such file or directory\n")):
+    case("inhibitor: %s is not a refusal: unclear, and the row is OPEN, not a GO" % label, L, 0, rows={Q_INH: "OPEN"}, mutate=seq(inhibit_result("reboot", rc, text), refused("force")),
+         must_have=["UNCLEAR (exit %d, and no refusal of logind in it" % rc], must_not_have=["INVALID RUN"])
+    case("inhibitor: %s for --force, after a real refusal of the plain reboot, is not a refusal either: OPEN" % label, L, 0, rows={Q_INH: "OPEN"}, mutate=seq(refused("reboot"), inhibit_result("force", rc, text)), must_not_have=["INVALID RUN"])
+case("inhibitor: exit 0 and the box did not go down: unclear", L, 0, rows={Q_INH: "OPEN"},
+     mutate=seq(lambda d: put(d, "inhibit-reboot.txt", get(d, "inhibit-reboot.txt") + "rc 0\nsurvived yes\n"), refused("reboot"), lambda d: put(d, "inhibit-reboot.txt", get(d, "inhibit-reboot.txt").replace("rc 1", "rc 0"))), must_have=["UNCLEAR"])
+case("libc6 was not upgraded by the hop: the question is open and the report says so", L, 0, must_have=["libc6 was not upgraded by the unit"],
+     mutate=seq(lambda d: put(d, "dpkg-hop.tsv", get(d, "dpkg-hop.tsv").replace(DEB11["libc"][1], DEB11["libc"][0])), lambda d: put(d, "dpkg-after.tsv", get(d, "dpkg-after.tsv").replace(DEB11["libc"][1], DEB11["libc"][0]))))
+case("the services that were restarted are the units whose InvocationID changed, not whose state did", L, 0, must_have=["| cron.service |", "| smbd.service |", "| ssh.service |", "ssh bounced during the hop | yes", "docker bounced during the hop | no"],
+     must_not_have=["| docker.service |"])
+case("a unit that bounced is named: Docker restarted by the hop", L, 0, must_have=["| docker.service |", "docker bounced during the hop | yes"],
+     mutate=lambda d: unit_set(d, "units-hop.tsv", lambda n, f: f[:4] + [hex32("dockerd")] if n == "docker.service" else f))
+case("the containers: the ones that start by themselves are listed back, the others are not_returned", L, 0, must_have=["ALL running again", "p-no, p-on-failure (the same list the Docker update calls not_returned)"])
+case("a container that starts by itself and does not come back is said", L, 0, must_have=["NOT running again: p-always"],
+     mutate=lambda d: replace(d, "containers-after.txt", "/p-always policy=always state=running", "/p-always policy=always state=exited"))
+case("the database lost nothing; a lost write is counted", L, 0, must_have=["**0 missing**"])
+case("a database that lost an acknowledged write says how many", L, 0, must_have=["**1 missing**"], mutate=lambda d: ledit(d, "db-after-file.txt", lambda ls: ls[:-1]))
+case("a window of silence of the database is measured", L, 0, must_have=["Longest silence during the hop: 2.0 s", "Longest silence from the reboot to the containers being back: 1"])
+case("the disk: the lowest free space is said, and no claim is made that it was short or not beyond the figures", L, 0, must_have=["Lowest free space on a mount, after any step of the hop: 14000 MB", "The lowest free space seen in the guest is 14000 MB, and no mount fell below 300 MB"],
+     must_not_have=["Disk was NOT short", "was SHORT"])
+case("the disk: a /boot that was left with 7 MB is said to be short, with the mount and the figure", L, 0, must_have=["**The guest's disk was SHORT**: /boot 7 MB free"], must_not_have=["Disk was NOT short", "The lowest free space seen in the guest"],
+     mutate=lambda d: put(d, "df-steps.txt", "update / 20000\nfull /boot 7\n"))
+case("the disk: 600 MB left on the root is short (the floor is 1000 MB there), and 600 MB on /boot is not (it is 300 MB)", L, 0, must_have=["**The guest's disk was SHORT**: / 600 MB free"], must_not_have=["/boot 600"],
+     mutate=lambda d: put(d, "df-steps.txt", "update / 600\nfull /boot 600\n"))
+case("apt prints a freed disk space without an 'of' and the report reads it: the step's figure is negative", L, 0, must_have=["after this operation -25.6 MB."], must_not_have=["after this operation n/a"],
+     mutate=lambda d: replace(d, "step-full.log", "After this operation, 540 MB of additional disk space will be used.", "After this operation, 25.6 MB disk space will be freed."))
+case("apt prints an additional disk space with its 'of' and the report reads it", L, 0, must_have=["after this operation 540.0 MB."])
+case("the runner's own df is reproduced when the workflow wrote it", L, 0, must_have=["host-df-end.txt", "/dev/root"], mutate=lambda d: put(d, "host-df-end.txt", "Filesystem Size Used Avail Use% Mounted on\n/dev/root 72G 41G 31G 58% /\n"))
+case("a different apt than the leg was meant for is said and does not fail the leg", L, 0, must_have=["the apt of this leg is meant to be 2.2.4: it is 2.2.5"], mutate=lambda d: replace(d, "box-facts", "apt 2.2.4", "apt 2.2.5"))
+case("--allow-releaseinfo-change: apt's own table (Suite and Version tolerated by default with a notice, Label, Codename and Origin refused until accepted) is what a healthy leg shows", L, 0,
+     must_have=["| suite | exit 0 | exit 0 | exit 0 | tolerated by default (a notice, and the update goes on) | yes |", "| version | exit 0 | exit 0 | exit 0 | tolerated by default (a notice, and the update goes on) | yes |",
+                "| label | exit 100 | exit 0 | exit 0 | an error until it is accepted | yes |", "| codename | exit 100 | exit 0 | exit 0 | an error until it is accepted | yes |", "| origin | exit 100 | exit 0 | exit 0 | an error until it is accepted | yes |",
+                "suite and version are tolerated by default, label, codename and origin are errors until they are accepted"], must_not_have=["DO NOT behave", "NOT as apt's own table"])
+case("--allow-releaseinfo-change: a Label that apt tolerates without the option is not what its table says", L, 0, must_have=["NOT as apt's own table says for: label", "| label | exit 0 | exit 0 | exit 0 | tolerated by default (no notice) | NO (apt's table: an error until it is accepted) |"],
+     mutate=lambda d: rec(d, "allow-label-plain", "Reading package lists...\n", 0))
+case("--allow-releaseinfo-change: a Suite that is refused without the option (an apt older than 2.1.10) is not what its table says either, and the report says so without calling it a bug of the experiment", L, 0,
+     must_have=["NOT as apt's own table says for: suite"], mutate=lambda d: rec(d, "allow-suite-plain", "E: Repository 'x' changed its 'Suite' value from 'a' to 'b'\n", 100))
+case("--allow-releaseinfo-change: the option of the field is refused by this apt", L, 0, must_have=["NOT as apt's own table says for: version", "| version | exit 0 | exit 100 | exit 0 |"], mutate=lambda d: rec(d, "allow-version-field", "E: Unknown option\n", 100))
+case("--allow-releaseinfo-change: codename and origin are rows of their own", L, 0, must_have=["| codename |", "| origin |"])
+invalid("--allow-releaseinfo-change: a mirror that could not be reached is not an answer about the option", L, "the mirror could not be reached during the releaseinfo experiment (allow-label-plain: Temporary failure resolving 'deb.debian.org')",
+        lambda d: rec(d, "allow-label-plain", "Err:1 http://deb.debian.org/debian bookworm InRelease\n  Temporary failure resolving 'deb.debian.org'\nE: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease\n", 100))
+invalid("invalid: the experiment of codename was not run", L, "allow-codename-plain.rc is missing", lambda d: remove(d, "allow-codename-plain.rc"))
+invalid("invalid: the experiment of origin was not run", L, "allow-origin-all.rc is missing", lambda d: remove(d, "allow-origin-all.rc"))
+case("--allow-releaseinfo-change was skipped for a reason, and the report says what it could not decide", L, 0, must_have=["--allow-releaseinfo-change-* was not measured: no InRelease"],
+     mutate=lambda d: put(d, "allow-skipped", "no InRelease of bookworm in the sandbox's lists\n"))
+
+def unit_aborted(d):
+    """the unit found no source naming the target release and stopped before any step: START, the sources, ENDED"""
+    ul = [ln for ln in get(d, "hop-unit.log").splitlines() if ln.split(" ", 1)[1] in ("START", "SRC_START", "SRC_END")]
+    put(d, "hop-unit.log", "\n".join(ul) + "\n%.6f ABORTED no source names bookworm after the rewrite\n%.6f ENDED 1\n" % (T0 + S["hop_start"] + 6, T0 + S["hop_start"] + 7))
+    for n in ("update", "minimal_dl", "minimal", "full_dl", "full", "converge1"):
+        remove(d, "step-%s.log" % n, "step-%s.rc" % n)
+
+
+U = "u22-24"
+
+
+case("a unit that ended itself before its steps (no source names the target) is an invalid run: nothing of the hop was measured, and nothing says the unit never wrote DONE", L, 1, mutate=unit_aborted,
+     must_have=["INVALID RUN", "the unit of the hop ended on its own account (ABORTED no source names bookworm after the rewrite; ENDED 1)"], must_not_have=["never wrote DONE", "**GO**", "## The go/no-go table"])
+case("a unit that ended itself with a status (ENDED 3) is an invalid run too", L, 1, mutate=lambda d: replace(d, "hop-unit.log", " DONE", " ENDED 3"),
+     must_have=["INVALID RUN", "the unit of the hop ended on its own account (ENDED 3)"], must_not_have=["**GO**"])
+
+
+def box_unmoved(d):
+    """the hop changed nothing: the release and the packages are the ones of before"""
+    for n in ("os-after", "os-hop"):
+        put(d, n, get(d, "os-before"))
+    for t in ("hop", "after"):
+        put(d, "dpkg-%s.tsv" % t, get(d, "dpkg-before.tsv"))
+
+
+def tool_exit(rc, log=True):
+    """the Ubuntu tool's exit; log False is a launcher that refused: it opened no main.log"""
+    def m(d):
+        put(d, "step-upgrader.rc", "%d\n" % rc)
+        replace(d, "hop-unit.log", "STEP_END upgrader 0", "STEP_END upgrader %d" % rc)
+        replace(d, "hop-unit.log", "UPGRADER_EXIT 0", "UPGRADER_EXIT %d" % rc)
+        if not log:
+            remove(d, "dist-upgrade-main.log")
+            put(d, "step-upgrader.log", "Checking for a new Ubuntu release\nPlease install all available updates for your release before upgrading.\n")
+    return m
+
+
+OPEN_ROWS = {Q_TOOL: "NO-GO", Q_DOCKER: "OPEN", Q_HOLD: "OPEN", Q_CFG: "OPEN", Q_CORE: "OPEN", Q_TOKEN: "OPEN", Q_HOP: "NO-GO"}
+for variant in ("hold", "keep"):
+    case("ubuntu %s: the tool ran, failed, and the box did not move: the row of the tool says NO-GO and every row about what it did to Docker, the hold or the core is OPEN, never a GO" % variant, U, 0,
+         spec={"variant": variant}, mutate=seq(tool_exit(1), box_unmoved), rows=OPEN_ROWS, must_have=["the hop did not run to its end", "the box is 22.04 jammy after the reboot, not 24.04 noble"], must_not_have=["INVALID RUN", "**GO**"])
+case("ubuntu: the tool exited 0 with its log and the box is still the old release: the same, OPEN", U, 0, mutate=box_unmoved, rows=OPEN_ROWS, must_not_have=["INVALID RUN", "**GO**"])
+case("ubuntu: a tool that removed docker-ce and then failed: the Docker row is OPEN (the hop did not run to its end) and says what was seen all the same", U, 0, rows={Q_DOCKER: "OPEN", Q_TOOL: "NO-GO"},
+     mutate=seq(tool_exit(1), lambda d: put(d, "os-after", get(d, "os-before")), lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")]),
+                lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")])),
+     must_have=["what was seen all the same: docker-ce 5:29.8.0-1~ubuntu.22.04~jammy -> REMOVED"])
+case("ubuntu: no exit of the tool recorded and no DONE (the unit was cut): the rows about what it did are OPEN", U, 0, rows={Q_DOCKER: "OPEN", Q_HOLD: "OPEN", Q_UNIT: "NO-GO"},
+     mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith((" DONE", "UPGRADER_EXIT 0"))]), must_have=["the unit wrote neither DONE nor ENDED", "the upgrader's exit was not recorded"], must_not_have=["INVALID RUN"])
+case("ubuntu: the unit reached DONE but the exit of the tool was not recorded: the rows about what it did are OPEN", U, 0, rows={Q_DOCKER: "OPEN", Q_HOLD: "OPEN"},
+     mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if "UPGRADER_EXIT" not in ln]), must_have=["the upgrader's exit was not recorded"], must_not_have=["INVALID RUN"])
+invalid("ubuntu: the launcher refused (exit 1, no main.log): the run proves nothing about the tool, and says what to do", U,
+        "the upgrader refused to start (exit 1, and it left no main.log): Checking for a new Ubuntu release / Please install all available updates",
+        seq(tool_exit(1, log=False), box_unmoved, lambda d: rec(d, "upgradable-unit", "Listing...\nlibfoo9/jammy-updates 2.9 amd64 [upgradable from: 1.9]\n")),
+        has=["1 package(s) were upgradable when the unit started", "dispatch the leg again"])
+invalid("ubuntu: the launcher refused and nothing was upgradable on record: the refusal is still an invalid run", U, "the upgrader refused to start (exit 1, and it left no main.log)", seq(tool_exit(1, log=False), box_unmoved))
+invalid("ubuntu: the tool exited 0 and left no main.log: nothing says that it ran", U, "the upgrader exited 0 and left no main.log", lambda d: remove(d, "dist-upgrade-main.log"))
+
+
+def hop_did_nothing(d):
+    """the unit ran to its DONE but its first step failed, and the release stayed the old one"""
+    put(d, "step-update.rc", "100\n")
+    replace(d, "hop-unit.log", "STEP_END update 0", "STEP_END update 100")
+    box_unmoved(d)
+
+
+case("debian: the unit reached DONE, its update failed and the box is still the old release: every row about what the hop did is OPEN, the hop row is NO-GO", L, 0, mutate=hop_did_nothing,
+     rows={Q_FROZEN: "OPEN", Q_CORE: "OPEN", Q_TOKEN: "OPEN", Q_UNIT: "OPEN", Q_HOP: "NO-GO", Q_SANDBOX: "GO"}, must_have=["the hop did not run to its end", "the box is 11 bullseye after the reboot, not 12 bookworm"], must_not_have=["INVALID RUN"])
+case("debian: the unit was cut in the middle of the full upgrade (no DONE, no ENDED): the unit row is the NO-GO it exists for, and says where, and the rows about Docker are OPEN", L, 0,
+     rows={Q_UNIT: "NO-GO", Q_FROZEN: "OPEN", Q_HOP: "NO-GO"}, must_have=["the unit was cut: it wrote neither DONE nor ENDED, and it was in full when it stopped"], must_not_have=["INVALID RUN"],
+     mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" DONE") and "STEP_END full " not in ln and "converge1" not in ln]))
+case("debian: a hop that failed halfway with docker-ce gone is OPEN on the Docker row, with what was seen: not a GO and not hidden", L, 0, rows={Q_FROZEN: "OPEN"},
+     mutate=seq(lambda d: put(d, "os-after", get(d, "os-before")), lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")])), must_have=["what was seen all the same", "NOT all the same installed versions"])
+case("ubuntu hold: a tool that removed nothing at all, not even the control, did not exercise the hold: OPEN, and it says why", U, 0, rows={Q_HOLD: "OPEN", Q_DOCKER: "GO"},
+     mutate=seq(*[(lambda t: lambda d: put(d, "dpkg-%s.tsv" % t, get(d, "dpkg-%s.tsv" % t) + "osm-orphan\t1.0\tii \n" + "".join("%s\t5:29.8.0-1~ubuntu.22.04~jammy\tii \n" % n for n in ("docker-buildx-plugin", "docker-compose-plugin", "docker-ce-rootless-extras"))))(t) for t in ("hop", "after")]),
+     must_have=["NOT removed: the tool removed nothing, so the hold was not exercised"])
+case("ubuntu keep: the drop-in row says what a keep run alone cannot", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "GO"}, must_have=["cannot tell 'the drop-in is honoured' from 'the tool removes nothing'"])
+
+# ---- NOT_OFFERED is the tool's own answer ----
+NOT_ON_OFFER = {"offered": False}
+for leg in ("u22-24", "u24-26"):
+    for label, text in (("the stock Prompt=lts answer", "Checking for a new Ubuntu release\nThere is no development version of an LTS available.\nTo upgrade to the latest non-LTS development release set Prompt=normal in /etc/update-manager/release-upgrades.\n"),
+                        ("Canonical's suspension of the upgrade", "Checking for a new Ubuntu release\nRelease upgrade not possible right now\nThe release upgrade can not be performed currently, please try again later. The server reported: 'x'\n")):
+        case("%s: %s is the tool saying that nothing is on offer: NOT_OFFERED" % (leg, label), leg, 0, spec=NOT_ON_OFFER, mutate=lambda d, t=text: rec(d, "ubuntu-check", t, 1), must_have=["NOT_OFFERED"], must_not_have=["INVALID", "**GO**"],
+             rows={"The Ubuntu tool can be driven from a unit, and what it does to Docker": "NOT_OFFERED"})
+    for label, text, rc, why in (("a network failure of the tool", "Checking for a new Ubuntu release\nFailed to connect to https://changelogs.ubuntu.com/meta-release-lts. Check your Internet connection or proxy settings\nNo new release found.\n", 1, "it could not read Canonical's metadata"),
+                                 ("a crash of the tool", "Traceback (most recent call last):\n  File \"/usr/bin/do-release-upgrade\", line 3\nImportError: no module\n", 1, "it could not read Canonical's metadata"),
+                                 ("a tool that is not there (exit 127)", "", 127, "exit 127, not 1"),
+                                 ("Prompt=never", "Checking for a new Ubuntu release\nIn /etc/update-manager/release-upgrades Prompt \nis set to never so upgrading is not possible.\n", 1, "it did not say that there is no new release"),
+                                 ("another release on offer (Prompt=normal offering 26.10)", "New release '26.10' available.\nRun 'do-release-upgrade' to upgrade to it.\n", 0, "exit 0, not 1")):
+        invalid("%s: %s is not 'Canonical has not opened it': an invalid run, never a neutral one" % (leg, label), leg, "so that Canonical has not opened %s is not proven" % LEGS[leg]["new"], lambda d, t=text, r=rc: rec(d, "ubuntu-check", t, r), spec=NOT_ON_OFFER,
+                has=[why])
+    invalid("%s: the tool says that nothing is on offer but the probe could not fetch Canonical's metadata: nothing is proven" % leg, leg, "the probe's own fetch of meta-release-lts failed (exit 6)", lambda d: put(d, "meta-release.rc", "6\n"), spec=NOT_ON_OFFER)
+case("u22-24: the metadata lists the target as supported while the tool offers nothing: still NOT_OFFERED (the tool's answer is what is asked), and the contradiction is said", "u22-24", 0, spec=NOT_ON_OFFER,
+     mutate=lambda d: put(d, "meta-release.txt", get(d, "meta-release.txt") + "\nDist: noble\nName: Y\nVersion: 24.04.1 LTS\nSupported: 1\n"), must_have=["NOT_OFFERED", "which of the two is right is not decided"], must_not_have=["INVALID"])
+
+# Ubuntu
+U = "u22-24"
+flips("ubuntu tool: screen was seen", U, Q_TOOL, "NO-GO", lambda d: put(d, "hop-sample.log", get(d, "hop-sample.log") + "%.6f screen=1 sshd1022=0\n" % (T0 + S["hop_start"] + 900)), must_have=["screen SEEN"])
+flips("ubuntu tool: an sshd on 1022 was seen", U, Q_TOOL, "NO-GO", lambda d: put(d, "hop-sample.log", get(d, "hop-sample.log") + "%.6f screen=0 sshd1022=1\n" % (T0 + S["hop_start"] + 900)), must_have=["sshd 1022 SEEN"])
+flips("ubuntu tool: the sampler wrote nothing: open, not a GO", U, Q_TOOL, "OPEN", lambda d: put(d, "hop-sample.log", ""))
+flips("ubuntu tool: the release after the reboot is the old one", U, Q_TOOL, "NO-GO", lambda d: put(d, "os-after", get(d, "os-before")))
+flips("ubuntu tool: dpkg --audit is not clean after the reboot", U, Q_TOOL, "NO-GO", lambda d: rec(d, "audit-after", "half configured\n", 1))
+flips("ubuntu tool: the unit never reached DONE", U, Q_TOOL, "NO-GO", lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" DONE")]))
+flips("ubuntu docker: docker-ce was removed", U, Q_DOCKER, "NO-GO", seq(lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")]), lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")])), must_have=["REMOVED"])
+flips("ubuntu docker: the daemon does not answer after the reboot", U, Q_DOCKER, "NO-GO", lambda d: replace(d, "docker-after.txt", "server 29.8.0", "server unavailable"))
+flips("ubuntu hold: a held engine package was removed", U, Q_HOLD, "NO-GO", lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce-cli\t")]))
+flips("ubuntu hold: the held control was removed", U, Q_HOLD, "NO-GO", lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("osm-orphan-held\t")]))
+flips("ubuntu keep: the drop-in was ignored: the obsolete control was removed anyway", U, Q_CFG, "NO-GO", lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("osm-orphan\t")]), spec={"variant": "keep"})
+case("ubuntu: the tool removes what no repository has, and says it (the control), and which of Docker's were unheld", U, 0,
+     must_have=["yes: osm-orphan was removed", "kept: osm-orphan-held is still installed", "the unheld ones among them: docker-ce-rootless-extras, docker-buildx-plugin, docker-compose-plugin", "docker.list.casaos-paused"], must_not_have=["INVALID"])
+case("ubuntu keep: nothing is removed when the drop-in is read", U, 0, spec={"variant": "keep"}, must_have=["osm-orphan (held by nothing) is still installed", "no: osm-orphan is still installed"])
+case("ubuntu: the hop that was offered and run is not a NOT_OFFERED", U, 0, must_not_have=["NOT_OFFERED"])
+case("ubuntu: the unit asked Canonical's tool again and the answer is in the facts", U, 0, must_have=["do-release-upgrade -c asked again inside the unit"])
+case("ubuntu: Pro is said not attached, and that the attached case was not measured", U, 0, must_have=["not attached (a cloud image, no token): the behaviour with Pro attached was NOT measured", "Ubuntu Pro/ESM attached: not measured"])
+case("ubuntu: what could not be decided names the other variant", U, 0, must_have=["run the workflow again with ubuntu_variant keep"])
+
+# ---- an invalid run is never a GO ------------------------------------------------------------------------------------------------------
+
+invalid("an empty directory proves nothing", L, "INVALID RUN", None, empty=True)
+invalid("the guest said it could not go on", L, "the guest stopped on its own account: NOT PROVEN: Docker's repository has no containerd.io 1.7", lambda d: put(d, "aborted", "NOT PROVEN: Docker's repository has no containerd.io 1.7 to start from\n"))
+invalid("evidence of another leg", L, "the evidence is of leg 'd12-13', not 'd11-12'", lambda d: put(d, "leg", "d12-13\n"))
+for leg in ("d11-12", "u22-24"):
+    for m in ("prepare_start", "prepare_done", "inhibit_reboot_start", "inhibit_force_start", "reboot_pre_start", "refresh_start", "refresh_update_done", "refresh_done", "baseline_start", "baseline_done",
+              "probe_start", "probe_done", "hop_unit_end", "hop_done", "reboot_post_start", "after_start", "after_settled", "after_done"):
+        invalid("%s: the marker %s is missing" % (leg, m), leg, "marker %s is missing" % m, drop_marker(m))
+invalid("neither hop_start nor hop_skipped", L, "neither hop_start nor hop_skipped is in the timeline", drop_marker("hop_start"))
+for name in ("refresh-update.log", "refresh-upgrade.log", "dpkg-refresh-before.tsv", "dpkg-refresh-after.tsv", "kernel-refresh-before.txt", "kernel-refresh-after.txt", "refresh-reboot.txt"):
+    invalid("a missing %s: the refresh left no evidence" % name, L, "%s is missing or empty" % name, lambda d, n=name: remove(d, n))
+invalid("the refresh asked for a reboot and the guest did not make it", "d12-13", "the refresh asked for a reboot (yes kernel (1 linux-image package(s) new or changed)) and the guest did not make it", drop_marker("reboot_refresh_start"),
+        spec={"refresh_reboot": True})
+invalid("the refresh asked for a reboot and the box never came back on another boot", "d12-13", "the guest did not reboot after the refresh asked for it",
+        lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if not (ln.startswith("#") and "boot_changed" in ln and T0 + S["reboot_refresh"] < float(ln.split("\t")[1]) <= T0 + S["baseline_start"])]), spec={"refresh_reboot": True})
+invalid("hop_timeout: the guest gave up waiting for the unit", L, "hop_timeout", lambda d: ledit(d, "timeline.tsv", lambda ls: ls + ["#\t%.6f\thop_timeout" % (T0 + S["hop_unit_end"])]))
+invalid("no reboot after the hop", L, "the guest did not reboot after the hop", no_boot_change_after("reboot_post"))
+invalid("no reboot before the hop", L, "the guest did not reboot before the hop", lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if not (ln.startswith("#") and "boot_changed" in ln and float(ln.split("\t")[1]) < T0 + S["baseline_start"] + 1)]))
+invalid("the box did not go down for the reboot after the hop (no gap in the poller)", L, "no gap of the poller after reboot_post_start", fill_boot_gap)
+HOP_FILES = ["unit-start.txt", "unit-end.txt", "dpkg-hop.tsv", "dpkg-after.tsv", "dpkg-before.tsv", "units-before.tsv", "units-hop.tsv", "units-boot.tsv", "units-after.tsv", "containers-hop.txt", "containers-boot.txt",
+             "containers-after.txt", "os-after", "reboot-pre.txt", "reboot-post.txt", "kernel-before.txt", "kernel-after.txt", "docker-before.txt", "docker-after.txt", "deps-before.txt", "deps-after.txt",
+             "jwt-claims-jwt-before.json", "hop-journal.txt", "dpkg-hop.log", "inhibit-reboot.txt", "inhibit-force.txt", "box-facts", "df-start.txt", "df-before.txt"]
+for name in HOP_FILES:
+    invalid("a missing %s" % name, L, "%s is missing or empty" % name if name != "dpkg-before.tsv" else "dpkg-before.tsv is missing or empty", lambda d, n=name: remove(d, n))
+for name in ("audit-before", "audit-hop", "audit-after", "aptcheck-before", "aptcheck-hop", "aptcheck-after", "failed-before", "failed-hop", "failed-after"):
+    invalid("a missing %s.rc: the step did not run" % name, L, "%s.rc is missing" % name, lambda d, n=name: remove(d, n + ".rc"))
+for name in ("gateway-after", "core-after", "internal-after", "am-after", "jwt-after", "jwt-fresh"):
+    invalid("a missing %s.code: the after phase did not ask" % name, L, "%s.code is missing" % name, lambda d, n=name: remove(d, n + ".code"))
+for tag in ("before", "hop", "after"):
+    invalid("the database's log could not be read (%s)" % tag, L, "the database's logs could not be read", lambda d, t=tag: put(d, "db-%s-logs.exit" % t, "124\n"))
+    invalid("the database's file could not be read (%s)" % tag, L, "the database's file could not be read", lambda d, t=tag: remove(d, "db-%s-file.exit" % t))
+invalid("the database's file is empty after the reboot: nothing is proved of the writes", L, "the database's log or file is empty after the reboot", lambda d: put(d, "db-after-file.txt", ""))
+invalid("a step of the unit that began and has no status", L, "step full of the unit has no log or no status", lambda d: remove(d, "step-full.rc"))
+invalid("a step of the unit that is not in its log although it ended", L, "step converge1 is not in the unit's log", lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if "converge1" not in ln]))
+invalid("a unit with no START", L, "hop-unit.log has no START line", lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" START")]))
+for part in ("update", "upgrade", "dist-upgrade"):
+    invalid("the sandbox's %s was not run" % part, L, "sandbox-paused-%s.rc is missing" % part, lambda d, p=part: remove(d, "sandbox-paused-%s.rc" % p))
+    invalid("the kept sandbox's %s was not run" % part, L, "sandbox-kept-%s.rc is missing" % part, lambda d, p=part: remove(d, "sandbox-kept-%s.rc" % p))
+for h in ("etc-apt-before.sha", "etc-apt-after-sandbox.sha", "lists-before.sha", "lists-after-sandbox.sha", "sandbox-paused-sources.txt", "sandbox-kept-sources.txt", "sources-before.txt", "sources-after.txt"):
+    invalid("a missing %s" % h, L, "%s is missing or empty" % h, lambda d, n=h: remove(d, n))
+invalid("the releaseinfo-change experiment did not run", L, "allow-label-all.rc is missing", lambda d: remove(d, "allow-label-all.rc"))
+invalid("the notes' spelling of the minimal upgrade was not tried", L, "without-new-pkgs.rc is missing", lambda d: remove(d, "without-new-pkgs.rc"))
+case("apt-get that does not take the notes' spelling of the minimal upgrade says so, and it is not a failure of the leg", L, 0, must_have=["NOT accepted (exit 100): E: Command line option '--without-new-pkgs' is not understood"],
+     mutate=lambda d: rec(d, "without-new-pkgs", "E: Command line option '--without-new-pkgs' is not understood in combination with the other options.\n", 100), must_not_have=["INVALID"])
+for name in ("meta-release.rc", "upgrader-tarball.rc", "pro-status.rc", "release-upgrades-before.rc"):
+    invalid("ubuntu: a missing %s: the probe did not run" % name, U, "%s is missing: the Ubuntu probe did not run" % name, lambda d, n=name: remove(d, n))
+invalid("ubuntu: no answer of do-release-upgrade -c", U, "ubuntu-check.rc is missing", lambda d: remove(d, "ubuntu-check.rc"))
+for name in ("controls.txt", "sources-dir-after.txt", "release-upgrades-before.txt", "release-upgrades-after.txt"):
+    invalid("ubuntu: a missing %s" % name, U, "%s is missing or empty" % name, lambda d, n=name: remove(d, n) if n != "release-upgrades-before.txt" else put(d, n, ""))
+invalid("ubuntu: the unit did not ask Canonical's tool again", U, "ubuntu-check-unit.rc is missing", lambda d: remove(d, "ubuntu-check-unit.rc"))
+invalid("ubuntu: the unit ended without the upgrader", U, "the unit ended without running the upgrader", lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if "upgrader" not in ln.lower() or "UPGRADER_EXIT" in ln and False]))
+invalid("ubuntu: offered and skipped all the same", U, "do-release-upgrade -c offered 24.04 and the hop was skipped all the same", seq(lambda d: put(d, "hop-skipped", "not_offered\n"), drop_marker("hop_start"), lambda d: ledit(d, "timeline.tsv", lambda ls: ls + ["#\t%.6f\thop_skipped" % (T0 + S["hop_start"])])))
+invalid("ubuntu: not offered and started all the same", U, "do-release-upgrade -c did not offer 24.04 and the hop was started all the same", lambda d: rec(d, "ubuntu-check", "No new release found.\n", 1))
+invalid("ubuntu: the skip says something else than not_offered", U, "hop-skipped says 'boom', not not_offered", seq(lambda d: put(d, "hop-skipped", "boom\n"), drop_marker("hop_start"), lambda d: ledit(d, "timeline.tsv", lambda ls: ls + ["#\t%.6f\thop_skipped" % (T0 + S["hop_start"])]), lambda d: rec(d, "ubuntu-check", "No new release found.\n", 1)))
+invalid("hop skipped and started in the same run", U, "the hop was skipped and started in the same run", lambda d: put(d, "hop-skipped", "not_offered\n"))
+# the box before the hop is not the one the leg needs
+invalid("the box was Debian 12, not 11", L, "the box before the hop was debian 12 (bookworm), not debian 11 (bullseye)", lambda d: put(d, "os-before", os_release("Debian GNU/Linux 12 (bookworm)", "debian", "12", "bookworm")))
+invalid("a witness was not running before the hop", L, "these witnesses were not running before the hop: p-db", lambda d: replace(d, "containers-before.txt", "/p-db policy=unless-stopped state=running", "/p-db policy=unless-stopped state=exited"))
+invalid("a witness has another policy than the harness gave it", L, "the witness p-always has restart policy 'no', not 'always'", lambda d: replace(d, "containers-before.txt", "/p-always policy=always", "/p-always policy=no"))
+invalid("no container list before", L, "these witnesses were not running before the hop", lambda d: remove(d, "containers-before.txt"))
+for name in ("gateway-before", "core-before", "am-before", "jwt-before"):
+    invalid("%s did not answer 200 before the hop" % name, L, "%s answered 502 before the hop" % name.replace("-before", ""), lambda d, n=name: put(d, n + ".code", "502\n"))
+invalid("Docker did not answer before the hop", L, "Docker did not answer before the hop", lambda d: replace(d, "docker-before.txt", "server 28.0.4", "server unavailable"))
+case("the containers that the reboots before the baseline left stopped are started again at the baseline, and the report says so", L, 0, must_have=["witnesses started again at the baseline (their policy does not start them after a reboot) | p-no, p-on-failure"])
+invalid("the baseline did not ask the core with the secret", L, "internal-before.code is missing", lambda d: remove(d, "internal-before.code"))
+invalid("the containers were not running by themselves at the baseline", L, "the witnesses that start by themselves were not running at the baseline", lambda d: put(d, "settle-baseline", "never\n"))
+invalid("no docker-ce before", L, "docker-ce was not installed before the hop", lambda d: ledit(d, "dpkg-before.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")]))
+invalid("the control package is not there", L, "the control package osm-orphan was not installed before the hop", lambda d: ledit(d, "dpkg-before.tsv", lambda ls: [ln for ln in ls if not ln.startswith("osm-orphan\t")]))
+invalid("dpkg was not clean before", L, "dpkg --audit was not clean before the hop", lambda d: rec(d, "audit-before", "half configured\n", 1))
+invalid("apt-get check failed before", L, "apt-get check failed before the hop", lambda d: rec(d, "aptcheck-before", "E: broken\n", 100))
+invalid("Docker did not start at 28.0.4 on Debian 11", L, "Docker did not start at 28.0.4 on Debian 11", lambda d: put(d, "start-version", "29.8.0\n"))
+invalid("the guest ran out of disk space", L, "the guest ran out of disk space (step-full.log)", lambda d: put(d, "step-full.log", get(d, "step-full.log") + "dpkg: error processing archive: cannot copy extracted data: No space left on device\n"))
+invalid("a pipeline of the poller that left a hole in the hop", L, "the poller left 1 hole(s)", lambda d: timeline_edit(d, lambda f: None if T0 + S["hop_start"] + 100 < float(f[0]) < T0 + S["hop_start"] + 300 else f))
+invalid("a poller that never wrote", L, "the timeline has no samples of the poller", lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if ln.startswith("#")]))
+invalid("a poller that died in the hop and came back with the reboot", L, "the poller left 1 hole(s)", lambda d: timeline_edit(d, lambda f: None if T0 + S["hop_start"] + 30 < float(f[0]) < T0 + S["reboot_post"] + 3 else f))
+invalid("an inhibitor attempt that was not recorded", L, "inhibit-reboot.txt does not record the attempt", lambda d: put(d, "inhibit-reboot.txt", "variant reboot\n"))
+invalid("an inhibitor attempt that was cut short: no reboot, no survived line", L, "the reboot attempt of the inhibitor ended without the box going down", seq(refused("reboot"), lambda d: put(d, "inhibit-reboot.txt", get(d, "inhibit-reboot.txt").replace("survived yes\n", ""))))
+invalid("the leg's claims file is not JSON", L, "jwt-claims-jwt-before.json is not JSON", lambda d: put(d, "jwt-claims-jwt-before.json", "{not json"))
+case("an invalid run still tells the reasons and exits 1, and never writes a table", L, 1, must_have=["INVALID RUN", "- INVALID:"], must_not_have=["## The go/no-go table", "**GO**", "**NO-GO**"], mutate=lambda d: put(d, "aborted", "boom\n"))
+case("the report is written to report.md as well", L, 0, must_have=["MEASURED"], mutate=lambda d: None)
+case("a bad leg name is refused with a usage message", L, 2, empty=True, must_have=["usage"], mutate=None) if False else None
+
+# ---- what the core says about the system (GET /v1/sys/os) -------------------------------------------------------------------------------------------
+
+Q_SYSOS_B = "GET /v1/sys/os before the hop"
+Q_SYSOS_A = "GET /v1/sys/os after the reboot"
+
+
+def sy_edit(tag, fn):
+    """the answer of a call, changed: fn(the whole answer) in place"""
+    return lambda d: jedit(d, "sysos-%s.json" % tag, fn)
+
+
+def sy_data(tag, **changes):
+    return sy_edit(tag, lambda j: j["data"].update(changes))
+
+
+def sy_state(tag, state):
+    return sy_edit(tag, lambda j: j["data"]["support"].update(state=state))
+
+
+def sy_drop(tag, key):
+    return sy_edit(tag, lambda j: j["data"].pop(key))
+
+
+def sy_at(tag, y, m, dd, hh=10, mi=0, ss=0):
+    """the call was made on this day (UTC)"""
+    return lambda d: put(d, "sysos-%s.time" % tag, "%.6f\n" % datetime(y, m, dd, hh, mi, ss, tzinfo=timezone.utc).timestamp())
+
+
+def sy_invalid(name, leg, q, reason, mutate, spec=None):
+    """the call left nothing that can be judged: its verdict is INVALID, the run is an invalid run (exit 1), and nothing is a GO"""
+    case(name, leg, 1, mutate=mutate, spec=spec, rows={q: "INVALID"}, must_have=["INVALID RUN", reason], must_not_have=["**GO**", "## The go/no-go table"])
+
+
+SYSOS_CELLS = {"d11-12": ("security_ended", "supported"), "d12-13": ("supported", "supported"), "u22-24": ("supported", "supported"), "u24-26": ("supported", "supported")}
+for leg in LEGS:
+    s_ = LEGS[leg]
+    before_state, after_state = SYSOS_CELLS[leg]
+    case("%s: what the core says about the system is shown before and after the hop, and both verdicts pass" % leg, leg, 0,
+         must_have=["## What the core says about this system", "| asked (UTC day of the guest's clock) | 2026-10-11 | 2026-10-11 |", "| HTTP status, curl's exit | 200, 0 | 200, 0 |",
+                    "| what the guest's os-release says | %s %s %s (%s) | %s %s %s (%s) |" % (s_["family"], s_["old"], s_["old_code"], s_["old_pretty"], s_["family"], s_["new"], s_["new_code"], s_["new_pretty"]),
+                    "| id, version_id, codename | %s %s %s | %s %s %s |" % (s_["family"], s_["old"], s_["old_code"], s_["family"], s_["new"], s_["new_code"]),
+                    "| known, variant | True, none | True, none |", "| support.state | %s | %s |" % (before_state, after_state)],
+         must_not_have=["INVALID", "**FAIL**"], rows={Q_SYSOS_B: "PASS", Q_SYSOS_A: "PASS"})
+case("d11-12: the facts of the answer are all there: the end, the extended programme, the source and the next release", "d11-12", 0,
+     must_have=["| support.ends (precision) | 2026-08-31 (day) | 2028-06-30 (day) |", "| support.extended | Debian ELTS (Freexian) until 2031-06-30 (day) | none |", "| support.source | https://www.debian.org/News/2026/20260831 | https://www.debian.org/News/2026/20260712 |",
+                "| next | debian 12 bookworm (report) | debian 13 trixie (report) |", "| arch | amd64 | amd64 |"], rows={Q_SYSOS_B: "PASS"})
+for leg in ("u22-24", "u24-26"):
+    case("%s: a hop that was not offered: the answer before is judged, nothing is asked after, and the verdict there is NOT_OFFERED, neutral and not a pass" % leg, leg, 0, spec={"offered": False},
+         rows={Q_SYSOS_B: "PASS", Q_SYSOS_A: "NOT_OFFERED"}, must_have=["| asked (UTC day of the guest's clock) | 2026-10-11 | not asked |"], must_not_have=["INVALID", "**GO**", "**FAIL**"])
+
+# one thing is wrong in the answer before the hop: FAIL, and it says which
+L = "d11-12"
+flips("sysos before: the core says another id", L, Q_SYSOS_B, "FAIL", sy_data("before", id="ubuntu"), must_have=["id is 'ubuntu', the guest's os-release says 'debian'"])
+flips("sysos before: the core says another version_id", L, Q_SYSOS_B, "FAIL", sy_data("before", version_id="12"), must_have=["version_id is '12', the guest's os-release says '11'"])
+flips("sysos before: the core says another codename", L, Q_SYSOS_B, "FAIL", sy_data("before", codename="bookworm"), must_have=["codename is 'bookworm', the guest's os-release says 'bullseye'"])
+flips("sysos before: the core says no codename", L, Q_SYSOS_B, "FAIL", sy_drop("before", "codename"), must_have=["codename is None, the guest's os-release says 'bullseye'"])
+flips("sysos before: the core says known false", L, Q_SYSOS_B, "FAIL", sy_data("before", known=False), must_have=["known is False, not true"])
+flips("sysos before: the core does not say known", L, Q_SYSOS_B, "FAIL", sy_drop("before", "known"), must_have=["known is None, not true"])
+flips("sysos before: the core says it is a variant", L, Q_SYSOS_B, "FAIL", sy_data("before", variant="raspberrypi"), must_have=["variant is 'raspberrypi' (a plain Debian has none)"])
+flips("sysos before: the core says another support state", L, Q_SYSOS_B, "FAIL", sy_state("before", "supported"), must_have=["support.state is 'supported', the table says security_ended for debian 11 on 2026-10-11"])
+flips("sysos before: the core says no support at all", L, Q_SYSOS_B, "FAIL", sy_drop("before", "support"), must_have=["support.state is None, the table says security_ended"])
+flips("sysos before: the answer has no data object (it is not the envelope of the other routes)", L, Q_SYSOS_B, "FAIL", sy_edit("before", lambda j: j.update(data="x")), must_have=["the answer has no data object"])
+flips("sysos before: the answer is the bare object, with no envelope", L, Q_SYSOS_B, "FAIL", sy_edit("before", lambda j: [j.pop(k) for k in ("success", "message")] and j.update(j.pop("data"))), must_have=["the answer has no data object"])
+flips("sysos before: it is the os-release the answer is compared with, not the leg: the box says Debian 12 and the core says 11", L, Q_SYSOS_B, "FAIL",
+      lambda d: put(d, "sysos-before.os-release", os_release(DEB12["old_pretty"], "debian", "12", "bookworm")), must_have=["version_id is '11', the guest's os-release says '12'", "codename is 'bullseye', the guest's os-release says 'bookworm'"])
+flips("sysos before: the route answers an error of its own (HTTP 500): that is the route, FAIL", L, Q_SYSOS_B, "FAIL", lambda d: put(d, "sysos-before.code", "500\n"), must_have=["GET /v1/sys/os (before) answered HTTP 500"])
+flips("sysos before: two things wrong are both said", L, Q_SYSOS_B, "FAIL", seq(sy_data("before", known=False), sy_state("before", "supported")), must_have=["known is False, not true", "support.state is 'supported'"])
+flips("sysos before: a bar and a character that is not ASCII in the box's own answer do not break the table or the report", L, Q_SYSOS_B, "PASS", sy_data("before", pretty_name="D\u00e9bian | x"),
+      must_have=["| pretty_name | D?bian / x |"])
+
+# a call that left nothing that can be judged: INVALID, never a quiet pass
+for ext, why in (("rc", "sysos-before.rc is missing: the call of GET /v1/sys/os (before) did not run"), ("code", "sysos-before.code is missing, empty or unreadable"),
+                 ("os-release", "sysos-before.os-release is missing, empty or unreadable"), ("time", "sysos-before.time is missing, empty or unreadable"),
+                 ("json", "sysos-before.json is missing or empty: the call of GET /v1/sys/os (before) answered 200 and nothing was kept")):
+    sy_invalid("sysos before: no sysos-before.%s: the call is not proven" % ext, L, Q_SYSOS_B, why, lambda d, e=ext: remove(d, "sysos-before.%s" % e))
+sy_invalid("sysos before: an empty answer", L, Q_SYSOS_B, "sysos-before.json is missing or empty", lambda d: put(d, "sysos-before.json", ""))
+sy_invalid("sysos before: an answer that is not JSON", L, Q_SYSOS_B, "sysos-before.json is not a JSON object", lambda d: put(d, "sysos-before.json", "<html>502</html>"))
+sy_invalid("sysos before: an answer that is JSON and not an object", L, Q_SYSOS_B, "sysos-before.json is not a JSON object", lambda d: put(d, "sysos-before.json", "[]"))
+sy_invalid("sysos before: nothing answered (curl exit 7, HTTP 000): the harness could not ask, which is not a FAIL of the route", L, Q_SYSOS_B, "got no answer of the route: curl exit 7, HTTP 000 (curl: (7) Failed to connect",
+           lambda d: sysos_files(d, "before", get(d, "sysos-before.os-release"), None, code="000", rc=7, err="curl: (7) Failed to connect to 127.0.0.1 port 80\n"))
+for code in ("401", "403", "404", "502", "503", "504"):
+    sy_invalid("sysos before: HTTP %s is not an answer of the route (a credential, a release without the route, a gateway or a core that is not up): invalid" % code, L, Q_SYSOS_B, "HTTP %s" % code,
+               lambda d, c=code: put(d, "sysos-before.code", c + "\n"))
+sy_invalid("sysos before: curl ended with an error after a 200: nothing is proven", L, Q_SYSOS_B, "curl exit 28, HTTP 200", lambda d: put(d, "sysos-before.rc", "28\n"))
+sy_invalid("sysos before: a time that is not a time", L, Q_SYSOS_B, "sysos-before.time is missing, empty or unreadable", lambda d: put(d, "sysos-before.time", "yesterday\n"))
+sy_invalid("sysos before: an os-release with no ID", L, Q_SYSOS_B, "sysos-before.os-release is missing, empty or unreadable", lambda d: put(d, "sysos-before.os-release", "NAME=x\n"))
+sy_invalid("sysos before: a guest whose clock is before the table's AsOf (2026-10-09): the table cannot say, and that is the harness's problem", L, Q_SYSOS_B, "before the table's AsOf 2026-10-09", sy_at("before", 2026, 10, 8, 23, 59, 59))
+case("sysos before: an invalid call does not hide the other verdict: the after one is still judged", L, 1, mutate=lambda d: remove(d, "sysos-before.rc"), rows={Q_SYSOS_B: "INVALID", Q_SYSOS_A: "PASS"})
+
+# after the reboot
+flips("sysos after: the core still says the old release (it did not follow the new os-release)", L, Q_SYSOS_A, "FAIL",
+      lambda d: put(d, "sysos-after.json", json.dumps(core_answer("debian", "11", "bullseye", DEB11["old_pretty"]))),
+      must_have=["version_id is '11', the target release says '12'", "codename is 'bullseye', the target release says 'bookworm'", "support.state is 'security_ended', the table says supported for debian 12 on 2026-10-11"])
+flips("sysos after: the core says the target release with another support state", L, Q_SYSOS_A, "FAIL", sy_state("after", "security_ended"), must_have=["support.state is 'security_ended', the table says supported for debian 12"])
+flips("sysos after: the core says another id", "u22-24", Q_SYSOS_A, "FAIL", sy_data("after", id="debian"), must_have=["id is 'debian', the target release says 'ubuntu'"])
+flips("sysos after: the core says known false", L, Q_SYSOS_A, "FAIL", sy_data("after", known=False), must_have=["known is False, not true"])
+flips("sysos after: the core says it is a variant", L, Q_SYSOS_A, "FAIL", sy_data("after", variant="proxmox"), must_have=["variant is 'proxmox'"])
+flips("sysos after: the route answers an error of its own (HTTP 500)", L, Q_SYSOS_A, "FAIL", lambda d: put(d, "sysos-after.code", "500\n"), must_have=["GET /v1/sys/os (after) answered HTTP 500"])
+flips("sysos after: the verdict before does not move when the one after fails", L, Q_SYSOS_B, "PASS", sy_data("after", id="ubuntu"))
+for ext, why in (("rc", "sysos-after.rc is missing: the call of GET /v1/sys/os (after) did not run"), ("code", "sysos-after.code is missing, empty or unreadable"),
+                 ("json", "sysos-after.json is missing or empty")):
+    sy_invalid("sysos after: no sysos-after.%s: the call is not proven" % ext, L, Q_SYSOS_A, why, lambda d, e=ext: remove(d, "sysos-after.%s" % e))
+sy_invalid("sysos after: an answer that is not JSON", L, Q_SYSOS_A, "sysos-after.json is not a JSON object", lambda d: put(d, "sysos-after.json", "gateway error"))
+sy_invalid("sysos after: HTTP 404 while the core answers its version: the route is not there (an invalid run, the release under test has to carry it)", L, Q_SYSOS_A, "HTTP 404", lambda d: put(d, "sysos-after.code", "404\n"))
+sy_invalid("sysos after: nothing answered while the core answered its version: the harness could not ask", L, Q_SYSOS_A, "got no answer of the route: curl exit 7, HTTP 000",
+           lambda d: sysos_files(d, "after", get(d, "sysos-after.os-release"), None, code="000", rc=7))
+for core_code in ("000", "502"):
+    case("sysos after: nothing answered because the core did not come back (version/current: %s): OPEN, and not an invalid run, so that the finding of the core row stays" % core_code, L, 0,
+         mutate=seq(lambda d: sysos_files(d, "after", get(d, "sysos-after.os-release"), None, code="000", rc=7), lambda d, c=core_code: put(d, "core-after.code", c + "\n")),
+         rows={Q_SYSOS_A: "OPEN", Q_SYSOS_B: "PASS"}, must_have=["the core did not answer after the reboot (version/current: HTTP %s)" % core_code], must_not_have=["INVALID RUN"])
+sy_invalid("sysos after: a day before AsOf is the harness's problem after the hop too", L, Q_SYSOS_A, "before the table's AsOf 2026-10-09", sy_at("after", 2026, 10, 1))
+
+# a hop that did not run to its end never passes after: OPEN with the reason, whatever the answer says
+case("sysos after: a debian hop that did nothing (its first step failed, the box is the old release): OPEN, even when the answer looks right", L, 0, mutate=hop_did_nothing,
+     rows={Q_SYSOS_A: "OPEN", Q_SYSOS_B: "PASS"}, must_have=["the hop did not run to its end", "the box is 11 bullseye after the reboot, not 12 bookworm", "what the core said all the same: debian 12 bookworm, support.state supported"], must_not_have=["INVALID RUN"])
+case("sysos after: ... and when the core says what it should say of the old release it is still OPEN, with what it said", L, 0,
+     mutate=seq(hop_did_nothing, lambda d: put(d, "sysos-after.json", json.dumps(core_answer("debian", "11", "bullseye", DEB11["old_pretty"])))),
+     rows={Q_SYSOS_A: "OPEN"}, must_have=["what the core said all the same: debian 11 bullseye, support.state security_ended", "what the core says after the hop: the hop did not run to its end"], must_not_have=["INVALID RUN"])
+case("sysos after: an ubuntu tool that failed and left the box where it was: OPEN", "u22-24", 0, mutate=seq(tool_exit(1), box_unmoved), rows={Q_SYSOS_A: "OPEN", Q_SYSOS_B: "PASS"}, must_not_have=["INVALID RUN"])
+case("sysos after: the unit was cut (no DONE, no ENDED): OPEN", L, 0, mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" DONE")]), rows={Q_SYSOS_A: "OPEN"}, must_have=["the unit wrote neither DONE nor ENDED"])
+
+# the table of the core, and its boundary days. Each line is (year, month, day, what the core says), written by hand from the spec's rule and the dates of its table: security_ended from the
+# day AFTER the last day, ending_soon from 180 days before the last day (up to and including it), supported before, a day before AsOf (2026-10-09) is a wrong clock, and more than 18 months
+# after AsOf (the days from 2028-04-10) what is still to come is unknown while what has ended stays ended. Debian 11 ended before AsOf and Ubuntu 20.04 is not a leg: neither has a day
+# before its end to try. The Ubuntu 22.04 row ends 2027-05-31 (the core says the month; the original spec had 2027-06-01, the day after).
+BOUNDS = [
+    ("d11-12", "before", [(2026, 10, 9, "security_ended"), (2028, 4, 9, "security_ended"), (2028, 4, 10, "security_ended"), (2035, 1, 1, "security_ended")]),
+    ("d12-13", "before", [(2026, 10, 9, "supported"), (2028, 1, 1, "supported"), (2028, 1, 2, "ending_soon"), (2028, 4, 9, "ending_soon"), (2028, 4, 10, "unknown"), (2028, 6, 30, "unknown"), (2028, 7, 1, "security_ended")]),
+    ("d11-12", "after", [(2028, 1, 1, "supported"), (2028, 1, 2, "ending_soon")]),
+    ("d12-13", "after", [(2026, 10, 9, "supported"), (2028, 4, 9, "supported"), (2028, 4, 10, "unknown"), (2030, 6, 30, "unknown"), (2030, 7, 1, "security_ended")]),
+    ("u22-24", "before", [(2026, 10, 9, "supported"), (2026, 12, 1, "supported"), (2026, 12, 2, "ending_soon"), (2027, 5, 31, "ending_soon"), (2027, 6, 1, "security_ended"), (2028, 4, 10, "security_ended")]),
+    ("u24-26", "before", [(2026, 10, 9, "supported"), (2028, 4, 9, "supported"), (2028, 4, 10, "unknown"), (2029, 5, 31, "unknown"), (2029, 6, 1, "security_ended")]),
+    ("u22-24", "after", [(2026, 10, 9, "supported"), (2028, 4, 10, "unknown")]),
+    ("u24-26", "after", [(2026, 10, 9, "supported"), (2028, 4, 9, "supported"), (2028, 4, 10, "unknown"), (2031, 5, 29, "unknown"), (2031, 5, 30, "security_ended")]),
+]
+WRONG = {"supported": "ending_soon", "ending_soon": "supported", "security_ended": "ending_soon", "unknown": "supported"}
+for leg_, tag_, days_ in BOUNDS:
+    q_ = Q_SYSOS_B if tag_ == "before" else Q_SYSOS_A
+    s_ = LEGS[leg_]
+    rel_ = "%s %s" % (s_["family"], s_["old"] if tag_ == "before" else s_["new"])
+    for y_, m_, dd_, state_ in days_:
+        what_ = "%s %s, %s the hop, on %04d-%02d-%02d" % (leg_, rel_, "before" if tag_ == "before" else "after", y_, m_, dd_)
+        case("the table: %s: the core says %s and the table agrees" % (what_, state_), leg_, 0, mutate=seq(sy_at(tag_, y_, m_, dd_), sy_state(tag_, state_)), rows={q_: "PASS"})
+        case("the table: %s: the core says %s and the table does not" % (what_, WRONG[state_]), leg_, 0, mutate=seq(sy_at(tag_, y_, m_, dd_), sy_state(tag_, WRONG[state_])), rows={q_: "FAIL"})
+# the day is the UTC day: the last second of a day is that day, and midnight is the next one (this machine's own time zone does not decide)
+case("the table: the last second of 2028-01-01 (UTC) is still supported", "d12-13", 0, mutate=seq(sy_at("before", 2028, 1, 1, 23, 59, 59), sy_state("before", "supported")), rows={Q_SYSOS_B: "PASS"})
+case("the table: midnight of 2028-01-02 (UTC) is ending_soon", "d12-13", 0, mutate=seq(sy_at("before", 2028, 1, 2, 0, 0, 0), sy_state("before", "ending_soon")), rows={Q_SYSOS_B: "PASS"})
+case("the table: the verdict says which day it was judged on and what the table says of it", "d12-13", 0, mutate=sy_at("before", 2028, 1, 2), must_have=["the table says for the release it is judged against | ending_soon: the free security updates end 2028-06-30"],
+     rows={Q_SYSOS_B: "FAIL"})
+case("the table: the month precision of Ubuntu is said where the table is read", "u22-24", 0, must_have=["supported: the free security updates end 2027-05-31 (month precision)"])
+case("the table: a stale table is said to be stale where the core says unknown", "d12-13", 0, mutate=seq(sy_at("before", 2028, 5, 1), sy_state("before", "unknown")), rows={Q_SYSOS_B: "PASS"},
+     must_have=["the table is stale on 2028-05-01 (more than 18 months after 2026-10-09)"])
+
+
+def static(name, ok, detail=""):
+    """a check on the text of the report script itself, in the same list as the cases"""
+    if not wanted(name) or not report_cases_wanted():
+        return
+    count[0] += 1
+    if ok:
+        ok_line(name)
+    else:
+        failures.append("%s: %s" % (name, detail))
+
+
+with open(REPORT, newline="") as f:
+    report_text = f.read().replace("\r\n", "\n")
+table_src = re.search(r"^OS_SUPPORT_TABLE = (\{.*?^\})", report_text, re.M | re.S)
+mirror = ast.literal_eval(table_src.group(1)) if table_src else {}
+mirror_consts = {k: re.search(r"^%s = (.+)$" % k, report_text, re.M) for k in ("OS_SUPPORT_ASOF", "OS_SUPPORT_SOON_DAYS", "OS_SUPPORT_STALE_MONTHS")}
+mirror_consts = {k: ast.literal_eval(m.group(1)) if m else None for k, m in mirror_consts.items()}
+# what the spec says (os-upgrade-pr01-spec.md, PR 1 core, item 2), as the core has it today: the last day of the free security updates and whether the vendor says the day or the month
+SPEC_TABLE = {("debian", "11"): ("2026-08-31", "day"), ("debian", "12"): ("2028-06-30", "day"), ("debian", "13"): ("2030-06-30", "day"),
+              ("ubuntu", "22.04"): ("2027-05-31", "month"), ("ubuntu", "24.04"): ("2029-05-31", "month"), ("ubuntu", "26.04"): ("2031-05-29", "month")}
+static("the report's table is the spec's: the six releases of the legs, with their last day and their precision, AsOf 2026-10-09, 180 days, 18 months",
+       {k: (v["ends"], v["precision"]) for k, v in mirror.items()} == SPEC_TABLE and mirror_consts == {"OS_SUPPORT_ASOF": "2026-10-09", "OS_SUPPORT_SOON_DAYS": 180, "OS_SUPPORT_STALE_MONTHS": 18}, (mirror, mirror_consts))
+outside = re.sub(r"# ---- the core's table of the end of free security updates.*?    return state, said\n", "", report_text, flags=re.S)
+static("no date of support is said anywhere in the report script but in its one table", re.search(r"\b20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]\b", outside) is None and "OS_SUPPORT_TABLE" in report_text, re.findall(r"[^\n]*\b20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]\b[^\n]*", outside)[:3])
+# the table is a mirror of the core's: when the core's source is next to this repository (the sibling CasaOS checkout), it is held to it; the runner has no such file
+CORE_GO = os.environ.get("OSSUPPORT_GO") or os.path.join(HERE, "..", "..", "CasaOS", "pkg", "ossupport", "ossupport.go")
+if os.path.exists(CORE_GO):
+    with open(CORE_GO, newline="") as f:
+        core_go = f.read().replace("\r\n", "\n")
+    core_rows = {(i, v): (e, p.lower()) for i, v, e, p in re.findall(r'id: "(\w+)", versionID: "([0-9.]+)", codename: "\w+",\s+ends: "([0-9-]+)", precision: Precision(Day|Month)', core_go)}
+    asof = re.search(r"AsOf = time\.Date\((\d+), (\d+), (\d+),", core_go)
+    core_consts = {"OS_SUPPORT_ASOF": "%s-%02d-%02d" % tuple(int(x) for x in asof.groups()) if asof else None, "OS_SUPPORT_SOON_DAYS": int((re.search(r"endingSoonDays = (\d+)", core_go) or [0, 0])[1]),
+                   "OS_SUPPORT_STALE_MONTHS": int((re.search(r"staleAfterMonths = (\d+)", core_go) or [0, 0])[1])}
+    static("the report's table is the core's own (pkg/ossupport/ossupport.go next to this repository): the same last days, precisions, AsOf, 180 days and 18 months",
+           all(core_rows.get(k) == (v["ends"], v["precision"]) for k, v in mirror.items()) and bool(mirror) and core_consts == mirror_consts, ({k: core_rows.get(k) for k in mirror}, core_consts, mirror_consts))
+else:
+    print("skip: the core's ossupport.go is not next to this repository (OSSUPPORT_GO names it), the report's table is held to the spec only")
+
+# ---- the guest script ------------------------------------------------------------------------------------------------------------------
+
+def finish_tests():
+    if failures:
+        print("\n".join(failures), file=sys.stderr)
+        print("%d of %d cases failed" % (len(failures), count[0]), file=sys.stderr)
+        sys.exit(1)
+    print("ok: the measurement can say no (%d cases)" % count[0])
+    sys.exit(0)
+
+
+if os.environ.get("REPORT_ONLY"):
+    finish_tests()
+
+import socket
+import threading
+import time
+
+with open(SCRIPT, newline="") as f:
+    guest_text = f.read().replace("\r\n", "\n")
+
+
+def posix(p):
+    p = p.replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", p)
+    return "/%s/%s" % (m.group(1).lower(), m.group(2)) if m else p
+
+
+SCRIPT_P = posix(SCRIPT)
+
+
+def have_bash():
+    try:
+        return subprocess.run([BASH, "-c", "true"], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+def bash_run(snippet, *args, env=None, input=None, cwd=None, timeout=120):
+    """the guest script sourced into a bash that then runs the snippet (the runner's functions and the phases are run the same way)"""
+    e = dict(ENV)
+    e.update(env or {})
+    return subprocess.run([BASH, "-c", 'source "$1"; shift; ' + snippet, "_", SCRIPT_P] + list(args), capture_output=True, text=True, input=input, env=e, cwd=cwd, encoding="utf-8", timeout=timeout)
+
+
+def check(label, ok, detail=""):
+    if not wanted(label):
+        return
+    count[0] += 1
+    if ok:
+        ok_line(label)
+    else:
+        failures.append("%s: %s" % (label, detail))
+
+
+def fake(dir_, name, body):
+    path = os.path.join(dir_, name)
+    with open(path, "w", newline="\n") as f:
+        f.write("#!/bin/bash\n" + body)
+    os.chmod(path, 0o755)
+
+
+def early_quitters(script):
+    """what in a shell script leaves a producer writing into a pipe nobody reads any more, the class that ended the Debian 11 leg of the Docker proof (under
+    pipefail the producer's SIGPIPE is status 141): a consumer that quits at its first match. `| head`, `| grep -q` or `-m`, `| sed ... q`, an awk that
+    exits outside its END block. Comment lines are left out."""
+    code = "\n".join(ln for ln in script.replace("\r\n", "\n").split("\n") if not ln.lstrip().startswith("#"))
+    found = re.findall(r"(?<!\|)\|(?!\|)\s*head\b[^|\n]*|(?<!\|)\|(?!\|)\s*grep\s+-[A-Za-z]*[qm][^|\n]*|(?<!\|)\|(?!\|)\s*sed\s[^|\n]*?(?<![A-Za-z])q\b[^|\n]*", code)
+    found += ["awk '%s'" % prog.strip()[:60] for prog in re.findall(r"\bawk\b[^'\n]*'([^']*)'", code) if re.search(r"\bexit\b", re.sub(r"END\s*\{[^}]*\}", "", prog))]
+    return found
+
+
+def function_body(text, name):
+    m = re.search(r"^%s\(\) \{\n(.*?)^\}" % re.escape(name), text, re.M | re.S)
+    return m.group(1) if m else None
+
+
+def free_port():
+    with socket.socket() as sck:
+        sck.bind(("127.0.0.1", 0))
+        return sck.getsockname()[1]
+
+
+OLD_FORMS = ("cprev=\"$(apt-cache madison containerd.io | awk '$3 ~ /^1\\.7\\./ {print $3; exit}')\"", "dpkg --version 2>&1 | head -n1", "ps | grep -q x", "ps | grep -m1 x", "seq 1 9 | sed 1q",
+             "awk '$1 == 1 {print; exit}' f")
+READS_ALL = ("[ -s f ] || grep -q x f", "apt-cache madison containerd.io | awk '$3 ~ /^1\\.7\\./ && !found {print $3; found = 1}'", "dpkg --version 2>&1 | sed -n 1p", "# x | head -n1\ntrue", "awk 'END { exit 1 }' f",
+             "awk '{ n++ } END { if (n) exit 0; exit 1 }' f", "grep -q x f", "grep -q x <<<\"$y\"")
+check("the lint of pipelines whose consumer quits early sees the forms that ended the Debian 11 leg, and not the ones that read everything",
+      all(early_quitters(s_) for s_ in OLD_FORMS) and not any(early_quitters(s_) for s_ in READS_ALL), [s_ for s_ in OLD_FORMS if not early_quitters(s_)] + [s_ for s_ in READS_ALL if early_quitters(s_)])
+check("no pipeline of the guest script has a consumer that quits before its producer is done (head, grep -q, sed q, an awk that exits outside END)", not early_quitters(guest_text), early_quitters(guest_text))
+
+if not have_bash():
+    print("skip: no bash that works here, the guest script's functions are not tested")
+else:
+    # bash -n
+    count[0] += 1
+    p = subprocess.run([BASH, "-n", SCRIPT_P], capture_output=True, text=True)
+    if p.returncode != 0:
+        failures.append("bash -n of the guest script: %s" % p.stderr[-300:])
+    else:
+        ok_line("the guest script parses as bash")
+
+    # the leg table
+    for leg_, want in (("d11-12", "debian 11 12 bookworm"), ("d12-13", "debian 12 13 trixie"), ("u22-24", "ubuntu 22.04 24.04 noble"), ("u24-26", "ubuntu 24.04 26.04 resolute")):
+        p = bash_run('leg_facts "$1"', leg_)
+        s_ = LEGS[leg_]
+        check("the guest's table says %s is %s" % (leg_, want), p.stdout.strip() == want == "%s %s %s %s" % (s_["family"], s_["old"], s_["new"], s_["new_code"]), p.stdout)
+    check("the guest's table has no other leg", bash_run('leg_facts "$1"; echo "status $?"', "d13-14").stdout.strip() == "status 1")
+
+    # do-release-upgrade -c: the status AND the version
+    def offered_case(label, text, rc, version, want):
+        with tempfile.TemporaryDirectory() as d_:
+            put(d_, "c.txt", text)
+            if rc is not None:
+                put(d_, "c.rc", "%d\n" % rc)
+            p_ = bash_run('offered "$1" "$2"; echo "status $?"', version, posix(os.path.join(d_, "c.txt")))
+            check("offered: " + label, p_.stdout.strip() == "status %d" % (0 if want else 1), p_.stdout + p_.stderr)
+    OFFER = "Checking for a new Ubuntu release\nNew release '24.04.5 LTS' available.\nRun 'do-release-upgrade' to upgrade to it.\n"
+    offered_case("exit 0 and the version", OFFER, 0, "24.04", True)
+    offered_case("exit 0 and another version", OFFER, 0, "26.04", False)
+    offered_case("exit 1 whatever it says", OFFER, 1, "24.04", False)
+    offered_case("no status recorded", OFFER, None, "24.04", False)
+    offered_case("a release that is not an LTS (Prompt=normal on 26.04 after 2026-10-15)", "New release '26.10' available.\n", 0, "26.04", False)
+    offered_case("the version is not a prefix match of another one (24.04 is not 24.041)", "New release '24.041 LTS' available.\n", 0, "24.04", False)
+    offered_case("the dot of a version is a dot", "New release '24x04.5 LTS' available.\n", 0, "24.04", False)
+    offered_case("nothing on offer", "Checking for a new Ubuntu release\nNo new release found.\n", 1, "24.04", False)
+    for text_, want in (("Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n", True), ("3 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n", False),
+                        ("0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.\n", False), ("0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.\n", False), ("", False)):
+        with tempfile.TemporaryDirectory() as d_:
+            put(d_, "s.log", text_)
+            p = bash_run('converged "$1"; echo "status $?"', posix(os.path.join(d_, "s.log")))
+            check("converged: %r" % text_[-60:], p.stdout.strip() == "status %d" % (0 if want else 1), p.stdout)
+    claims = bash_run('jwt_claims "$1"', "eyJhbGciOiJFUzI1NiJ9.eyJpZCI6MSwiZXhwIjoxNzkwMDAwMDAwfQ.sig").stdout
+    check("the claims of a token are read, the token is not kept", json.loads(claims) == {"id": 1, "exp": 1790000000}, claims)
+    check("a payload that needs padding and url-safe characters is read", json.loads(bash_run('jwt_claims "$1"', "x.eyJhIjoiPz8-Pz8ifQ.s").stdout) == {"a": "??>??"})
+
+    # the tool that rewrites apt's sources
+    tool_dir = tempfile.mkdtemp()
+    tool = os.path.join(tool_dir, "sources.py")
+    bash_run('write_sources_tool "$1"', posix(tool))
+
+    def rewrite(name, text, src, dst):
+        path = os.path.join(tool_dir, name)
+        put(path.rsplit(os.sep, 1)[0] if False else tool_dir, name, text)
+        p_ = subprocess.run([sys.executable, tool, "rewrite", src, dst, path], capture_output=True, text=True, encoding="utf-8")
+        return p_.returncode, p_.stdout
+
+    ONE = ("deb http://deb.debian.org/debian bullseye main contrib non-free\ndeb-src http://deb.debian.org/debian bullseye main\n"
+           "deb [arch=amd64 signed-by=/x.gpg] http://archive.debian.org/debian-security bullseye-security main non-free\ndeb http://deb.debian.org/debian bullseye-updates main\n"
+           "deb http://deb.debian.org/debian bullseye-backports main\ndeb http://deb.debian.org/debian bullseye-proposed-updates main\n# a comment about bullseye\n\n"
+           "deb https://download.docker.com/linux/debian bullseye stable\ndeb http://deb.debian.org/debian bookworm main non-free-firmware\n")
+    ONE_WANT = ("deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware\ndeb-src http://deb.debian.org/debian bookworm main\n"
+                "deb [arch=amd64 signed-by=/x.gpg] http://deb.debian.org/debian-security bookworm-security main non-free non-free-firmware\ndeb http://deb.debian.org/debian bookworm-updates main\n"
+                "# osm-removed: deb http://deb.debian.org/debian bullseye-backports main\n# osm-removed: deb http://deb.debian.org/debian bullseye-proposed-updates main\n# a comment about bullseye\n\n"
+                "deb https://download.docker.com/linux/debian bullseye stable\ndeb http://deb.debian.org/debian bookworm main non-free-firmware\n")
+    NODOCKER = ONE.replace("deb https://download.docker.com/linux/debian bullseye stable\n", "")
+    NODOCKER_WANT = ONE_WANT.replace("deb https://download.docker.com/linux/debian bullseye stable\n", "")
+    rc_, out_ = rewrite("sources.list", ONE, "bullseye", "bookworm")
+    check("the sources tool rewrites a one-line file as the notes say: the suites, the security line, the archive's host, non-free-firmware beside non-free, the backports dropped, Docker's line left alone",
+          rc_ == 0 and out_ == ONE_WANT, out_)
+    DEB822 = ("Types: deb deb-src\nURIs: http://deb.debian.org/debian\nSuites: bookworm bookworm-updates bookworm-backports\nComponents: main non-free\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
+              "Types: deb\nURIs: http://security.debian.org/debian-security\nSuites: bookworm-security\nComponents: main\n\n"
+              "Types: deb\nURIs: https://download.docker.com/linux/debian\nSuites: bookworm\nComponents: stable\n\n"
+              "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bookworm-backports\nComponents: main\n")
+    DEB822_WANT = ("Types: deb deb-src\nURIs: http://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main non-free non-free-firmware\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
+                   "Types: deb\nURIs: http://security.debian.org/debian-security\nSuites: trixie-security\nComponents: main\n\n"
+                   "Types: deb\nURIs: https://download.docker.com/linux/debian\nSuites: bookworm\nComponents: stable\n\n"
+                   "# osm-removed: Types: deb\n# osm-removed: URIs: http://deb.debian.org/debian\n# osm-removed: Suites: bookworm-backports\n# osm-removed: Components: main\n")
+    rc_, out_ = rewrite("debian.sources", DEB822, "bookworm", "trixie")
+    check("the sources tool rewrites a deb822 file the same way (and a stanza left with no suite is commented out whole)", rc_ == 0 and out_ == DEB822_WANT, out_)
+    rc_, out_ = rewrite("debian.sources", "Types: deb\nURIs: http://ftp.fr.debian.org/debian\nSuites: bookworm\nComponents: main\n", "bookworm", "trixie")
+    check("a country mirror under debian.org is a Debian source", "Suites: trixie" in out_, out_)
+    rc_, out_ = rewrite("sources.list", "deb http://mirror.example.org/debian bullseye main\ndeb http://mirror.example.org/pub/other bullseye main\ndeb http://deb.debian.org/debian bullseye main\n", "bullseye", "bookworm")
+    check("a mirror whose path is /debian is a Debian source, another path is not", out_.splitlines()[0].endswith("bookworm main") and out_.splitlines()[1].endswith("bullseye main"), out_)
+    rc_, out_ = rewrite("sources.list", "deb [ arch=amd64 ] http://deb.debian.org/debian bullseye main non-free-firmware\n", "bullseye", "bookworm")
+    check("a line that already has non-free-firmware does not get it twice, and an option bracket with spaces is kept", out_ == "deb [ arch=amd64 ] http://deb.debian.org/debian bookworm main non-free-firmware\n", out_)
+    rc_, out_ = rewrite("sources.list", "deb http://deb.debian.org/debian stable main\n", "bullseye", "bookworm")
+    check("a suite alias is not rewritten (the design refuses it before the hop)", out_ == "deb http://deb.debian.org/debian stable main\n", out_)
+
+    def foreign(name, text, family):
+        put(tool_dir, name, text)
+        return subprocess.run([sys.executable, tool, "foreign", family, os.path.join(tool_dir, name)], capture_output=True, text=True).returncode
+    DOCKER_L = "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable\n"
+    check("Docker's source is foreign to Debian", foreign("docker.list", DOCKER_L, "debian") == 0)
+    check("a Debian source is not foreign to Debian", foreign("sources.list", ONE, "debian") == 1)
+    check("Debian's source is foreign to Ubuntu", foreign("sources.list", ONE, "debian".replace("debian", "ubuntu")) == 0)
+    check("Docker's deb822 source is foreign to Ubuntu", foreign("docker.sources", "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: noble\nComponents: stable\n", "ubuntu") == 0)
+    check("an Ubuntu mirror is not foreign to Ubuntu", foreign("u.list", "deb http://archive.ubuntu.com/ubuntu jammy main\ndeb http://security.ubuntu.com/ubuntu jammy-security main\n", "ubuntu") == 1)
+    check("a regional Ubuntu mirror under ubuntu.com is not foreign", foreign("u.list", "deb http://azure.archive.ubuntu.com/ubuntu jammy main\n", "ubuntu") == 1)
+    check("a file with no repository is not foreign to anyone (it is left where it is)", foreign("empty.list", "# nothing\n", "debian") == 1)
+    check("a repository whose address the tool cannot read (a mirror+file: list, as some cloud images have) is not called foreign: it is not paused", foreign("debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bookworm\nComponents: main\n", "debian") == 1)
+    check("the tool refuses what it does not know", subprocess.run([sys.executable, tool, "nonsense"], capture_output=True).returncode == 2)
+
+    # the probes made of bash alone, against a server of our own
+    port = free_port()
+    srv = os.path.join(tool_dir, "srv.py")
+    put(tool_dir, "srv.py", """import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code = 200 if self.path == "/ok" else 404
+        if self.path == "/auth":
+            code = 200 if self.headers.get("Authorization") == "Internal s3cret" else 401
+        self.send_response(code); self.end_headers(); self.wfile.write(b"x")
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+""")
+    server = subprocess.Popen([sys.executable, srv, str(port)])
+    banner_port = free_port()
+    put(tool_dir, "ban.py", """import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(5)
+while True:
+    c, _ = s.accept(); c.sendall(b"SSH-2.0-OpenSSH_9.2\\r\\n"); time.sleep(0.2); c.close()
+""")
+    banner = subprocess.Popen([sys.executable, os.path.join(tool_dir, "ban.py"), str(banner_port)])
+    time.sleep(1.5)
+    try:
+        closed = free_port()
+        got = bash_run('echo "$(http_code %d /ok) $(http_code %d /nope) $(http_code %d /auth) $(http_code %d /auth "Authorization: Internal s3cret") $(http_code %d /ok)"' % (port, port, port, port, closed)).stdout.strip()
+        check("http_code: the status the loopback answers with, 000 when nothing answers, and a header that is sent", got == "200 404 401 200 000", got)
+        got = bash_run('tcp_open %d; a=$?; tcp_open %d; b=$?; echo "$a $b [$(tcp_banner %d)] [$(tcp_banner %d)]"' % (port, closed, banner_port, closed)).stdout.replace("\n", "")   # a banner ends with CR LF, and text mode reads CR as a line end
+        check("tcp_open and tcp_banner: a port that accepts, one that does not, the banner of an ssh and the lack of one", got == "0 1 [SSH-2.0-OpenSSH_9.2] []", got)
+        p = bash_run('http_code %d /ok >/dev/null' % closed)
+        check("a probe of a closed port writes nothing to stderr (the poller's journal is not the place for it)", p.stderr.strip() == "", p.stderr)
+        # the poller: eleven columns, the words of the guest, the names sorted
+        fk = tempfile.mkdtemp()
+        fake(fk, "docker", 'case "$1" in version) echo 28.0.4 ;; ps) printf "p-b\\np-a\\n" ;; esac\n')
+        out_ = tempfile.mkdtemp()
+        auth = tempfile.mkdtemp()
+        put(auth, "jwt", "Authorization: tok\n")
+        put(out_, "timeline.tsv", "")
+        bash_run('export PATH="%s:$PATH"; OUT="%s" AUTH_DIR="%s" CASA_PORT=%d; poller & pp=$!; sleep 6; kill $pp 2>/dev/null; wait 2>/dev/null; true' % (posix(fk), posix(out_), posix(auth), port), timeout=60)
+        rows_ = [ln.split("\t") for ln in get(out_, "timeline.tsv").splitlines() if ln]
+        check("the poller writes a line of eleven columns every second or so: time, Docker, ssh, samba, gateway, core, AppManagement twice, the two ports, the names", len(rows_) >= 2 and all(len(r) == 11 for r in rows_), rows_[:2])
+        check("the poller says what answered: Docker's version, the gateway's answer, the names sorted", bool(rows_) and rows_[0][1] == "28.0.4" and rows_[0][10] == "p-a,p-b" and rows_[0][4] in ("200", "404"), rows_[:1])
+        shutil.rmtree(fk, ignore_errors=True)
+    finally:
+        server.kill()
+        banner.kill()
+
+    # ---- phases, against stand-ins ----------------------------------------------------------------------------------------------
+
+    def world(family, ubuntu_variant="hold", extra_files=None):
+        """a directory with what a phase needs: OUT, apt's directory, the backup, the update-manager's, the stand-ins on PATH, a log of every call"""
+        w = tempfile.mkdtemp()
+        for sub in ("out", "apt/sources.list.d", "apt/apt.conf.d", "backup", "um", "bin", "state", "auth", "distup", "aptlog"):
+            os.makedirs(os.path.join(w, sub), exist_ok=True)
+        put(w, "calls", "")
+        put(w, "out/timeline.tsv", "")
+        put(w, "out/hop-unit.log", "")
+        if family == "debian":
+            put(w, "apt/sources.list", NODOCKER)
+            put(w, "apt/sources.list.d/docker.list", DOCKER_L)
+        else:
+            put(w, "apt/sources.list", "deb http://archive.ubuntu.com/ubuntu jammy main universe\ndeb http://security.ubuntu.com/ubuntu jammy-security main\n")
+            put(w, "apt/sources.list.d/docker.list", DOCKER_L.replace("debian bullseye", "ubuntu jammy"))
+        put(w, "um/release-upgrades", "[DEFAULT]\nPrompt=never\n")
+        put(w, "boot-id", "boot-1\n")
+        put(w, "os-release", os_release("Debian GNU/Linux 11 (bullseye)", "debian", "11", "bullseye") if family == "debian" else os_release("Ubuntu 22.04.5 LTS", "ubuntu", "22.04", "jammy"))
+        b = os.path.join(w, "bin")
+        log = '[ -n "$FAKE_LOG" ] && echo "$(basename "$0") $*" >>"$FAKE_LOG"\n'
+        fake(b, "apt-get", log + r'''args="$*"
+n="$FAKE_STATE"
+bump() { c=$(cat "$n/$1" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" >"$n/$1"; echo "$c"; }
+case "$args" in
+*" -s dist-upgrade"*)
+    c=$(bump sim)
+    if [ "$c" -le "${FAKE_NOT_CONVERGED:-0}" ]; then echo "3 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."; else echo "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."; fi ;;
+*--download-only*) echo "downloaded" ;;
+*" dist-upgrade"*)
+    c=$(bump full)
+    if [ "${FAKE_FULL_FAILS:-0}" = 1 ] && [ "$c" -eq 1 ]; then echo "E: dpkg failed"; exit 100; fi
+    echo "230 upgraded, 36 newly installed, 3 to remove and 0 not upgraded." ;;
+*" update"*)
+    case "$args" in
+    *Dir::State::lists=*)
+        lists=$(printf '%s\n' "$args" | sed -E 's/.*Dir::State::lists=([^ ]+).*/\1/')
+        rel="$lists/deb.debian.org_debian_dists_bookworm_InRelease"
+        if [ -f "$rel" ] && grep -q 'osm-changed' "$rel" && [ "$(stat -c %Y "$rel")" = 0 ]; then
+            for f in Suite Version Label Codename Origin; do
+                if grep -q "^$f: osm-changed" "$rel"; then
+                    lf=$(printf '%s' "$f" | tr 'A-Z' 'a-z')
+                    ok=0
+                    case "$args" in *"--allow-releaseinfo-change-$lf"*|*"--allow-releaseinfo-change update"*) ok=1 ;; esac
+                    case "$f" in Suite|Version) ok=2 ;; esac
+                    [ "$ok" != 0 ] || { echo "E: Repository 'http://deb.debian.org/debian bookworm InRelease' changed its '$f' value from 'x' to 'y'"; exit 100; }
+                    [ "$ok" != 2 ] || echo "N: Repository 'http://deb.debian.org/debian bookworm InRelease' changed its '$f' value from 'x' to 'y'"
+                fi
+            done
+        fi
+        printf 'Suite: oldstable\nVersion: 12.12\nLabel: Debian\nCodename: bookworm\nOrigin: Debian\n' >"$rel"
+        mkdir -p "$lists" ;;
+    esac
+    echo "Reading package lists..." ;;
+*" -s upgrade"*) echo "120 upgraded, 4 newly installed, 0 to remove and 0 not upgraded." ;;
+esac
+exit 0
+''')
+        for name in ("dpkg", "apt-mark", "journalctl", "docker", "systemd-run", "systemd-inhibit", "systemctl", "sync"):
+            fake(b, name, log + "exit 0\n")
+        fake(b, "tty", log + 'echo "not a tty"; exit 1\n')
+        # what the unit's sampler calls in a loop is not logged: it would be written into the log while the phase writes its own lines
+        fake(b, "pgrep", "exit 1\n")
+        fake(b, "ss", "exit 0\n")
+        fake(b, "sleep", "exec /usr/bin/sleep 0.05\n")
+        fake(b, "dpkg-query", '''if [ "$#" -le 2 ]; then printf 'bash\\t5.1\\tii \\nlibc6\\t2.36\\tii \\n'; exit 0; fi
+case "$*" in
+*Status-Abbrev*) for p in $FAKE_INSTALLED; do for a in "$@"; do [ "$a" = "$p" ] && { printf 'ii '; exit 0; }; done; done; exit 1 ;;
+*Version*) echo "1.0"; exit 0 ;;
+esac
+exit 0
+''')
+        fake(b, "do-release-upgrade", log + r'''case "$*" in
+*-c*) echo "New release '24.04.5 LTS' available."; exit 0 ;;
+*)
+    echo "cfg dir: $(ls "$UM_DIR/release-upgrades.d" 2>/dev/null | tr '\n' ' ')" >>"$FAKE_LOG"
+    echo "cfg: $(cat "$UM_DIR"/release-upgrades.d/*.cfg 2>/dev/null | tr '\n' ' ')" >>"$FAKE_LOG"
+    echo "drop-in: $([ -e "$APT_DIR/apt.conf.d/99os-upgrade-measure" ] && echo yes || echo no)" >>"$FAKE_LOG"
+    echo "prompt: $(grep -h '^Prompt=' "$UM_DIR/release-upgrades")" >>"$FAKE_LOG"
+    echo "the tool runs"; exit 0 ;;
+esac
+''')
+        env = dict(OUT=posix(w) + "/out", APT_DIR=posix(w) + "/apt", BACKUP_DIR=posix(w) + "/backup", UM_DIR=posix(w) + "/um", BOOT_ID_FILE=posix(w) + "/boot-id", HOP_UNIT_LOG=posix(w) + "/out/hop-unit.log",
+                   SOURCES_PY=posix(w) + "/sources.py", FAKE_LOG=posix(w) + "/calls", FAKE_STATE=posix(w) + "/state", OS_RELEASE=posix(w) + "/os-release", AUTH_DIR=posix(w) + "/auth", DPKG_LOG=posix(w) + "/dpkg.log",
+                   APT_LOG_DIR=posix(w) + "/aptlog", DISTUP_LOG_DIR=posix(w) + "/distup", FAMILY=family, HOP_FROM="bullseye" if family == "debian" else "jammy",
+                   TARGET_CODENAME="bookworm" if family == "debian" else "noble", TARGET_VERSION_ID="12" if family == "debian" else "24.04", UBUNTU_VARIANT=ubuntu_variant, LEG="d11-12" if family == "debian" else "u22-24",
+                   FAKE_INSTALLED="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin curl wget samba git osm-orphan osm-orphan-held", CASA_PORT="80", DOCKER_FROM="", INSTALLER_ARGS="", WORK=posix(w), SELF="/x/os-upgrade-measure.sh")
+        return w, env
+
+    def in_world(w, env, snippet, **kw):
+        pre = 'export PATH="%s/bin:$PATH"; write_sources_tool "$SOURCES_PY"; ' % posix(w)
+        # the guest script reads these from the environment of its caller; a stand-in for load_config is not needed
+        return bash_run(pre + snippet, env=env, **kw)
+
+    def calls(w):
+        return get(w, "calls").splitlines()
+
+    # the unit, Debian
+    w, env = world("debian")
+    p = in_world(w, env, "hop_unit")
+    c = calls(w)
+    apt_calls = [x for x in c if x.startswith("apt-get ")]
+    COMMON = "-y -q -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+    want_apt = ["update --error-on=any", "--download-only upgrade", " upgrade", "--download-only dist-upgrade", " dist-upgrade", "-s dist-upgrade"]
+    got_tail = [re.sub(r"^apt-get " + re.escape(COMMON) + " ?", "", x) for x in apt_calls]
+    check("the Debian unit runs apt-get update --error-on=any, the minimal upgrade (downloaded first), the full upgrade (downloaded first) and the simulation that says nothing is left, with the design's options",
+          p.returncode == 0 and [g.strip() for g in got_tail] == [x.strip() for x in want_apt] and all(x.startswith("apt-get " + COMMON) for x in apt_calls), (p.stderr[-400:], got_tail))
+    check("the Debian unit never passes what the design forbids", not any(bad in " ".join(c) for bad in ("--no-install-recommends", "--force-yes", "--allow-", "--force-confnew", "autoremove", "Force-LoopBreak", "force-depends", "reboot", "shutdown")), c)
+    src = get(w, "apt/sources.list")
+    check("the Debian unit rewrote the sources: bookworm, the security line on the mirror, the backports gone, non-free-firmware beside non-free", src == NODOCKER_WANT, src)
+    check("the Debian unit paused Docker's source (renamed, not rewritten, not deleted) and kept a copy of /etc/apt", os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused")) and not os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list"))
+          and get(w, "backup/apt-orig/sources.list") == NODOCKER and "docker.list" in get(w, "out/sources-paused.txt"), os.listdir(os.path.join(w, "apt/sources.list.d")))
+    ul = get(w, "out/hop-unit.log")
+    words = [ln.split(" ", 2)[1:] for ln in ul.splitlines()]
+    order = [x[0] + ((" " + x[1].split()[0]) if x[0].startswith("STEP") else "") for x in words]
+    check("the Debian unit's log has START, the sources, each step with its end and status, and DONE, in the order of the work",
+          order[:3] == ["START", "SRC_START", "SRC_END"] and order[-1] == "DONE" and [o for o in order if o == "STEP_START update"] and
+          [x.split()[1] for x in [o for o in order if o.startswith("STEP_START")]] == ["update", "minimal_dl", "minimal", "full_dl", "full", "converge1"], order)
+    check("every step has its output and its status in the evidence, and the unit says who it was", all(os.path.exists(os.path.join(w, "out", "step-%s.%s" % (n, e))) for n in ("update", "minimal", "full", "converge1") for e in ("log", "rc"))
+          and "pid " in get(w, "out/unit-start.txt") and "pid " in get(w, "out/unit-end.txt") and get(w, "out/step-update.rc").strip() == "0", os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+
+    w, env = world("debian")
+    p = in_world(w, env | {"FAKE_FULL_FAILS": "1", "FAKE_NOT_CONVERGED": "1"}, "hop_unit")
+    c = calls(w)
+    check("when the full upgrade fails the unit runs the notes' failure ladder once (dpkg --configure -a, apt-get -f install, dist-upgrade again)", p.returncode == 0 and any(x.startswith("dpkg --configure -a --force-confdef --force-confold") for x in c)
+          and any(" -f install" in x for x in c) and get(w, "out/step-full.rc").strip() == "100" and os.path.exists(os.path.join(w, "out/step-recover_full.rc")), c)
+    check("a simulation that still has things to do gets a catch-up pass and a second look, and the unit says it was needed", os.path.exists(os.path.join(w, "out/step-catchup1.log")) and os.path.exists(os.path.join(w, "out/step-converge2.log")), os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+
+    w, env = world("debian")
+    put(w, "apt/sources.list", "# nothing\n")
+    put(w, "apt/sources.list.d/debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bullseye\nComponents: main\n")
+    p = in_world(w, env, "hop_unit")
+    ul = get(w, "out/hop-unit.log")
+    check("a rewrite that leaves no line of the target release stops the unit before apt is run, and says why (ENDED, not DONE)", "ABORTED no source names bookworm" in ul and ul.rstrip().endswith("ENDED 1") and "DONE" not in ul
+          and not [x for x in calls(w) if x.startswith("apt-get")], (ul, calls(w)))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the unit, Ubuntu
+    for variant in ("hold", "keep"):
+        w, env = world("ubuntu", variant)
+        p = in_world(w, env, "hop_unit")
+        c = calls(w)
+        up = [x for x in c if x.startswith("do-release-upgrade")]
+        check("the Ubuntu unit (%s) pauses Docker's source, keeps Ubuntu's, and runs the tool once, the non-interactive view and nothing else" % variant, p.returncode == 0 and os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused"))
+              and "archive.ubuntu.com" in get(w, "apt/sources.list") and up == ["do-release-upgrade -c", "do-release-upgrade -f DistUpgradeViewNonInteractive"], (p.stderr[-300:], up))
+        check("the Ubuntu unit (%s): never --allow-third-party, and no reboot" % variant, not any(bad in " ".join(c) for bad in ("--allow-third-party", "reboot", "shutdown")), c)
+        held = [x for x in c if x.startswith("apt-mark hold")]
+        check("the Ubuntu unit (%s) holds %s" % (variant, "the engine and the control" if variant == "hold" else "only the control"),
+              held == (["apt-mark hold osm-orphan-held docker-ce docker-ce-cli containerd.io"] if variant == "hold" else ["apt-mark hold osm-orphan-held"]), held)
+        manual = [x for x in c if x.startswith("apt-mark manual")]
+        check("the Ubuntu unit (%s) marks the installer's dependencies as installed by hand, the ones that are there" % variant, "apt-mark manual wget" in manual and "apt-mark manual curl" in manual and "apt-mark manual samba" in manual and not any("mergerfs" in x for x in manual), manual)
+        check("the Ubuntu unit (%s): the tool saw %s, the dpkg options and Prompt=lts" % (variant, "no drop-in" if variant == "hold" else "the RemoveObsoletes drop-in"),
+              ("cfg dir: 10-os-upgrade-measure.cfg" if variant == "keep" else "cfg dir: \n") in "\n".join(c) + "\n" and "drop-in: yes" in c and "prompt: Prompt=lts" in c, [x for x in c if x.startswith(("cfg", "drop", "prompt"))])
+        check("the Ubuntu unit (%s): the drop-in says RemoveObsoletes=no in the keep variant, and there is none in the other" % variant,
+              ("cfg: [Distro] RemoveObsoletes=no " if variant == "keep" else "cfg: \n") in "\n".join(c) + "\n", [x for x in c if x.startswith("cfg")])
+        check("the Ubuntu unit (%s) leaves nothing of its own behind: no drop-in for dpkg, no cfg" % variant, not os.path.exists(os.path.join(w, "apt/apt.conf.d/99os-upgrade-measure")) and not os.path.exists(os.path.join(w, "um/release-upgrades.d/10-os-upgrade-measure.cfg")))
+        ul = get(w, "out/hop-unit.log")
+        check("the Ubuntu unit (%s) writes what the tool said (UPGRADER_EXIT) and DONE, and records the tool's own -c again" % variant, "UPGRADER_EXIT 0" in ul and ul.rstrip().endswith("DONE") and os.path.exists(os.path.join(w, "out/ubuntu-check-unit.rc"))
+              and get(w, "out/controls.txt").startswith("variant %s" % variant), ul)
+        shutil.rmtree(w, ignore_errors=True)
+
+    def update_old_world(first_output, first_rc):
+        w_, env_ = world("debian")
+        fake(os.path.join(w_, "bin"), "apt-get", r"""echo "apt-get $*" >>"$FAKE_LOG"
+case "$*" in
+*"--allow-releaseinfo-change"*) echo "Reading package lists..."; exit 0 ;;
+*) printf '%b\n' "$FAKE_FIRST_OUTPUT"; exit "$FAKE_FIRST_RC" ;;
+esac
+""")
+        return w_, dict(env_, FAKE_FIRST_OUTPUT=first_output, FAKE_FIRST_RC=str(first_rc))
+
+    w, env = update_old_world("E: Repository 'http://deb.debian.org/debian bullseye InRelease' changed its 'Label' value from 'Debian' to 'x'", 100)
+    p = in_world(w, env, "init_apt; update_old; echo \"status $?\"", timeout=60)
+    check("update_old: an error about a changed Label is retried with --allow-releaseinfo-change, and the notes say so", "status 0" in p.stdout and any("--allow-releaseinfo-change" in x for x in calls(w))
+          and "--allow-releaseinfo-change was needed" in get(w, "out/prepare-notes") and not os.path.exists(os.path.join(w, "out/aborted")), (p.stdout, calls(w), get(w, "out/aborted")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = update_old_world("N: Repository 'http://deb.debian.org/debian bullseye InRelease' changed its 'Suite' value from 'stable' to 'oldstable'\\nE: Could not resolve 'deb.debian.org'", 100)
+    p = in_world(w, env, "init_apt; update_old; echo \"status $?\"", timeout=60)
+    check("update_old: a notice about a changed Suite is not an error to retry: the update that failed for another reason ends the run, without the switch", not any("--allow-releaseinfo-change" in x for x in calls(w))
+          and "apt-get update of the old release fails" in get(w, "out/aborted"), (p.stdout, calls(w), get(w, "out/aborted")))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the sandbox and the experiment on releaseinfo changes
+    w, env = world("debian")
+    sbd = os.path.join(w, "sb")
+    os.makedirs(sbd)
+    before = subprocess.run([BASH, "-c", 'cd "%s/apt" && find . -type f | sort | xargs cat | sha256sum' % posix(w)], capture_output=True, text=True).stdout
+    p = in_world(w, env, 'sandbox paused "%s/sb"; sandbox kept "%s/sb2"; ' % (posix(w), posix(w)) + 'sb_opts "%s/sb"; printf "%%s\\n" "${SB_OPTS[@]}" >"$OUT/sbopts"' % posix(w))
+    c = calls(w)
+    opts = get(w, "out/sbopts").splitlines()
+    check("the sandbox's apt gets its own list of sources, its own parts, its own lists and cache, and no locking", all(any(o.startswith(k) for o in opts) for k in ("Dir::Etc::sourcelist=", "Dir::Etc::sourceparts=", "Dir::State::lists=", "Dir::Cache=", "Acquire::Retries=3", "Debug::NoLocking=true")) and any("%s/sb/sources.list" % posix(w) in o for o in opts), opts)
+    check("the sandbox runs update --error-on=any, then -s upgrade and -s dist-upgrade, for the paused and for the kept sources",
+          [x.split(" -o ")[-1] if " -o " in x else x for x in c if "apt-get" in x and ("update" in x or " -s " in x)][:3] == ["Debug::NoLocking=true update --error-on=any", "Debug::NoLocking=true -s upgrade", "Debug::NoLocking=true -s dist-upgrade"] and len([x for x in c if "--error-on=any" in x]) == 2, c)
+    check("the paused sandbox has Debian's sources only, rewritten for the target; the kept one has Docker's as it stands",
+          "docker" not in get(w, "out/sandbox-paused-sources.txt") and "bookworm" in get(w, "out/sandbox-paused-sources.txt") and "bullseye-backports" not in get(w, "out/sandbox-paused-sources.txt").replace("# osm-removed: deb http://deb.debian.org/debian bullseye-backports main", "")
+          and "download.docker.com/linux/debian bullseye" in get(w, "out/sandbox-kept-sources.txt"), get(w, "out/sandbox-paused-sources.txt"))
+    after = subprocess.run([BASH, "-c", 'cd "%s/apt" && find . -type f | sort | xargs cat | sha256sum' % posix(w)], capture_output=True, text=True).stdout
+    check("the sandbox leaves the apt directory as it was", before == after and before != "", (before, after))
+    shutil.rmtree(w, ignore_errors=True)
+
+    w, env = world("debian")
+    sb = posix(w) + "/sb"
+    os.makedirs(os.path.join(w, "sb/lists/partial"))
+    put(w, "sb/lists/deb.debian.org_debian_dists_bookworm_InRelease", "-----BEGIN PGP SIGNED MESSAGE-----\nSuite: oldstable\nVersion: 12.12\nLabel: Debian\nCodename: bookworm\nOrigin: Debian\n")
+    p = in_world(w, env, 'allow_matrix "%s"' % sb)
+    fields_ = ("suite", "version", "label", "codename", "origin")
+    got = {"%s-%s" % (k, m): get(w, "out/allow-%s-%s.rc" % (k, m)).strip() for k in fields_ for m in ("plain", "field", "all")}
+    check("the releaseinfo experiment, as apt's own table has it: a changed Suite or Version goes through without the option, a changed Label, Codename or Origin is refused, and the option of the field and the general one accept all five",
+          all(got[k + "-plain"] == ("0" if k in ("suite", "version") else "100") and got[k + "-field"] == "0" and got[k + "-all"] == "0" for k in fields_), got)
+    check("the experiment asks for the option of each field by its own name", all(any(("--allow-releaseinfo-change-%s update" % f) in x for x in calls(w)) for f in fields_) and any("--allow-releaseinfo-change update" in x for x in calls(w)), calls(w)[:6])
+    check("the experiment says why when there is nothing to change", "allow-skipped" not in os.listdir(os.path.join(w, "out")), os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    os.makedirs(os.path.join(w, "sb/lists/partial"))
+    p = in_world(w, env, 'allow_matrix "%s/sb"' % posix(w))
+    check("with no InRelease of the target in the sandbox the experiment says so instead of making things up", os.path.exists(os.path.join(w, "out/allow-skipped")) and not os.path.exists(os.path.join(w, "out/allow-suite-plain.rc")), os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the hop phase: an upgrade Canonical has not opened is skipped and says so
+    for label, text, rc_, started in (("offered", OFFER, 0, True), ("not offered", "No new release found.\n", 1, False), ("another release on offer", "New release '26.10' available.\n", 0, False)):
+        w, env = world("ubuntu")
+        put(w, "out/ubuntu-check.txt", text)
+        put(w, "out/ubuntu-check.rc", "%d\n" % rc_)
+        put(w, "bin/systemd-run", '[ -n "$FAKE_LOG" ] && echo "$(basename "$0") $*" >>"$FAKE_LOG"\necho "0 START" >>"$HOP_UNIT_LOG"\nexit 0\n')
+        os.chmod(os.path.join(w, "bin/systemd-run"), 0o755)
+        p = in_world(w, env, "phase_hop", timeout=60)
+        c = calls(w)
+        sr = [x for x in c if x.startswith("systemd-run")]
+        tl = get(w, "out/timeline.tsv")
+        if started:
+            check("hop (%s): the unit is started as the design says, a transient unit that holds a block inhibitor" % label, len(sr) == 1 and all(k in sr[0] for k in ("--no-block", "--collect", "--unit=casaos-os-upgrade-measure", "--property=Type=exec", "--setenv=DEBIAN_FRONTEND=noninteractive",
+                  "systemd-inhibit --what=shutdown:sleep", "--mode=block", "hop-unit")) and "hop_start" in tl and not os.path.exists(os.path.join(w, "out/hop-skipped")), (p.stderr[-300:], sr))
+            check("hop (%s): the Ubuntu unit gets the environment of the research (UTF-8, ucf), and not the one that would hide whether the tool needs a screen" % label, "--setenv=LC_ALL=C.UTF-8" in sr[0] and "--setenv=UCF_FORCE_CONFFOLD=1" in sr[0] and "NO_SCREEN" not in sr[0], sr)
+        else:
+            check("hop (%s): the hop is skipped, neutral, and nothing is started" % label, not sr and get(w, "out/hop-skipped").strip() == "not_offered" and "hop_skipped" in tl and "hop_start" not in tl, (sr, tl[-200:]))
+        shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    p = in_world(w, env, "phase_hop", timeout=60)
+    sr = [x for x in calls(w) if x.startswith("systemd-run")]
+    check("hop (Debian): the Debian unit's environment is the C locale, as the design says", p.returncode in (0, 1) and (not sr or "--setenv=LC_ALL=C " in sr[0] + " "), sr)
+    shutil.rmtree(w, ignore_errors=True)
+
+    # hop-wait: the unit is gone, what it left is collected, once
+    w, env = world("debian")
+    put(w, "out/hop-unit.log", "1790000000.5 START\n1790000900.5 DONE\n")
+    put(w, "dpkg.log", "2026-09-21 12:00:00 status installed old 1\n2026-09-21 15:00:01 status half-configured libc6:amd64 2.36\n")
+    put(w, "aptlog/history.log", "Start-Date: x\n")
+    fake(os.path.join(w, "bin"), "systemctl", 'echo "systemctl $*" >>"$FAKE_LOG"\ncase "$1" in is-active) echo inactive; exit 3 ;; list-units) exit 0 ;; esac\nexit 0\n')
+    fake(os.path.join(w, "bin"), "journalctl", 'echo "journalctl $*" >>"$FAKE_LOG"\nprintf "2026-09-21T12:00:03.1+00:00 h systemd[1]: Stopping OpenBSD Secure Shell server...\\n2026-09-21T12:00:03.2+00:00 h kernel: noise\\n2026-09-21T12:00:04.1+00:00 h systemd[1]: Started OpenBSD Secure Shell server.\\n"\n')
+    p = in_world(w, env | {"TZ": "UTC"}, "phase_hop_wait; echo \"status $?\"", timeout=90)
+    tl = get(w, "out/timeline.tsv")
+    jr = get(w, "out/hop-journal.txt")
+    dl = get(w, "out/dpkg-hop.log")
+    need_files = ("units-hop.tsv", "dpkg-hop.tsv", "audit-hop.rc", "aptcheck-hop.rc", "failed-hop.rc", "kernel-hop.txt", "deps-hop.txt", "docker-hop.txt", "containers-hop.txt", "df-hop.txt", "os-hop", "apt-history.log")
+    flags = {"status": "status 0" in p.stdout, "marks": "hop_unit_end" in tl and "hop_done" in tl, "journal": "Stopping OpenBSD" in jr and "noise" not in jr,
+             "dpkg slice": "half-configured libc6" in dl and "old 1" not in dl, "files": [n for n in need_files if not os.path.exists(os.path.join(w, "out", n))]}
+    check("hop-wait: when the unit has ended it collects what the unit left (the services, the packages, the health, the journal of the hop, dpkg's log from the start of the hop) and says hop_done",
+          flags["status"] and flags["marks"] and flags["journal"] and flags["dpkg slice"] and not flags["files"], (flags, p.stderr[-300:], jr, dl))
+    c1 = len(calls(w))
+    p = in_world(w, env | {"TZ": "UTC"}, 'phase_hop_wait; echo "status $?"', timeout=60)
+    check("hop-wait is safe to call again: after hop_done it does nothing", "status 0" in p.stdout and len(calls(w)) == c1, (p.stdout, len(calls(w)), c1))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    put(w, "out/aborted", "boom\n")
+    p = in_world(w, env, 'phase_hop_wait; echo "status $?"; phase_hop; echo "after hop $?"', timeout=60)
+    check("an aborted run has nothing to wait for and nothing to start", "status 0" in p.stdout and not [x for x in calls(w) if x.startswith(("systemd-run", "systemctl"))], (p.stdout, calls(w)))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    fake(os.path.join(w, "bin"), "systemctl", 'case "$1" in is-active) echo active; exit 0 ;; esac\nexit 0\n')
+    p = in_world(w, env | {"HOP_LIMIT": "1"}, 'phase_hop_wait; echo "status $?"', timeout=60)
+    check("hop-wait gives up at its limit with status 3 and says so, and the unit is not touched", "status 3" in p.stdout and "hop_timeout" in get(w, "out/timeline.tsv"), p.stdout)
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the refresh: apt update, a full upgrade of the current release with Docker's source paused, its package lists, and the reboot it asks for
+    def refresh_world(**extra):
+        w_, env_ = world("debian")
+        fake(os.path.join(w_, "bin"), "apt-get", r"""echo "apt-get $*" >>"$FAKE_LOG"
+echo "sources: $(ls "$APT_DIR/sources.list.d" | tr '\n' ' ')" >>"$FAKE_LOG"
+case "$*" in *" update") if [ -n "$FAKE_UPDATE_FAILS" ]; then echo "E: Failed to fetch"; exit 100; fi ;; esac
+case "$*" in *"dist-upgrade"*) if [ -n "$FAKE_UPGRADE_FAILS" ]; then echo "E: dpkg failed"; exit 100; fi ;; esac
+echo "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."
+exit 0
+""")
+        return w_, dict(env_, **extra)
+
+    w, env = refresh_world()
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    c = calls(w)
+    apt_c = [x for x in c if x.startswith("apt-get ")]
+    srcs = [x for x in c if x.startswith("sources:")]
+    tl = get(w, "out/timeline.tsv")
+    check("refresh: apt update, then a full upgrade of the current release with the design's options and the phased updates, in this order, and nothing else of apt, and no reboot",
+          "status 0" in p.stdout and len(apt_c) == 2 and apt_c[0].endswith(" update") and " dist-upgrade " in apt_c[1] + " " and "Always-Include-Phased-Updates=true" in apt_c[1] and "--force-confold" in apt_c[1]
+          and not any(bad in " ".join(c) for bad in ("--no-install-recommends", "autoremove", "reboot", " -s ")), (p.stdout, p.stderr[-300:], c))
+    check("refresh: Docker's source is paused while apt runs and has its name back afterwards, and what was paused is written down apart from the hop's list",
+          len(srcs) == 2 and all("docker.list.casaos-paused" in x for x in srcs) and os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list")) and not os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused"))
+          and "docker.list" in get(w, "out/sources-paused-refresh.txt") and not os.path.exists(os.path.join(w, "out/sources-paused.txt")), (srcs, os.listdir(os.path.join(w, "apt/sources.list.d"))))
+    check("refresh: its markers in order, its logs, the packages before and after, and its answer about a reboot (none: the kernel is the same and nothing asks for one)",
+          "refresh_start" in tl and tl.index("refresh_start") < tl.index("refresh_update_done") < tl.index("refresh_done") and all(os.path.exists(os.path.join(w, "out", n)) for n in
+          ("refresh-update.log", "refresh-upgrade.log", "dpkg-refresh-before.tsv", "dpkg-refresh-after.tsv", "kernel-refresh-before.txt", "kernel-refresh-after.txt", "upgradable-refresh.txt")) and get(w, "out/refresh-reboot.txt").strip() == "no", (tl, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world()
+    fake(os.path.join(w, "bin"), "dpkg-query", r"""if [ "$#" -le 2 ]; then n=$(cat "$FAKE_STATE/dq" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$FAKE_STATE/dq"; printf 'bash\t5.1\tii \nlinux-image-cloud-amd64\t6.1.%s\tii \n' "$n"; exit 0; fi
+exit 0
+""")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: a kernel that is new or changed asks for a reboot", get(w, "out/refresh-reboot.txt").strip() == "yes kernel (1 linux-image package(s) new or changed)", (p.stdout, get(w, "out/refresh-reboot.txt")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world()
+    put(w, "reboot-required", "*** System restart required ***\n")
+    p = in_world(w, env | {"REBOOT_REQUIRED": posix(w) + "/reboot-required"}, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: a reboot-required file asks for a reboot", get(w, "out/refresh-reboot.txt").strip() == "yes reboot-required", (p.stdout, get(w, "out/refresh-reboot.txt")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world(FAKE_UPDATE_FAILS="1")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: an apt update that fails ends the run (INVALID RUN in the report), before any upgrade", "apt-get update of the old release fails before its refresh" in get(w, "out/aborted") and not [x for x in calls(w) if "dist-upgrade" in x]
+          and "refresh_update_done" not in get(w, "out/timeline.tsv") and "refresh_done" not in get(w, "out/timeline.tsv"), (get(w, "out/aborted"), calls(w)))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world(FAKE_UPGRADE_FAILS="1")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: a full upgrade that fails ends the run, and says which log has the reason", "could not be brought to its last state" in get(w, "out/aborted") and "refresh_done" not in get(w, "out/timeline.tsv")
+          and "E: dpkg failed" in get(w, "out/refresh-upgrade.log"), (get(w, "out/aborted"), get(w, "out/refresh-upgrade.log")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world()
+    put(w, "out/aborted", "boom\n")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=60)
+    check("refresh: an earlier phase that aborted ends the run here, quietly", p.returncode == 0 and "skipped refresh" in p.stdout and not [x for x in calls(w) if x.startswith("apt-get")], (p.stdout, calls(w)))
+    shutil.rmtree(w, ignore_errors=True)
+
+    for label, body in (("says nothing (it cannot reach the manager while dpkg replaces systemd)", 'case "$1" in is-active) exit 1 ;; esac\nexit 0\n'), ("says something odd", 'case "$1" in is-active) echo unknown; exit 3 ;; esac\nexit 0\n'),
+                        ("says inactive once and then nothing (the manager went away between the two looks)", 'case "$1" in is-active) n=$(cat "$FAKE_STATE/ia" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$FAKE_STATE/ia"; if [ "$n" -eq 1 ]; then echo inactive; exit 3; fi; exit 1 ;; esac\nexit 0\n'),
+                        ("says inactive once and active again (a blip)", 'case "$1" in is-active) n=$(cat "$FAKE_STATE/ia" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$FAKE_STATE/ia"; if [ "$n" -eq 1 ]; then echo inactive; exit 3; fi; echo active; exit 0 ;; esac\nexit 0\n')):
+        w, env = world("debian")
+        put(w, "out/hop-unit.log", "1790000000.5 START\n")
+        fake(os.path.join(w, "bin"), "systemctl", body)
+        p = in_world(w, env | {"HOP_LIMIT": "1"}, 'phase_hop_wait; echo "status $?"', timeout=60)
+        tl = get(w, "out/timeline.tsv")
+        check("hop-wait: a systemctl that %s is not 'the unit ended': the wait goes on, to its limit, and nothing is collected" % label, "status 3" in p.stdout and "hop_timeout" in tl and "hop_unit_end" not in tl and "hop_done" not in tl, (p.stdout, tl))
+        shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    put(w, "out/hop-unit.log", "1790000000.5 START\n1790000900.5 DONE\n")
+    fake(os.path.join(w, "bin"), "systemctl", 'case "$1" in is-active) echo failed; exit 3 ;; list-units) exit 0 ;; esac\nexit 0\n')
+    p = in_world(w, env | {"HOP_LIMIT": "30"}, 'phase_hop_wait; echo "status $?"', timeout=60)
+    check("hop-wait: a unit that failed is an ended unit (twice in a row), and what it left is collected", "status 0" in p.stdout and "hop_unit_end" in get(w, "out/timeline.tsv") and "hop_done" in get(w, "out/timeline.tsv"), (p.stdout, get(w, "out/timeline.tsv")))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # GET /v1/sys/os, asked by the guest before the hop and after the reboot: through the gateway, with the loopback secret, and what is kept of the call
+    SYSOS_BODY = '{"success":200,"message":"ok","data":{"id":"debian","version_id":"11","codename":"bullseye","known":true}}'
+
+    def sysos_call(tag="before", **extra):
+        w_, env_ = world("debian")
+        put(w_, "secret", "s3cret-of-the-run\n")
+        fake(os.path.join(w_, "bin"), "curl", r"""echo "curl $*" >>"$FAKE_LOG"
+out=""; prev=""
+for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; done
+if [ "${FAKE_CURL_RC:-0}" != 0 ]; then echo "curl: (7) Failed to connect to 127.0.0.1 port 80" >&2; [ -n "$FAKE_CURL_SILENT" ] || printf 000; exit "$FAKE_CURL_RC"; fi
+case " $* " in *" -f"*|*" --fail"*) if [ "${FAKE_CODE:-200}" -ge 400 ]; then echo "curl: (22) The requested URL returned error: $FAKE_CODE" >&2; printf '%s' "$FAKE_CODE"; exit 22; fi ;; esac
+[ -n "$out" ] && printf '%s' "$FAKE_BODY" >"$out"
+printf '%s' "${FAKE_CODE:-200}"
+""")
+        env_.update(INTERNAL_SECRET_FILE=posix(w_) + "/secret", FAKE_BODY=SYSOS_BODY)
+        env_.update(extra)
+        return w_, in_world(w_, env_, 'set -Eeuo pipefail; sys_os %s; echo "status $?"' % tag, timeout=60)
+
+    w, p = sysos_call()
+    c = [x for x in calls(w) if x.startswith("curl")]
+    check("sys_os: GET /v1/sys/os on the gateway's port with the loopback secret as the other probes send it, one call, and nothing else in the request",
+          "status 0" in p.stdout and len(c) == 1 and "-H Authorization: Internal s3cret-of-the-run" in c[0] and c[0].rstrip().endswith(" http://127.0.0.1:80/v1/sys/os") and " -X " not in c[0] and " -d " not in c[0], (c, p.stdout, p.stderr[-300:]))
+    check("sys_os: the answer as the core gave it, the HTTP status, curl's status, the guest's os-release and the time of the call are each kept in a file of their own",
+          get(w, "out/sysos-before.json") == SYSOS_BODY and get(w, "out/sysos-before.code").strip() == "200" and get(w, "out/sysos-before.rc").strip() == "0"
+          and get(w, "out/sysos-before.os-release") == get(w, "os-release") != "" and re.match(r"^[0-9]+\.[0-9]+$", get(w, "out/sysos-before.time").strip()) is not None, os.listdir(os.path.join(w, "out")))
+    check("sys_os: the loopback secret is in the request and nowhere in the evidence", not any("s3cret-of-the-run" in get(w, "out/" + n) for n in os.listdir(os.path.join(w, "out"))), os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call("after")
+    check("sys_os: the tag names every file (after the reboot, sysos-after.*, and none of sysos-before.*)",
+          all(os.path.exists(os.path.join(w, "out/sysos-after." + e)) and not os.path.exists(os.path.join(w, "out/sysos-before." + e)) for e in ("json", "code", "rc", "err", "os-release", "time")), os.listdir(os.path.join(w, "out")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(FAKE_CURL_RC="7")
+    check("sys_os: a call that gets no answer is a result and not an error of the phase (set -e): the status is 000, curl's own status is kept, there is no answer file, and the phase goes on",
+          "status 0" in p.stdout and get(w, "out/sysos-before.code").strip() == "000" and get(w, "out/sysos-before.rc").strip() == "7" and not os.path.exists(os.path.join(w, "out/sysos-before.json"))
+          and "Failed to connect" in get(w, "out/sysos-before.err"), (p.stdout, p.stderr[-300:], os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(CASA_PORT="8123")
+    c = [x for x in calls(w) if x.startswith("curl")]
+    check("sys_os: the port is the gateway's own (CASA_PORT, read from gateway.ini by prepare), not a fixed one", len(c) == 1 and c[0].rstrip().endswith(" http://127.0.0.1:8123/v1/sys/os"), c)
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(FAKE_CURL_RC="127", FAKE_CURL_SILENT="1")
+    check("sys_os: a curl that prints no status at all (killed, not there) still leaves status 000 and its own exit", "status 0" in p.stdout and get(w, "out/sysos-before.code").strip() == "000" and get(w, "out/sysos-before.rc").strip() == "127", (p.stdout, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p = sysos_call(FAKE_CODE="404", FAKE_BODY="404 page not found")
+    check("sys_os: an HTTP error keeps its status and its body, and curl's status is 0 (the report decides what it means)",
+          "status 0" in p.stdout and get(w, "out/sysos-before.code").strip() == "404" and get(w, "out/sysos-before.rc").strip() == "0" and get(w, "out/sysos-before.json") == "404 page not found", (p.stdout, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the reboot, the inhibitor, a hop that was skipped
+    w, env = world("debian")
+    p = in_world(w, env, '(phase_reboot pre); echo "status $?"')
+    c = calls(w)
+    check("reboot pre: the guest asks for its own reboot with a timer, so that the ssh session ends first, and says which boot it was", "status 0" in p.stdout and any(x.startswith("systemd-run") and "--on-active=3" in x and "systemctl reboot" in x for x in c)
+          and "boot_id boot-1" in get(w, "out/reboot-pre.txt") and "method timer" in get(w, "out/reboot-pre.txt"), (p.stdout, c))
+    p = in_world(w, env, '(phase_reboot refresh); echo "status $?"')
+    check("reboot refresh: a reboot of its own, by a timer, with its marker and its boot id", "status 0" in p.stdout and any("--unit=osm-reboot-refresh" in x for x in calls(w)) and "reboot_refresh_start" in get(w, "out/timeline.tsv")
+          and "boot_id" in get(w, "out/reboot-refresh.txt"), (p.stdout, calls(w)))
+    p = in_world(w, env, '(phase_reboot sideways) 2>&1; echo "status $?"')
+    check("reboot: another word than pre, refresh or post is refused", "status 2" in p.stdout, p.stdout)
+    put(w, "out/hop-skipped", "not_offered\n")
+    p = in_world(w, env, '(phase_reboot post); echo "status $?"')
+    check("reboot post: status 7 when the hop was skipped, and nothing is rebooted", "status 7" in p.stdout and not [x for x in calls(w) if "--unit=osm-reboot-post" in x], (p.stdout, calls(w)))
+    p = in_world(w, env, '(phase_after); echo "status $?"')
+    check("after: nothing to look at when the hop was skipped", "status 0" in p.stdout and "after_skipped" in get(w, "out/timeline.tsv") and not [x for x in calls(w) if x.startswith(("systemctl", "docker"))], (p.stdout, calls(w)))
+    shutil.rmtree(w, ignore_errors=True)
+    for variant, flag in (("reboot", False), ("force", True)):
+        w, env = world("debian")
+        put(w, "bin/systemd-inhibit", '[ -n "$FAKE_LOG" ] && echo "systemd-inhibit $*" >>"$FAKE_LOG"\necho "Operation inhibited by test"; exit 1\n')
+        os.chmod(os.path.join(w, "bin/systemd-inhibit"), 0o755)
+        p = in_world(w, env, '(phase_inhibit %s); echo "status $?"' % variant, timeout=90)
+        c = [x for x in calls(w) if x.startswith("systemd-inhibit")]
+        txt = get(w, "out/inhibit-%s.txt" % variant)
+        check("inhibit %s: the attempt is written before it is made, root's reboot is run under a block lock on shutdown%s, and what happened is written after" % (variant, " with --force" if flag else ""),
+              len(c) == 1 and "--what=shutdown --mode=block" in c[0] and c[0].rstrip().endswith("systemctl reboot --force" if flag else "systemctl reboot") and txt.startswith("variant %s\n" % variant) and "rc 1\n" in txt and txt.rstrip().endswith("survived yes")
+              and "Operation inhibited" in get(w, "out/inhibit-%s.out" % variant), (c, txt))
+        shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    p = in_world(w, env, '(phase_inhibit nonsense) 2>&1; echo "status $?"')
+    check("inhibit: an unknown variant is refused", "status 2" in p.stdout, p.stdout + p.stderr)
+    shutil.rmtree(w, ignore_errors=True)
+
+    # what the guest refuses to start, and how it says so
+    def run_script(*args, env=None):
+        e = dict(ENV)
+        e.pop("MEASURE_DISPOSABLE", None)
+        e.update(env or {})
+        return subprocess.run([BASH, SCRIPT_P] + list(args), capture_output=True, text=True, env=e, encoding="utf-8")
+    p = run_script("prepare", env={"LEG": "d11-12"})
+    check("prepare refuses a machine that is not marked disposable", p.returncode == 2 and "disposable machine" in p.stderr, (p.returncode, p.stderr))
+    p = run_script("prepare", env={"LEG": "d99-100", "MEASURE_DISPOSABLE": "1"})
+    check("prepare refuses a leg that is none of the four (after the check that it is root, which this test is not)", p.returncode == 2, (p.returncode, p.stderr))
+    p = run_script("sideways")
+    check("the script refuses a phase it does not have", p.returncode == 2 and "usage" in p.stderr, (p.returncode, p.stderr))
+    p = run_script("after", env={"OUT": posix(tempfile.mkdtemp())})
+    check("a phase after prepare refuses to start without what prepare keeps", p.returncode == 2 and "config.env" in p.stderr, (p.returncode, p.stderr))
+
+    # lints of the text of the guest script
+    after_body = function_body(guest_text, "phase_after") or ""
+    check("the after phase never starts, restarts, reloads, enables, stops or kills a unit: ReCasaOS has to come back by itself",
+          bool(after_body) and not re.search(r"\bsystemctl\b[^\n]*\b(start|restart|reload|enable|stop|kill|reset-failed|try-restart|isolate)\b", after_body), re.findall(r"[^\n]*systemctl[^\n]*", after_body))
+    baseline_body = function_body(guest_text, "phase_baseline") or ""
+    check("the baseline starts again the two witnesses whose policy does not start them after the reboots that came before, and says which", "docker start" in baseline_body and "baseline-started" in baseline_body and "p-no p-on-failure" in baseline_body)
+    sysos_body = function_body(guest_text, "sys_os") or ""
+    check("sys_os asks the one route with the loopback secret (internal_header) and not with a token of the harness, and writes its files under the tag it is given",
+          'internal_header' in sysos_body and "jwt_header" not in sysos_body and "/v1/sys/os" in sysos_body and "${OUT}/sysos-${tag}.json" in sysos_body and "-w '%{http_code}'" in sysos_body, sysos_body)
+    check("the baseline asks the core what it says about the system once the core has been asked its version and before the baseline is done, so that it is the old release that answers",
+          0 < baseline_body.find("core-before.code") < baseline_body.find("sys_os before") < baseline_body.find("marker baseline_done"), baseline_body)
+    check("the after phase asks it again once the containers have settled and the other answers were asked, and starts nothing for it",
+          0 < after_body.find("marker after_settled") < after_body.find("am-after.code") < after_body.find("sys_os after") and "sys_os after" in after_body, after_body)
+    check("the container on the host network is served a file: its port answers 200", "index.html" in (function_body(guest_text, "start_things") or ""))
+    refresh_body = function_body(guest_text, "phase_refresh") or ""
+    check("prepare does not upgrade the old release any more (the refresh phase does, after Docker and ReCasaOS are on it, as the product's refresh step will)",
+          "dist-upgrade" not in (function_body(guest_text, "phase_prepare") or "dist-upgrade") and "dist-upgrade" in refresh_body)
+    check("the refresh pauses Docker's source for its own apt and gives it back, upgrades with the design's apt options, and never reboots (the runner does)",
+          all(k in refresh_body for k in ("pause_sources sources-paused-refresh.txt", "resume_sources", "dist-upgrade", "Always-Include-Phased-Updates=true", "${CONF[@]}", "refresh_update_done"))
+          and refresh_body.find("pause_sources") < refresh_body.find("dist-upgrade") < refresh_body.find("resume_sources") and not re.search(r"systemctl[^\n]*\b(reboot|poweroff|halt|kexec)\b|\b(shutdown|poweroff)\s", re.sub(r"#[^\n]*", "", refresh_body)), refresh_body)
+    prepare_body = function_body(guest_text, "phase_prepare") or ""
+    check("prepare says at once that its bash has no clock of its own or no /dev/tcp, instead of measuring nothing", "EPOCHREALTIME" in prepare_body and "tcp_open 22" in prepare_body and prepare_body.find("tcp_open 22") < prepare_body.find("marker prepare_start"))
+    check("the after phase reads the units before it asks anything", after_body.find("units_dump boot") != -1 and after_body.find("units_dump boot") < after_body.find("http_code") and after_body.find("units_dump boot") < after_body.find("wait_docker"))
+    unit_bodies = "\n".join(function_body(guest_text, n) or "" for n in ("hop_unit_debian", "hop_unit_ubuntu", "hop_unit"))
+    check("the unit never reboots the box (the harness does)", unit_bodies != "" and not re.search(r"\b(reboot|shutdown|poweroff|halt)\b", re.sub(r"#[^\n]*", "", unit_bodies)), re.findall(r"[^\n]*reboot[^\n]*", unit_bodies))
+    unit_code = re.sub(r"#[^\n]*", "", unit_bodies)
+    check("the unit uses none of the escape hatches of the notes and none of the tool's dangerous options", unit_bodies != "" and not re.search(r"--no-install-recommends|--force-yes|--allow-|--force-confnew|Force-LoopBreak|force-depends|DEBIAN_PRIORITY|autoremove|\bpurge\b|do-release-upgrade (-d|-p)|third-party", unit_code), re.findall(r"[^\n]*(?:allow|autoremove|purge)[^\n]*", unit_code))
+    phase_hop_body = function_body(guest_text, "phase_hop") or ""
+    check("the hop is a transient unit with --no-block --collect and the design's name, behind systemd-inhibit --what=shutdown:sleep --mode=block", all(k in phase_hop_body for k in ("systemd-run", "--no-block", "--collect", '--unit="${UNIT}"', "--property=Type=exec", "systemd-inhibit --what=shutdown:sleep", "--mode=block")) and "UNIT=casaos-os-upgrade-measure" in guest_text)
+    check("the unit gets DEBIAN_FRONTEND=noninteractive, APT_LISTCHANGES_FRONTEND=none, NEEDRESTART_SUSPEND=1 and a clean PATH, and no LD_LIBRARY_PATH", all(k in phase_hop_body for k in ("--setenv=DEBIAN_FRONTEND=noninteractive", "--setenv=APT_LISTCHANGES_FRONTEND=none", "--setenv=NEEDRESTART_SUSPEND=1", "--setenv=PATH=/usr/sbin:/usr/bin:/sbin:/bin")) and "LD_LIBRARY_PATH" not in guest_text)
+    check("the poller leans on bash and on Docker's CLI only: no curl, no date, no awk in it", "curl" not in (function_body(guest_text, "poller") or "x curl") and "$(date" not in (function_body(guest_text, "poller") or "") and "awk" not in (function_body(guest_text, "poller") or ""))
+    leaks = [m for m in re.findall(r'OUT\}/(jwt[^"\s]*)', guest_text) if not re.match(r"^(jwt-claims-|jwt-before\.code|jwt-after\.code|jwt-fresh\.code)", m)]
+    check("a token and the password never go into the evidence directory (only the claims of a token, and the codes the API answered)", not leaks and not re.search(r'>\s*"\$\{OUT\}/[^"]*(pw|password|secret)', guest_text), leaks)
+    check("the guest script has no ${{ }} and no secret of the runner", "${{" not in guest_text)
+
+    # the runner's side, against a stand-in for ssh
+    def runner_world():
+        r = tempfile.mkdtemp()
+        os.makedirs(os.path.join(r, "bin"))
+        os.makedirs(os.path.join(r, "state"))
+        put(r, "calls", "")
+        put(r, "state/boot", "boot-A\n")
+        fake(os.path.join(r, "bin"), "sleep", "exit 0\n")
+        fake(os.path.join(r, "bin"), "ssh", r'''S="$FAKE_STATE"
+cmd="${@: -1}"
+echo "ssh $cmd" >>"$FAKE_LOG"
+case "$cmd" in
+"cat /proc/sys/kernel/random/boot_id")
+    if [ -f "$S/down" ]; then
+        n=$(cat "$S/down"); if [ "$n" -gt 0 ]; then echo $((n-1)) >"$S/down"; exit 255; fi
+        rm -f "$S/down"; echo "boot-B" >"$S/boot"
+    fi
+    cat "$S/boot"; exit 0 ;;
+*"refresh-reboot.txt"*) case "$FAKE_REFRESH" in yes) exit 0 ;; none) exit 2 ;; *) exit 1 ;; esac ;;
+*"os-upgrade-measure.sh reboot "*) [ "$FAKE_SKIP" = 1 ] && exit 7; echo 3 >"$S/down"; exit 0 ;;
+*"os-upgrade-measure.sh inhibit "*) case "$FAKE_INHIBIT" in down) echo 3 >"$S/down"; exit 255 ;; *) exit 0 ;; esac ;;
+*"os-upgrade-measure.sh hop-wait"*)
+    n=$(cat "$S/waits" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$S/waits"
+    [ "$n" -le "${FAKE_WAIT_CUTS:-0}" ] && exit 255
+    [ "${FAKE_WAIT_RC:-0}" != 0 ] && exit "$FAKE_WAIT_RC"
+    exit 0 ;;
+*) exit 0 ;;
+esac
+''')
+        return r, dict(FAKE_LOG=posix(r) + "/calls", FAKE_STATE=posix(r) + "/state")
+
+    def runner(snippet, extra=None):
+        r, e = runner_world()
+        e.update(extra or {})
+        p = bash_run('export PATH="%s/bin:$PATH"; ' % posix(r) + snippet, env=e, cwd=posix(r) if False else None, timeout=60)
+        return r, p
+
+    r, p = runner('runner_reboot pre; echo "status $?"')
+    check("runner: the reboot is asked for, and the runner waits for another boot id (the guest does not answer for a while)", "status 0" in p.stdout and any("reboot pre" in x for x in get(r, "calls").splitlines()) and get(r, "state/boot").strip() == "boot-B", (p.stdout, p.stderr[-200:]))
+    r, p = runner('runner_reboot post; echo "status $?"', {"FAKE_SKIP": "1"})
+    check("runner: a guest that says the hop was skipped (status 7) is not waited for", "status 0" in p.stdout and "no reboot" in p.stdout and get(r, "state/boot").strip() == "boot-A", p.stdout)
+    r, p = runner('runner_refresh; echo "status $?"', {"FAKE_REFRESH": "yes"})
+    check("runner: the refresh is run, and when it asks for a reboot the guest reboots and the runner waits for another boot id", "status 0" in p.stdout and any(x.endswith("os-upgrade-measure.sh refresh") for x in get(r, "calls").splitlines())
+          and any("os-upgrade-measure.sh reboot refresh" in x for x in get(r, "calls").splitlines()) and get(r, "state/boot").strip() == "boot-B", (p.stdout, get(r, "calls")))
+    r, p = runner('runner_refresh; echo "status $?"', {"FAKE_REFRESH": "no"})
+    check("runner: a refresh that asks for no reboot is not followed by one", "status 0" in p.stdout and "needs no reboot" in p.stdout and not any("reboot refresh" in x for x in get(r, "calls").splitlines()) and get(r, "state/boot").strip() == "boot-A", (p.stdout, get(r, "calls")))
+    r, p = runner('runner_refresh; echo "status $?"', {"FAKE_REFRESH": "none"})
+    check("runner: a refresh that left no answer (it aborted) ends the step, and nothing is rebooted", "status 2" in p.stdout and not any("reboot refresh" in x for x in get(r, "calls").splitlines()), (p.stdout, get(r, "calls")))
+    r, p = runner('runner_inhibit reboot; echo "status $?"', {"FAKE_INHIBIT": "down"})
+    check("runner: a guest that went down under the inhibitor (ssh ends with 255) is waited for", "status 0" in p.stdout and get(r, "state/boot").strip() == "boot-B", p.stdout)
+    r, p = runner('runner_inhibit force; echo "status $?"', {"FAKE_INHIBIT": "stays"})
+    check("runner: a guest that stayed up under the inhibitor is not waited for", "status 0" in p.stdout and get(r, "state/boot").strip() == "boot-A", p.stdout)
+    r, p = runner('runner_hop; echo "status $?"', {"FAKE_WAIT_CUTS": "2"})
+    check("runner: the hop is started once, and the wait is made again when the connection is cut (sshd restarts while libc6 is configured)", "status 0" in p.stdout and len([x for x in get(r, "calls").splitlines() if "os-upgrade-measure.sh hop-wait" in x]) == 3
+          and len([x for x in get(r, "calls").splitlines() if x.endswith("os-upgrade-measure.sh hop")]) == 1, (p.stdout, get(r, "calls")))
+    r, p = runner('runner_hop; echo "status $?"', {"FAKE_WAIT_RC": "3"})
+    check("runner: the guest's own limit (status 3) ends the wait and is the status of the step", "status 3" in p.stdout, p.stdout)
+    r, p = runner('runner_guest after; echo "status $?"')
+    check("runner: a phase is run as root with the evidence directory, and nothing else of the runner's environment", any(x == "ssh sudo env OUT=/home/casa/osm-out bash os-upgrade-measure.sh after" for x in get(r, "calls").splitlines()), get(r, "calls"))
+
+# ---- the workflow ---------------------------------------------------------------------------------------------------------------------------
+
+def workflow_text():
+    with open(WORKFLOW, newline="") as f:
+        return f.read().replace("\r\n", "\n")
+
+
+def workflow_matrix(text, after=None):
+    """the cells of the matrix, [dict]: the plain reading of its `include:` list (a cell starts at a `- `, values lose their quotes);
+    after: the line of the job whose matrix it is, when the file has several"""
+    lines = text.split("\n")
+    first = next(i for i, ln in enumerate(lines) if after is None or ln.rstrip() == after)
+    start = next(i for i in range(first, len(lines)) if lines[i].strip() == "include:")
+    base = len(lines[start]) - len(lines[start].lstrip())
+    cells = []
+    for ln in lines[start + 1:]:
+        if not ln.strip() or ln.strip().startswith("#"):
+            continue
+        if len(ln) - len(ln.lstrip()) <= base:
+            break
+        m = re.match(r"^\s*(- )?(\w+): (.*)$", ln)
+        if m:
+            if m.group(1):
+                cells.append({})
+            cells[-1][m.group(2)] = m.group(3).strip().strip("'\"")
+    return cells
+
+
+def workflow_runs(text):
+    """{step name: the script of its `run: |` block, without the indentation of the YAML}"""
+    lines = text.split("\n")
+    runs, name, i = {}, None, 0
+    while i < len(lines):
+        m = re.match(r"^\s*- name: (.*)$", lines[i])
+        if m:
+            name = m.group(1).strip()
+        m = re.match(r"^(\s*)run: \|\s*$", lines[i])
+        if m:
+            base, block = len(m.group(1)), []
+            i += 1
+            while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > base):
+                block.append(lines[i])
+                i += 1
+            indent = min(len(b) - len(b.lstrip()) for b in block if b.strip())
+            runs[name] = "\n".join(b[indent:] if b.strip() else "" for b in block).rstrip("\n") + "\n"
+            continue
+        i += 1
+    return runs
+
+
+wf = workflow_text()
+wf_cells = workflow_matrix(wf)
+wf_runs = workflow_runs(wf)
+STEPS = ["The measurement can say no", "Fetch the published installer", "The distribution's cloud image", "Boot it", "Prepare the old release", "Root's reboot under an inhibitor", "Root's forced reboot under an inhibitor",
+         "Reboot before the hop", "Refresh the old release", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot", "Report", "What the machine says when it is not well"]
+check("the workflow has the steps of a leg in the order of the work", list(wf_runs) == STEPS, list(wf_runs))
+check("the workflow asks for no permission but to read the repository", re.search(r"^permissions:\n  contents: read\n", wf, re.M) is not None and ": write" not in wf)
+check("the workflow is dispatched by hand only, never by a push", re.search(r"^on:\n  workflow_dispatch:", wf, re.M) is not None and "push:" not in wf and "schedule:" not in wf and "pull_request" not in wf)
+check("no run block has a ${{ }} in it: what the matrix and the inputs say reaches a script through env", all("${{" not in script for script in wf_runs.values()), [n for n, s_ in wf_runs.items() if "${{" in s_])
+check("no run block of the workflow has a pipeline whose consumer quits before its producer is done", all(not early_quitters(s_) for s_ in wf_runs.values()), {n: early_quitters(s_) for n, s_ in wf_runs.items() if early_quitters(s_)})
+if have_bash():
+    for step, script in sorted(wf_runs.items()):
+        count[0] += 1
+        p = subprocess.run([BASH, "-n"], input=script, capture_output=True, text=True)
+        if p.returncode != 0:
+            failures.append("the run block of %r does not parse as bash: %s" % (step, p.stderr[-300:]))
+        else:
+            ok_line("the run block of %r parses as bash" % step)
+check("the matrix is four legs: Debian 11 to 12, Debian 12 to 13, Ubuntu 22.04 to 24.04, Ubuntu 24.04 to 26.04", [(c.get("leg"), c.get("id"), c.get("version")) for c in wf_cells] == [("d11-12", "debian", "11"), ("d12-13", "debian", "12"), ("u22-24", "ubuntu", "22.04"), ("u24-26", "ubuntu", "24.04")], wf_cells)
+check("every leg has 120 minutes and the others of its job go on when one fails", re.search(r"^    timeout-minutes: 120$", wf, re.M) is not None and "fail-fast: false" in wf)
+by_id = {"debian": ("SHA512SUMS", "sha512sum"), "ubuntu": ("SHA256SUMS", "sha256sum")}
+for cell in wf_cells:
+    where = "%s on %s %s" % (cell.get("leg"), cell.get("id"), cell.get("version"))
+    check("the %s cell fetches the image it names, with the sums its distribution publishes" % where,
+          cell.get("id") in by_id and (cell.get("sums"), cell.get("algo")) == by_id[cell["id"]] and "%s-%s-" % (cell["id"], cell["version"]) in cell.get("image", "") and cell.get("base", "").startswith("https://"), cell)
+    if have_bash():
+        facts_ = bash_run('leg_facts "$1"', cell.get("leg", "")).stdout.split()
+        check("the %s cell is the leg the guest script means by that name" % where, facts_[:2] == [cell.get("id"), cell.get("version")], facts_)
+with open(os.path.join(HERE, "..", ".github", "workflows", "install-check.yml"), newline="") as f:
+    systems = workflow_matrix(f.read().replace("\r\n", "\n"), after="  vm:")
+for cell in wf_cells:
+    twin = next((c for c in systems if (c.get("id"), c.get("version")) == (cell.get("id"), cell.get("version"))), None)
+    if twin is not None:
+        check("the image and the sums of %s %s are the ones install-check.yml boots" % (cell.get("id"), cell.get("version")), all(cell.get(k) == twin.get(k) for k in ("base", "image", "sums", "algo")), (cell, twin))
+check("the d11-12 cell is the owner's box: the Debian archive for its security line, and Docker 28.0.4", [c for c in wf_cells if c.get("leg") == "d11-12"][0].get("args") == "--use-debian-archive" and [c for c in wf_cells if c.get("leg") == "d11-12"][0].get("docker_from") == "28.0.4"
+      and not any(c.get("args") or c.get("docker_from") for c in wf_cells if c.get("leg") != "d11-12"))
+artifact = re.search(r"^\s+name: (os-upgrade-measure-.+)$", wf, re.M)
+uploads = [re.sub(r"\$\{\{ matrix\.(\w+) \}\}", lambda m, c=c: c.get(m.group(1), ""), artifact.group(1)) for c in wf_cells] if artifact else []
+check("each cell uploads its evidence under a name of its own, whatever happened", bool(artifact) and len(set(uploads)) == len(wf_cells) and re.search(r"upload-artifact@v4\n        if: always\(\)", wf) is not None, uploads)
+check("the report and the machine's complaints run whatever happened, and the report is the one that fails the job", re.search(r"- name: Report\n        if: always\(\)", wf) is not None and re.search(r"- name: What the machine says when it is not well\n        if: always\(\)", wf) is not None)
+check("the guest's disk goes to the larger of the runner's disks, df is printed first, and the guest's disk is 30 GB (sparse)", "df -h . /mnt" in wf_runs["The distribution's cloud image"] and "30G" in wf_runs["Boot it"] and 'DISK_DIR=' in wf_runs["The distribution's cloud image"])
+check("the ubuntu variant is a choice of two and reaches the guest through env", "type: choice" in wf and "- hold" in wf and "- keep" in wf and "UBUNTU_VARIANT: ${{ inputs.ubuntu_variant }}" in wf and "UBUNTU_VARIANT='${UBUNTU_VARIANT}'" in wf_runs["Prepare the old release"])
+check("the steps that reboot the guest or wait for the unit have the time they need, and the hop has the most", "timeout-minutes: 90" in wf and wf.count("timeout-minutes: ") >= 8)
+check("the guest is told it is disposable, and which leg it is", "MEASURE_DISPOSABLE=1" in wf_runs["Prepare the old release"] and "LEG='${LEG}'" in wf_runs["Prepare the old release"])
+check("the guest script and the installer are copied to the guest after it booted, and the installer's checksum is verified", "scp -F ssh_config published/install.sh scripts/os-upgrade-measure.sh vm:" in wf_runs["Boot it"] and "sha256sum --check install.sh.sha256" in wf_runs["Fetch the published installer"])
+check("the run steps use the runner's functions of the guest script", all(("source scripts/os-upgrade-measure.sh" in wf_runs[n]) for n in ("Root's reboot under an inhibitor", "Root's forced reboot under an inhibitor", "Reboot before the hop", "Refresh the old release", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot")))
+CALLS = {"Root's reboot under an inhibitor": "runner_inhibit reboot", "Root's forced reboot under an inhibitor": "runner_inhibit force", "Reboot before the hop": "runner_reboot pre",
+         "Refresh the old release": "runner_refresh", "Baseline and read-only probes": "runner_guest baseline\nrunner_guest probe", "The hop": "runner_hop", "Reboot after the hop": "runner_reboot post", "After the reboot": "runner_guest after"}
+check("each step that drives the guest makes the call of its name, and nothing else", all(wf_runs[n].rstrip("\n").endswith(call) and wf_runs[n].count("runner_") == call.count("runner_") for n, call in CALLS.items()), {n: wf_runs[n] for n, c_ in CALLS.items() if not wf_runs[n].rstrip("\n").endswith(c_)})
+check("the guest steps come in the order: inhibitor, inhibitor with --force, reboot, refresh, baseline and probes, hop, reboot, after", [n for n in wf_runs if n in STEPS[5:13]] == STEPS[5:13])
+check("the refresh comes after the rehearsal reboot and right before the baseline, so that little can become upgradable before the hop", STEPS.index("Reboot before the hop") + 1 == STEPS.index("Refresh the old release") == STEPS.index("Baseline and read-only probes") - 1)
+check("NOT_OFFERED stays green and says so with a warning annotation, for the headline of the report only (an invalid run that mentions it is red and has none)", "::warning title=NOT_OFFERED" in wf_runs["Report"] and "grep -q '^# .*: NOT_OFFERED$' out/report.md" in wf_runs["Report"])
+
+if have_bash():
+    # the report step, against a stand-in for ssh that hands over the evidence of a leg
+    def report_step(leg_, spec_, mutate_=None):
+        w_ = tempfile.mkdtemp()
+        fx = os.path.join(w_, "fx")
+        os.makedirs(fx)
+        build(fx, LEGS[leg_], spec_)
+        if mutate_:
+            mutate_(fx)
+        os.makedirs(os.path.join(w_, "bin"))
+        os.makedirs(os.path.join(w_, "repo/scripts"))
+        shutil.copy(REPORT, os.path.join(w_, "repo/scripts/os-upgrade-measure-report.py"))
+        fake(os.path.join(w_, "bin"), "ssh", 'case "${@: -1}" in *"tar -C"*) tar -C "$FX" -cf - . ;; *) exit 0 ;; esac\n')
+        script = wf_runs["Report"]
+        e = dict(ENV, FX=posix(fx), LEG=leg_, GITHUB_STEP_SUMMARY=posix(os.path.join(w_, "summary")), PATH=os.environ["PATH"])
+        p_ = subprocess.run([BASH, "-c", 'export PATH="%s/bin:$PATH"; cd "%s/repo"; ' % (posix(w_), posix(w_)) + script], capture_output=True, text=True, env=e, encoding="utf-8")
+        summary = get(w_, "summary") if os.path.exists(os.path.join(w_, "summary")) else ""
+        shutil.rmtree(w_, ignore_errors=True)
+        return p_, summary
+    p, summary = report_step("d11-12", {})
+    check("the report step: a measured leg is green, its report is in the summary", p.returncode == 0 and "MEASURED" in summary and "::warning" not in p.stdout, (p.returncode, p.stdout[-300:], p.stderr[-300:]))
+    p, summary = report_step("u22-24", {"offered": False})
+    check("the report step: NOT_OFFERED is green and has its annotation", p.returncode == 0 and "::warning title=NOT_OFFERED" in p.stdout and "NOT_OFFERED" in summary, (p.returncode, p.stdout[-300:]))
+    p, summary = report_step("u22-24", {"offered": False}, lambda d_: rec(d_, "ubuntu-check", "Failed to connect to https://changelogs.ubuntu.com/meta-release-lts\nNo new release found.\n", 1))
+    check("the report step: a tool that could not ask Canonical is red, says INVALID RUN, and has no NOT_OFFERED annotation", p.returncode != 0 and "INVALID RUN" in summary and "::warning title=NOT_OFFERED" not in p.stdout, (p.returncode, p.stdout[-300:], summary[:300]))
+    p, summary = report_step("d11-12", {}, lambda d_: put(d_, "aborted", "boom\n"))
+    check("the report step: an invalid run is red and says so in the summary", p.returncode != 0 and "INVALID RUN" in summary, (p.returncode, summary[:200]))
+    p, summary = report_step("d11-12", {}, lambda d_: os.remove(os.path.join(d_, "timeline.tsv")))
+    check("the report step: no timeline is red, with the reason in the summary", p.returncode != 0 and "the run left no evidence" in summary, (p.returncode, summary[:200]))
+
+try:
+    import yaml
+except ImportError:
+    print("skip: PyYAML is not here, the workflow was read by the plain parser only")
+else:
+    doc = yaml.safe_load(wf)
+    steps = doc["jobs"]["vm"]["steps"]
+    check("PyYAML reads the workflow, with the matrix and the run blocks the plain parser found",
+          doc.get("permissions") == {"contents": "read"} and set(doc[True]) == {"workflow_dispatch"} and [{k: str(v) for k, v in c.items()} for c in doc["jobs"]["vm"]["strategy"]["matrix"]["include"]] == wf_cells
+          and {s_["name"]: s_["run"] for s_ in steps if "run" in s_} == wf_runs, "the two readings differ")
+    check("PyYAML: four legs, 120 minutes, the choice of the variant", len(doc["jobs"]["vm"]["strategy"]["matrix"]["include"]) == 4 and doc["jobs"]["vm"]["timeout-minutes"] == 120
+          and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["options"] == ["hold", "keep"] and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["default"] == "hold")
+    check("PyYAML: the report, the machine's complaints and the upload run when a step failed", all(s_.get("if") == "always()" for s_ in steps if s_.get("name") in ("Report", "What the machine says when it is not well") or "upload-artifact" in str(s_.get("uses", ""))))
+
+# ---- the end ----------------------------------------------------------------------------------------------------------------------------
+
+finish_tests()
