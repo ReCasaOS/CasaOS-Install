@@ -30,7 +30,9 @@ name: os-readiness-proof
 #     that is a refusal with the dirt is a code that fires), and after the undo the answer has to be the clean one again. Some steps are asked more: a Docker
 #     whose packages are on hold, with a newer one on offer, is an info that says so (held true); a Docker that is not running leaves the swarm, containers
 #     and ports checks saying they did not look (why not_running); and after the call on Docker's service stopped alone, docker.service is still inactive (a
-#     report that asked the daemon through the listening socket would have started it, and every container with a restart policy with it).
+#     report that asked the daemon through the listening socket would have started it, and every container with a restart policy with it). The calls on a box
+#     with an unfinished dpkg journal, a Default-Release, a foreign architecture, and with Docker stopped are also looked at for what they write: dpkg's status,
+#     the files of apt's lists and apt's caches, hashed before and after the call (the window above sees the calls of the clean box only).
 # scripts/os-readiness-proof-report.py judges what the guest recorded (PASS, FAIL, NOT TESTABLE with its reason, or INVALID RUN), and fails the job for a FAIL
 # and for an INVALID RUN alike. Nothing is judged in the guest. A step whose undo failed is an INVALID RUN, never a FAIL of the feature.
 #

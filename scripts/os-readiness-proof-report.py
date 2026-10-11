@@ -30,7 +30,9 @@ What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud imag
     has to appear, nothing else may appear with it, and after the undo the answer has to be the clean one again. A step may be asked more (expect): a Docker
     on hold with a newer one on offer is an info that says held true on d11, a Docker that is not running leaves three checks saying why not_running; and
     after the call (after) the guest says what it sees: docker.service is still inactive when only the service was stopped, which a report that asked the
-    daemon through the listening socket would have started.
+    daemon through the listening socket would have started. The calls of the steps that watch (an unfinished journal, a Default-Release, a foreign
+    architecture, Docker stopped) are also looked at for what they write: dpkg's status, apt's lists and apt's caches before and after the call, which the
+    invariance window, made of the clean calls, cannot see.
 
 What these guests cannot do is NOT TESTABLE, with the reason: uptime_long (180 days), container, virt_xen, unproven_arch (the guest is a KVM amd64 machine),
 an AppManagement operation in progress (none can be held open cheaply).
@@ -93,12 +95,12 @@ class Step:
     (leg, code, severity, key, value, clean) of what the dirty answer also says: the code has this severity, and its data has this value under the key (no key: the
     severity alone), on this leg (* for both); clean is the severity the same code has on the clean box, which the row needs: a clean box that says another is a
     box on which the dirt cannot be told from what is there, NOT TESTABLE; after: what the guest saw once the call was over (after_<id> of the guest script), and
-    after_what says what that means"""
+    after_what says what that means; watch: the guest took dpkg's status, apt's lists and apt's caches before and after the call, and the call may not have changed them"""
 
-    def __init__(self, id, code, mode="fires", sev="refuse", needle="", forbid=(), extras=(), what="", see="", expect=(), after="", after_what=""):
+    def __init__(self, id, code, mode="fires", sev="refuse", needle="", forbid=(), extras=(), what="", see="", expect=(), after="", after_what="", watch=False):
         self.id, self.code, self.mode, self.sev, self.needle = id, code, mode, sev, needle
         self.forbid, self.extras, self.what, self.see = forbid, extras, what, see
-        self.expect, self.after, self.after_what = expect, after, after_what
+        self.expect, self.after, self.after_what, self.watch = expect, after, after_what, watch
 
 
 # what a box says of Docker when its daemon is not asked: nothing was looked at, and the check says so (the daemon is not asked, since asking would start it)
@@ -112,16 +114,16 @@ STEPS = [
     # info that says the packages are held and that Docker can be updated from the dashboard with the hold (held true) here
     Step("held_docker", "held_docker", sev="info", forbid=("held",), what="apt-mark hold docker-ce (harmless, the source is paused: not a hold)",
          expect=(("d11", "docker_update_pending", "info", "held", True, "warn"),)),
-    Step("broken_dpkg", "broken_dpkg", what="a file of digits only in /var/lib/dpkg/updates"),
+    Step("broken_dpkg", "broken_dpkg", what="a file of digits only in /var/lib/dpkg/updates", watch=True),
     Step("sources_cdrom", "sources_cdrom", what="a cdrom: source"),
     Step("sources_file", "sources_cdrom", what="a file: source"),
     Step("sources_alias", "sources_alias", what="a source that says `stable` (Debian) or `devel` (Ubuntu) where the box is on a codename"),
-    Step("sources_pin", "sources_pin", what="APT::Default-Release naming the box's own release (apt fails on one that no source offers)"),
+    Step("sources_pin", "sources_pin", what="APT::Default-Release naming the box's own release (apt fails on one that no source offers)", watch=True),
     Step("sources_pin_prefs", "sources_pin", what="a preferences file pinning another release"),
     Step("sources_proposed", "sources_proposed", what="a proposed-updates source"),
     Step("sources_third_party", "sources_third_party", mode="names", sev="warn", needle="osr-third-party", what="a third-party source file"),
     Step("foreign_arch_empty", "foreign_arch", mode="quiet", what="dpkg --add-architecture i386 and no package of it"),
-    Step("foreign_arch", "foreign_arch", what="dpkg --add-architecture i386 and a package installed from it"),
+    Step("foreign_arch", "foreign_arch", what="dpkg --add-architecture i386 and a package installed from it", watch=True),
     Step("reboot_first", "reboot_first", what="/var/run/reboot-required"),
     Step("fstab_unresolved", "fstab_unresolved", what="an fstab line, not nofail, for a device that is not there (the core reads fstab and /dev/disk, it asks no tool)"),
     Step("containers_policy", "containers_policy", sev="warn", needle="p-no", what="a running container with restart policy no"),
@@ -137,7 +139,7 @@ STEPS = [
     Step("docker_down_service", "docker_down", sev="warn", extras=("apps",), expect=NOT_RUNNING,
          what="Docker's service stopped and its socket left listening, and AppManagement stopped (asking the daemon would start it)",
          after="inactive", after_what="docker.service is still inactive after the call: asking did not start Docker through its socket"),
-    Step("docker_down", "docker_down", sev="warn", expect=NOT_RUNNING, what="Docker stopped, and its socket (the core asks the service, and does not start it by asking the daemon)"),
+    Step("docker_down", "docker_down", sev="warn", expect=NOT_RUNNING, watch=True, what="Docker stopped, and its socket (the core asks the service, and does not start it by asking the daemon)"),
 ]
 # what these guests cannot do, and why (the report lists them: NOT TESTABLE is visible and never a pass)
 NOT_TESTABLE = [
@@ -506,6 +508,7 @@ F_UNDONE = "step %s: after the undo the answer is the clean one again (the code 
 F_ALONE = "step %s: nothing else fires with it"
 F_EXPECT = "step %s: `%s` is %s%s"
 F_AFTER = "step %s: %s"
+F_WROTE = "step %s: the call changed nothing of dpkg's status, of apt's lists or of apt's caches"
 F_FORBID = "step %s: `%s` does not fire"
 
 
@@ -623,6 +626,26 @@ def ports(tag):
         invalid("listen-%s.txt is missing or empty: no listening port was recorded (ss did not run)" % tag)
         return None
     return set(rows)
+
+
+def apt_rows(sid, which):
+    """{path: what the guest saw of it} of step-<sid>.state-<which>: dpkg's status and apt's caches by their sha256, apt's lists by size and time. None, and an
+    INVALID RUN, when the file is missing, has a row that is not of the snapshot, or has no row for dpkg's status (a snapshot that was not made)"""
+    rows = {}
+    for line in read("step-%s.state-%s" % (sid, which)).splitlines():
+        m = re.match(r"^list (\S+) (\d+) (\d+(?:\.\d+)?)$", line)
+        if m:
+            rows[m.group(1)] = "size %s, time %s" % (m.group(2), m.group(3))
+            continue
+        m = re.match(r"^([0-9a-f]{64})  (\S+)$", line)
+        if not m:
+            invalid("step %s: step-%s.state-%s has a row that is not one of the snapshot of dpkg and apt: %s" % (sid, sid, which, cell(line, 80)))
+            return None
+        rows[m.group(2)] = "sha256 " + m.group(1)
+    if not any(p.endswith("/status") for p in rows):
+        invalid("step %s: step-%s.state-%s is missing, or has no row for dpkg's status: the snapshot of dpkg and apt around the call was not made" % (sid, sid, which))
+        return None
+    return rows
 
 
 ma, mb, m1, m2 = manifest("ctl-a"), manifest("ctl-b"), manifest("before"), manifest("after")
@@ -844,6 +867,16 @@ for s in STEPS:
                 "%s is %s%s" % (code, k.get("severity") if k is not None else "not in the answer", (" and %s is %s" % (key, cell(json.dumps(d.get(key))))) if key and k is not None else ""))
     if s.after:
         verdict(F_AFTER % (s.id, s.after_what), after_state == s.after, "after the call the guest saw %s, wanted %s" % (cell(after_state, 30), s.after))
+    if s.watch:
+        # what the clean calls of the invariance window cannot show: a write that only a call on a dirty box makes. What changed by itself in the control is left out
+        before_rows, after_rows = apt_rows(s.id, "before"), apt_rows(s.id, "after")
+        if before_rows is not None and after_rows is not None:
+            def alone(p):
+                return p not in noisy_files
+            said = (["changed %s (%s, then %s)" % (cell(p, 100), before_rows[p][:19], after_rows[p][:19]) for p in sorted(before_rows.keys() & after_rows.keys()) if before_rows[p] != after_rows[p] and alone(p)]
+                    + ["created %s" % cell(p, 100) for p in sorted(after_rows.keys() - before_rows.keys()) if alone(p)]
+                    + ["removed %s" % cell(p, 100) for p in sorted(before_rows.keys() - after_rows.keys()) if alone(p)])
+            verdict(F_WROTE % s.id, not said, few(said) if said else "%d files looked at, the same before and after the call" % len(before_rows))
     # a code is worse when its severity went down the ladder refuse, warn, anything else: a warn of the clean box that is a refuse with the dirt is one
     worse = sorted(c for c, v in now_sev.items() if RANK.get(v, 2) < RANK.get(base_sev.get(c), 2))
     extra = [c for c in worse if not allowed(s, c)]
@@ -868,6 +901,9 @@ P("## What this proof did not exercise")
 P("")
 rest = sorted(set(CANONICAL) - exercised - {"uptime_long", "container", "virt_xen", "unproven_arch"})
 P("Codes of the spec's table that no step of this proof makes fire (the core's own tests are their proof; the clean box shows whether they stay quiet): %s." % few(rest, 80))
+P("")
+P("The first call of the route (ready-route) is made before the invariance window, as soon as the services answer, to find out whether the release has the route at all: a file written, "
+  "a service started or a port opened by that very first call and by none after it is not in the window. Every other call of the proof, clean or dirty, is.")
 P("")
 
 finish()

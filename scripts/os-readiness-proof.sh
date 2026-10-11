@@ -9,8 +9,10 @@
 #   os-readiness-proof.sh u22   Ubuntu 22.04: a hop to Ubuntu 24.04
 #
 # In this order:
-#   0. a WAIT: until AppManagement has made its own check of the images of the apps (it does, three minutes after it starts, and ends it by renaming a new
-#      /var/lib/casaos/image_updates.json into place: a write that would fall in the window below and be taken for the report's);
+#   0. PackageKit stopped (the last apt call of the preparation wakes it on an Ubuntu, and it leaves by itself five minutes later: a unit that would change in
+#      the middle of the window below), the first call of the route as soon as the services answer (a release that has none answers 404, and the run ends there,
+#      before the rest), and a WAIT: until AppManagement has made its own check of the images of the apps (it does, three minutes after it starts, and ends it by
+#      renaming a new /var/lib/casaos/image_updates.json into place: a write that would fall in the window below and be taken for the report's);
 #   1. a CONTROL: a snapshot of the box, two calls of GET /v1/sys/version/current, a few seconds, a snapshot: what changes by itself is known and is not held
 #      against the report;
 #   2. the INVARIANCE window: a snapshot (name, size, mtime, ctime, mode, owner and content hash of every file under /etc, /var/lib/dpkg, /var/lib/apt,
@@ -20,7 +22,9 @@
 #      hashed: not /tmp, not /run, not /home or /root; a tool that writes there (`dkms status` may, in $TMPDIR) is not seen;
 #   3. the DIRTY MATRIX, one way of dirtying the box at a time: the dirt, a call, the undo (always: a trap runs it when the script dies in the middle of a
 #      step), a check that the undo held, a call. Every step is a trio of functions (dirty_<id>, undo_<id>, undone_<id>), each run in a subshell that stops at
-#      its first failing command, so that the status of a step says whether the box was really dirtied and really put back.
+#      its first failing command, so that the status of a step says whether the box was really dirtied and really put back. A step may also look at the box once
+#      the call is over and before the undo (after_<id>: docker.service, which the call must not have started), and the calls of the steps of WATCH_STEPS are
+#      looked at for what they write of dpkg's status and apt's lists and caches (apt_state before and after): the invariance window sees the clean calls only.
 #
 # Nothing here judges: it writes what it saw into $OUT and os-readiness-proof-report.py turns that into verdicts, or says the run is invalid. It stops early
 # (and says why, in $OUT/aborted) only when it cannot go on. A step whose dirt could not be made, or whose undo failed, is recorded as such: the report
@@ -173,6 +177,10 @@ OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
 # the file of digits only that apt itself counts as an unfinished dpkg journal ("dpkg was interrupted")
 DPKG_JOURNAL="${DPKG_JOURNAL:-/var/lib/dpkg/updates/0001}"
 DPKG_LOCK="${DPKG_LOCK:-/var/lib/dpkg/lock-frontend}"
+# where dpkg keeps its status, and where apt keeps its lists and its caches: what the calls of the steps in WATCH_STEPS are looked at for (apt_state)
+DPKG_DIR="${DPKG_DIR:-/var/lib/dpkg}"
+APT_LISTS_DIR="${APT_LISTS_DIR:-/var/lib/apt/lists}"
+APT_CACHE_DIR="${APT_CACHE_DIR:-/var/cache/apt}"
 REBOOT_REQUIRED="${REBOOT_REQUIRED:-/var/run/reboot-required}"
 INTERNAL_SECRET_FILE="${INTERNAL_SECRET_FILE:-/var/run/casaos/internal.secret}"
 # what AppManagement writes when it has checked the images of the apps (a temporary file in /var/lib/casaos, renamed over this one)
@@ -185,6 +193,10 @@ COME_BACK=(p-always p-unless-stopped p-db p-web)
 STEP_IDS=(held held_docker broken_dpkg sources_cdrom sources_file sources_alias sources_pin sources_pin_prefs sources_proposed sources_third_party
     foreign_arch_empty foreign_arch reboot_first fstab_unresolved containers_policy containers_ports_host containers_ports_publish busy_lock busy_unit
     busy_packagekit disk_boot apps docker_down_service docker_down)
+# the steps whose call is looked at for what it wrote of dpkg's or apt's: the dirt of three of them puts a package manager in the way of the checks (an unfinished journal, a
+# Default-Release, a foreign architecture), and Docker's is the one a daemon that was asked would have started. The invariance window sees the calls of the clean box only.
+# os-readiness-proof-report.py has the same list (watch).
+WATCH_STEPS=(broken_dpkg sources_pin foreign_arch docker_down)
 
 # EPOCHREALTIME and printf's %()T are the shell's own: a clock that does not need `date` to be installed, or to work
 now() { printf '%s' "${EPOCHREALTIME}"; }
@@ -471,6 +483,17 @@ inv_snapshot() {
     listen_dump "$1"
 }
 
+# apt_state <file>: dpkg's status and apt's caches (*.bin) by their hash, and the files of apt's lists by name, size and time (not by content: a list is megabytes, and a write
+# is a new size or a new time): what a call that wrote one of them would have changed. The file is written whole or not at all.
+apt_state() {
+    {
+        find "${DPKG_DIR}" -maxdepth 1 -type f -name status -exec sha256sum --text {} +
+        find "${APT_CACHE_DIR}" -maxdepth 1 -type f -name '*.bin' -exec sha256sum --text {} +
+        find "${APT_LISTS_DIR}" -maxdepth 1 -type f -printf 'list %p %s %T@\n'
+    } >"$1.new"
+    mv "$1.new" "$1"
+}
+
 # ---- dpkg's lock ----------------------------------------------------------------------------------------------------------------------------
 
 # lock_state: held, free or missing, asked by a process of its own (a POSIX lock is per process: it conflicts with the holder's)
@@ -737,7 +760,8 @@ undone_docker_down() { timeout -s KILL 5 docker info >/dev/null 2>&1; }
 # run_step <id>: the dirt, a call, the undo, a check that the undo held, a call. The undo is pending from before the dirt to after the undo, and the trap of
 # the script runs it when the script dies in between.
 run_step() {
-    local id="$1" reason=""
+    local id="$1" reason="" watched=""
+    if [[ " ${WATCH_STEPS[*]} " == *" ${id} "* ]]; then watched=1; fi
     echo "${id}" >>"${OUT}/steps.list"
     if declare -F "skip_${id}" >/dev/null; then reason="$("skip_${id}" || true)"; fi
     if [ -n "${reason}" ]; then
@@ -749,7 +773,10 @@ run_step() {
     PENDING_UNDO="${id}"
     in_subshell "dirty_${id}" >"${OUT}/step-${id}.dirty.log" 2>&1
     echo "${STATUS}" >"${OUT}/step-${id}.dirty-rc"
+    # what the call writes of dpkg's and apt's is what differs between these two, taken once the dirt is made and around the call alone
+    if [ -n "${watched}" ]; then apt_state "${OUT}/step-${id}.state-before"; fi
     ready_call "step-${id}-dirty"
+    if [ -n "${watched}" ]; then apt_state "${OUT}/step-${id}.state-after"; fi
     # what a step wants to see once the call is over, and before the undo: after_<id>, whose output is kept (docker.service, which the call must not have started)
     if declare -F "after_${id}" >/dev/null; then
         in_subshell "after_${id}" >"${OUT}/step-${id}.after" 2>&1

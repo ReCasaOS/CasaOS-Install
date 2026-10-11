@@ -22,6 +22,7 @@ whose name matches. REPORT_ONLY=1 stops after the cases of the report, GUEST_ONL
 import ast
 import builtins
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -160,6 +161,7 @@ for s in STEPS:
     s.setdefault("expect", ())
     s.setdefault("after", "")
     s.setdefault("after_what", "")
+    s.setdefault("watch", False)
 STEP_BY_ID = {s["id"]: s for s in STEPS}
 
 LEG = {"d11": dict(family="debian", version="11", codename="bullseye", pretty="Debian GNU/Linux 11 (bullseye)", to_version="12", to_codename="bookworm"),
@@ -263,6 +265,11 @@ LISTEN_SORTED = "".join(p + "\n" for p in sorted(PORTS))   # what `sort` says of
 ALL_VERDICTS = None   # filled by the healthy cases
 
 
+# what the guest keeps of dpkg's status, apt's caches and apt's lists around a call (apt_state): the hash of the first two kinds of file, the name, size and time of the lists
+APT_STATE = ("%s  /var/cache/apt/pkgcache.bin\n%s  /var/cache/apt/srcpkgcache.bin\n%s  /var/lib/dpkg/status\n" % ("a" * 64, "b" * 64, "c" * 64)
+             + "list /var/lib/apt/lists/deb.debian.org_debian_dists_bullseye_InRelease 116 1790000000.1234567890\nlist /var/lib/apt/lists/lock 0 1780000000.0000000000\n")
+
+
 def manifest_text(rows):
     return "".join("\t".join([json.dumps(p)] + list(r)) + "\n" for p, r in sorted(rows.items()))
 
@@ -318,6 +325,9 @@ def build(d, leg):
         if s["after"]:
             put(d, "step-%s.after" % sid, s["after"] + "\n")
             put(d, "step-%s.after-rc" % sid, "0\n")
+        if s["watch"]:
+            put(d, "step-%s.state-before" % sid, APT_STATE)
+            put(d, "step-%s.state-after" % sid, APT_STATE)
         t = at()
         api(d, "step-%s-dirty" % sid, t0=t, body=ready_body(leg, sid, t + 1))
         t = at()
@@ -535,6 +545,10 @@ def f_after(s):
     return "step %s: %s" % (s["id"], s["after_what"])
 
 
+def f_wrote(s):
+    return "step %s: the call changed nothing of dpkg's status, of apt's lists or of apt's caches" % s["id"]
+
+
 def expects(s, leg):
     """the rows of what the dirty answer also says that are for this leg"""
     return [r for r in s["expect"] if r[0] in ("*", leg)]
@@ -546,7 +560,7 @@ def steps_of(leg):
 
 def step_verdicts(s, leg):
     out = [f_quiet(s) if s["mode"] == "quiet" else f_fires(s), f_alone(s), f_undone(s)] + [f_forbid(s, c) for c in s["forbid"]]
-    out += [f_expect(s, r) for r in expects(s, leg)] + ([f_after(s)] if s["after"] else [])
+    out += [f_expect(s, r) for r in expects(s, leg)] + ([f_after(s)] if s["after"] else []) + ([f_wrote(s)] if s["watch"] else [])
     return out
 
 
@@ -913,6 +927,8 @@ if not os.environ.get("GUEST_ONLY"):
          mutate=lambda d: [make(d, "ready-inv-2", "busy", "warn"), jdata(d, "ready-inv-2", lambda x: [c["data"].update(source="unit", unit="apt-daily.service") for c in x["checks"] if c["code"] == "busy"])])
 
     # PackageKit: what it was after the last apt call and what it is, in the table of the box
+    case("the report says what the window does not see: the first call of the route, made before it, as soon as the services answer", 0,
+         ["The first call of the route (ready-route) is made before the invariance window, as soon as the services answer", "a port opened by that very first call and by none after it is not in the window"], ["FAIL"])
     case("the table of the box says what PackageKit was after the last apt call and what it is", 0, ["| packagekit_after_apt | inactive |", "| packagekit | inactive |"], ["FAIL"])
     case("the table of the box says PackageKit was awake after the last apt call on an Ubuntu", 0, ["| packagekit_after_apt | active |", "| packagekit | inactive |"], ["FAIL"], leg="u22")
 
@@ -968,6 +984,32 @@ if not os.environ.get("GUEST_ONLY"):
                 invalid("step %s: what the guest saw after the call is empty %s" % (sid, tag), "step %s: the guest did not say what it saw once the call was over" % sid, lambda d, sid=sid: put(d, "step-%s.after" % sid, "\n"), leg=leg_, silent=[f_after(s)])
                 invalid("step %s: the command that looks after the call failed %s" % (sid, tag), "exit 1)", lambda d, sid=sid: put(d, "step-%s.after-rc" % sid, "1\n"), leg=leg_, silent=[f_after(s)])
                 invalid("step %s: the command that looks after the call did not run %s" % (sid, tag), "exit none)", lambda d, sid=sid: remove(d, "step-%s.after-rc" % sid), leg=leg_, silent=[f_after(s)])
+            if s["watch"]:
+                SB, SA = "step-%s.state-before" % sid, "step-%s.state-after" % sid
+                for what_, edit_, say_ in (
+                        ("dpkg's status changes", lambda t: t.replace("c" * 64, "d" * 64), "changed /var/lib/dpkg/status"),
+                        ("an apt cache changes", lambda t: t.replace("a" * 64, "e" * 64), "changed /var/cache/apt/pkgcache.bin"),
+                        ("a list changes its size", lambda t: t.replace("bullseye_InRelease 116 ", "bullseye_InRelease 117 "), "changed /var/lib/apt/lists/deb.debian.org_debian_dists_bullseye_InRelease"),
+                        ("a list changes its time", lambda t: t.replace("1790000000.1234567890", "1790000099.0000000000"), "changed /var/lib/apt/lists/deb.debian.org_debian_dists_bullseye_InRelease"),
+                        ("dpkg's status changes in the last digit of its digest", lambda t: t.replace("c" * 64, "c" * 63 + "d"), "changed /var/lib/dpkg/status"),
+                        ("a list is created", lambda t: t + "list /var/lib/apt/lists/new_list 5 1790000099.5\n", "created /var/lib/apt/lists/new_list"),
+                        ("a cache is created", lambda t: t + "%s  /var/cache/apt/new.bin\n" % ("f" * 64), "created /var/cache/apt/new.bin"),
+                        ("a list is removed", lambda t: "".join(ln + "\n" for ln in t.splitlines() if "lists/lock" not in ln), "removed /var/lib/apt/lists/lock"),
+                        ("a cache is removed", lambda t: "".join(ln + "\n" for ln in t.splitlines() if "srcpkgcache.bin" not in ln), "removed /var/cache/apt/srcpkgcache.bin")):
+                    fails("step %s: %s during the call %s" % (sid, what_, tag), f_wrote(s), lambda d, SA=SA, e=edit_: ledit(d, SA, e), leg=leg_, extra=[say_])
+                case("step %s: a call that changed nothing of dpkg's or apt's %s" % (sid, tag), 0, ["**PASS** " + f_wrote(s), "files looked at, the same before and after the call"], ["FAIL"], leg=leg_)
+                case("step %s: what changed by itself in the control (dpkg's status) is left out of what the call wrote %s" % (sid, tag), 0, ["**PASS** " + f_wrote(s)], ["FAIL"], leg=leg_,
+                     mutate=lambda d, SA=SA: (ledit(d, "inv-ctl-b.tsv", row_edit("/var/lib/dpkg/status", digest="9" * 64)), ledit(d, SA, lambda t: t.replace("c" * 64, "d" * 64))))
+                case("step %s: what changed by itself in the control is not an excuse for the other files %s" % (sid, tag), 1, ["**FAIL** " + f_wrote(s), "changed /var/cache/apt/pkgcache.bin"], ["changed /var/lib/dpkg/status"], leg=leg_,
+                     mutate=lambda d, SA=SA: (ledit(d, "inv-ctl-b.tsv", row_edit("/var/lib/dpkg/status", digest="9" * 64)), ledit(d, SA, lambda t: t.replace("c" * 64, "d" * 64).replace("a" * 64, "e" * 64))))
+                invalid("step %s: no snapshot of dpkg and apt before the call %s" % (sid, tag), "step-%s.state-before is missing" % sid, lambda d, SB=SB: remove(d, SB), leg=leg_, silent=[f_wrote(s)])
+                invalid("step %s: no snapshot of dpkg and apt after the call %s" % (sid, tag), "step-%s.state-after is missing" % sid, lambda d, SA=SA: remove(d, SA), leg=leg_, silent=[f_wrote(s)])
+                invalid("step %s: an empty snapshot of dpkg and apt %s" % (sid, tag), "step-%s.state-after is missing, or has no row for dpkg's status" % sid, lambda d, SA=SA: put(d, SA, ""), leg=leg_, silent=[f_wrote(s)])
+                invalid("step %s: a snapshot with no row for dpkg's status %s" % (sid, tag), "step-%s.state-before is missing, or has no row for dpkg's status" % sid,
+                        lambda d, SB=SB: ledit(d, SB, lambda t: "".join(ln + "\n" for ln in t.splitlines() if "/status" not in ln)), leg=leg_, silent=[f_wrote(s)])
+                invalid("step %s: a snapshot with a row that is not one %s" % (sid, tag), "has a row that is not one of the snapshot of dpkg and apt", lambda d, SA=SA: ledit(d, SA, lambda t: t + "garbage\n"), leg=leg_, silent=[f_wrote(s)])
+                invalid("step %s: a snapshot with a digest that is followed by one space and not two %s" % (sid, tag), "has a row that is not one of the snapshot of dpkg and apt",
+                        lambda d, SA=SA: ledit(d, SA, lambda t: t + "%s /var/cache/apt/other.bin\n" % ("1" * 64)), leg=leg_, silent=[f_wrote(s)])
             fails("step %s: a check nobody expected fires with it %s" % (sid, tag), f_alone(s), lambda d, D=D: make(d, D, "bootloader", "refuse"), leg=leg_, extra=["also fires: bootloader"])
             fails("step %s: a warning nobody expected fires with it %s" % (sid, tag), f_alone(s), lambda d, D=D: make(d, D, "ram", "warn"), leg=leg_, extra=["also fires: ram"])
             for extra_ in s["extras"]:
@@ -1084,6 +1126,11 @@ check("the file the wait looks for is the one AppManagement renames into /var/li
 check("the guest stops PackageKit as soon as the last apt call is over, and probes the route as soon as the services answer: both before the wait for the images, the control and the window",
       re.search(r'    "\$\{APT\[@\]\}" update -qq\n    PK_AFTER_APT="\$\(unit_state packagekit\.service\)"\n    quiet_packagekit \|\| [^\n]*\n    wait_services 180 \|\| abort "[^"]*"\n    probe_route\n[^\n]*\n    box_facts\n', guest_text) is not None, "")
 check("the first call of the route is the readiness route, kept as ready-route, and a 404 is the one answer that ends the run", re.search(r'probe_route\(\) \{\n    ready_call ready-route\n    \[ "\$\(cat "\$\{OUT\}/ready-route\.code"\)" != 404 \] \|\| abort "the release under test has no /v1/sys/os/readiness"\n\}', guest_text) is not None, "")
+guest_watch = re.search(r"^WATCH_STEPS=\(([^)]*)\)", guest_text, re.M)
+guest_watch = guest_watch.group(1).split() if guest_watch else []
+check("the guest takes the snapshots of dpkg and apt around the calls of the steps the report judges them for", guest_watch == [s["id"] for s in STEPS if s["watch"]], (guest_watch, [s["id"] for s in STEPS if s["watch"]]))
+check("the report looks at the writes of dpkg and apt around the dirty calls whose dirt could make one: an unfinished journal, a Default-Release, a foreign architecture, and Docker stopped",
+      [s["id"] for s in STEPS if s["watch"]] == ["broken_dpkg", "sources_pin", "foreign_arch", "docker_down"], [s["id"] for s in STEPS if s["watch"]])
 check("the legs of the guest, of the report and of the workflow's file are the same", True)
 
 if have_bash() and not os.environ.get("REPORT_ONLY"):
@@ -1195,10 +1242,15 @@ at = datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:
 w = os.environ.get("FAKE_CORE_WRITE")
 if w and mode == "write":
     open(w, "a").write("x")
+# a core that writes only when the box is dirty and the dirty matrix has begun (the calls of the invariance window, the one under dpkg's lock too, do not see it)
+if w and mode == "dirtywrite" and steps and os.path.exists(os.path.join(os.environ["OUT"], "steps.list")):
+    open(w, "a").write("x")
 if mode == "restart":
     open(os.path.join(F, "inv", os.environ["FAKE_CORE_UNIT"]), "w").write("restarted-%d" % time.time())
 if mode == "listen":
-    open(os.path.join(F, "ports"), "a").write("tcp 0.0.0.0:9999\n")
+    # a port of its own at each call: the first one is the call that finds out whether the release has the route, which is made before the window
+    n_ = len([l for l in lines(os.path.join(F, "ports")) if l.startswith("tcp 0.0.0.0:9")])
+    open(os.path.join(F, "ports"), "a").write("tcp 0.0.0.0:%d\n" % (9000 + n_))
 if mode == "hang" and lock:
     reply(0, "", 28)
 if mode == "hang500":
@@ -1377,7 +1429,7 @@ esac
         """the box of the guest in a directory of its own: the fake tools in front of PATH, the files the guest script's variables point at, the state the tools keep"""
         j = lambda *p: os.path.join(tmp, *p).replace("\\", "/")
         for sub in ("fake", "fake/active", "fake/inv", "fake/unitfile", "root/etc/apt/sources.list.d", "root/etc/apt/apt.conf.d", "root/etc/apt/preferences.d", "root/etc/casaos", "root/var/lib/dpkg/updates",
-                    "root/var/lib/apt/lists", "root/var/cache/apt", "root/var/lib/casaos", "root/var/log/casaos", "root/boot", "root/run/casaos", "lib", "auth", "out"):
+                    "root/var/lib/apt/lists/partial", "root/var/cache/apt/archives", "root/var/lib/casaos", "root/var/log/casaos", "root/boot", "root/run/casaos", "lib", "auth", "out"):
             os.makedirs(j(*sub.split("/")), exist_ok=True)
         for name, text in FAKES.items():
             with open(j("fake", name), "w", newline="\n") as f:
@@ -1401,11 +1453,13 @@ esac
             f.write('PRETTY_NAME="%s"\nID=%s\nVERSION_ID="%s"\nVERSION_CODENAME=%s\n' % (LEG["d11"]["pretty"], "debian", "11", "bullseye"))
         for name, text in (("root/etc/apt/sources.list", "deb http://deb.debian.org/debian bullseye main\n"), ("root/etc/apt/sources.list.d/docker.list", "deb https://download.docker.com/linux/debian bullseye stable\n"),
                            ("root/var/lib/dpkg/lock-frontend", ""), ("root/var/lib/dpkg/status", "Package: x\n"), ("root/run/casaos/internal.secret", "sekrit\n"),
+                           ("root/var/cache/apt/pkgcache.bin", "pkg cache\n"), ("root/var/cache/apt/srcpkgcache.bin", "src cache\n"), ("root/var/cache/apt/archives/x.deb", "deb\n"), ("root/var/cache/apt/archives/nested.bin", "nested\n"),
+                           ("root/var/lib/apt/lists/deb.debian.org_debian_dists_bullseye_InRelease", "release\n"), ("root/var/lib/apt/lists/lock", ""), ("root/var/lib/apt/lists/partial/p", "partial\n"),
                            ("root/var/log/casaos/casaos.log", "log\n"), ("root/var/lib/casaos/state", "s\n"), ("root/etc/casaos/gateway.ini", "HttpPort=80\n")):
             with open(j(*name.split("/")), "w", newline="\n") as f:
                 f.write(text)
         env = dict(ENV, PATH=j("fake") + os.pathsep + os.environ["PATH"], FAKE=j("fake"), LEG="d11", HAVE_FCNTL="1" if HAVE_FCNTL else "0", APT_DIR=j("root/etc/apt"), FSTAB=j("root/etc/fstab"),
-                   BOOT_DIR=j("root/boot"), OS_RELEASE=j("root/etc/os-release"), DPKG_JOURNAL=j("root/var/lib/dpkg/updates/0001"), DPKG_LOCK=j("root/var/lib/dpkg/lock-frontend"),
+                   DPKG_DIR=j("root/var/lib/dpkg"), APT_LISTS_DIR=j("root/var/lib/apt/lists"), APT_CACHE_DIR=j("root/var/cache/apt"), BOOT_DIR=j("root/boot"), OS_RELEASE=j("root/etc/os-release"), DPKG_JOURNAL=j("root/var/lib/dpkg/updates/0001"), DPKG_LOCK=j("root/var/lib/dpkg/lock-frontend"),
                    REBOOT_REQUIRED=j("root/run/reboot-required"), INTERNAL_SECRET_FILE=j("root/run/casaos/internal.secret"), LIBDIR=j("lib"), AUTH_DIR=j("auth"), OUT=j("out"),
                    IMAGE_UPDATES=j("root/var/lib/casaos/image_updates.json"), FIXTURES=FIXTURES.replace("\\", "/"), LEG_JSON=json.dumps(LEG),
                    INV_ROOT=j("root"), INV_TREES=j("root/etc"))
@@ -1591,6 +1645,82 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
     gcase("run_step: a step that looks at nothing after the call leaves no record of it", STUBS + 'run_step x', files={"out/step-x.after": None, "out/step-x.after-rc": None})
     gcase("run_step: a look after the call that failed is recorded, and the undo is made all the same", STUBS + 'after_x() { echo broke; false; }; run_step x',
           files={"out/step-x.after-rc": "1\n", "out/step-x.undo-rc": "0\n", "out/step-x.undone": "yes\n"}, calls=["undo"])
+    APT_NOTE = 'apt_state() { echo "apt_state $1" >>"$FAKE/calls"; }; '
+    gcase("run_step: a watched step is looked at once its dirt is made, and around the call alone: before the call, after it, and before its undo", STUBS + APT_NOTE + 'WATCH_STEPS=(w x); run_step x',
+          ordered=["dirty", "step-x.state-before", "ready_call step-x-dirty", "step-x.state-after", "undo"])
+    gcase("run_step: the snapshots of a watched step are the files of the step in the evidence directory", STUBS + APT_NOTE + 'WATCH_STEPS=(x); run_step x', calls=["out/step-x.state-before", "out/step-x.state-after"])
+    gcase("run_step: a step that is not watched has no snapshot", STUBS + APT_NOTE + 'WATCH_STEPS=(w y); run_step x', no_calls=["apt_state"])
+    gcase("run_step: a step whose id is part of the name of a watched one is not watched", STUBS + APT_NOTE + 'WATCH_STEPS=(xx ax x_y); run_step x', no_calls=["apt_state"])
+    gcase("run_step: a step that is skipped is not looked at", STUBS + APT_NOTE + 'skip_x() { echo "not here"; }; WATCH_STEPS=(x); run_step x', no_calls=["apt_state"])
+    for when_ in ("before", "after"):
+        gcase("run_step: a snapshot that could not be made %s the call ends the run (a tool of the harness that fails is not a verdict on the feature)" % when_,
+              STUBS + 'apt_state() { case "$1" in *state-%s) return 3 ;; esac; echo "apt_state $1" >>"$FAKE/calls"; }; WATCH_STEPS=(x); guard_run; run_step x; echo reached >"$OUT/reached"' % when_,
+              files={"out/reached": None, "out/aborted": "the guest script ended on a failing command (exit 3)*"}, returned=False, rc=3)
+
+    def apt_state_case():
+        label = "apt_state: dpkg's status and apt's caches by their hash, apt's lists by name, size and time, whole or not at all, and nothing else"
+        if not wanted(label):
+            return
+        count[0] += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            env, j = sandbox(tmp)
+            root = j("root")
+            posix = "/" + root[0].lower() + root[2:] if root[1:2] == ":" else root
+
+            def norm(line):
+                return line.replace(root, "").replace(posix, "")
+
+            def run(snippet):
+                p = run_bash(env, snippet)
+                try:
+                    with open(j("out", "s"), newline="") as f:
+                        return p, [norm(ln) for ln in f.read().split("\n")[:-1]]
+                except OSError:
+                    return p, None
+
+            def sha(path):
+                with open(j("root", *path.split("/")), "rb") as f:
+                    return hashlib.sha256(f.read()).hexdigest()
+            p, rows = run('apt_state "$OUT/s"')
+            problems = []
+            if rows is None:
+                problems.append("no file: %r" % p.stderr[-300:])
+            else:
+                hashed = ["%s  /var/lib/dpkg/status" % sha("var/lib/dpkg/status"), "%s  /var/cache/apt/pkgcache.bin" % sha("var/cache/apt/pkgcache.bin"), "%s  /var/cache/apt/srcpkgcache.bin" % sha("var/cache/apt/srcpkgcache.bin")]
+                lists = [r for r in rows if r.startswith("list ")]
+                if sorted(r for r in rows if not r.startswith("list ")) != sorted(hashed):
+                    problems.append("hashed rows are %r, wanted %r" % ([r for r in rows if not r.startswith("list ")], hashed))
+                if len(lists) != 2 or not all(re.match(r"^list /var/lib/apt/lists/(deb\.debian\.org_debian_dists_bullseye_InRelease|lock) \d+ \d+\.\d+$", r) for r in lists):
+                    problems.append("list rows are %r" % lists)
+                # the size and the time of each list are the file's own
+                for r in lists:
+                    _, path_, size_, time_ = r.split(" ")
+                    real_ = j("root", *path_.strip("/").split("/"))
+                    if int(size_) != os.path.getsize(real_) or abs(float(time_) - os.path.getmtime(real_)) > 2:
+                        problems.append("the row %r is not the size and the time of %s (%d, %.1f)" % (r, real_, os.path.getsize(real_), os.path.getmtime(real_)))
+                if any("archives" in r or "partial" in r or "lock-frontend" in r or "updates" in r for r in rows):
+                    problems.append("a row for a directory or a file that is not looked at: %r" % rows)
+                if os.path.exists(j("out", "s.new")):
+                    problems.append("s.new is left behind")
+            # a write is a different row: the content of status, a new list
+            with open(j("root", "var", "lib", "dpkg", "status"), "w", newline="\n") as f:
+                f.write("Package: y\n")
+            with open(j("root", "var", "lib", "apt", "lists", "new_list"), "w", newline="\n") as f:
+                f.write("new\n")
+            p2, rows2 = run('apt_state "$OUT/s"')
+            if rows2 is None or ("%s  /var/lib/dpkg/status" % sha("var/lib/dpkg/status")) not in rows2 or not any(r.startswith("list /var/lib/apt/lists/new_list ") for r in rows2):
+                problems.append("a write is not seen: %r then %r" % (rows, rows2))
+            # a directory that is not there is a failure, and no snapshot is made of it
+            os.remove(j("out", "s"))
+            p3, rows3 = run('set -Eeuo pipefail; APT_CACHE_DIR=/nonexistent/dir; apt_state "$OUT/s"')
+            if p3.returncode == 0 or rows3 is not None:
+                problems.append("a directory that is not there made a snapshot: exit %d, %r" % (p3.returncode, rows3))
+            if problems:
+                failures.append("%s: %s" % (label, "; ".join(problems)))
+            else:
+                print("ok: " + label)
+    if have_bash():
+        apt_state_case()
     gcase("foreign_arch_empty: an architecture with no package, and the undo takes it away", 'in_subshell dirty_foreign_arch_empty; cat "$FAKE/archs" >"$OUT/a"; in_subshell undone_foreign_arch_empty; echo "$STATUS" >"$OUT/d"; in_subshell undo_foreign_arch_empty; in_subshell undone_foreign_arch_empty; echo "$STATUS" >"$OUT/u"',
           files={"out/a": "i386\n", "out/d": "1\n", "out/u": "0\n"})
     gcase("foreign_arch: the architecture and a package of it built from nothing (no network), and the undo purges the package then removes the architecture, in that order",
@@ -1842,7 +1972,7 @@ esac
     e2e("a core that writes a file of /etc during the call is caught by the invariance, naming the file", 1, ["**FAIL** " + V_INV_FILES, "/etc/osr-written"], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "write", "FAKE_CORE_WRITE": "{root}/etc/osr-written"}, snippet=E2E)
     e2e("a core that restarts a service during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "restart", "FAKE_CORE_UNIT": "casaos-gateway.service"})
-    e2e("a core that opens a port during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_PORTS, "started listening tcp 0.0.0.0:9999"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "listen"})
+    e2e("a core that opens a port during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_PORTS, "started listening tcp 0.0.0.0:90"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "listen"})
     e2e("a core that blocks while another process holds dpkg's lock is caught", 1, ["**FAIL** " + V_LOCK_FAST], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang"})
     e2e("a core that never says busy is caught under the lock and by both busy steps", 1, ["**FAIL** " + V_LOCK_BUSY, "**FAIL** " + f_fires(STEP_BY_ID["busy_lock"]), "**FAIL** " + f_fires(STEP_BY_ID["busy_unit"])], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "nobusy"})
@@ -1855,6 +1985,10 @@ esac
     e2e("a core that answers 500 is caught as a route that fails", 1, ["**FAIL** " + V_ROUTE], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang500"})
     e2e("a core that asks the daemon of a stopped service through its listening socket starts Docker, and is caught by the step that stops only the service, by name", 1,
         ["**FAIL** " + f_after(STEP_BY_ID["docker_down_service"]), "**FAIL** " + f_fires(STEP_BY_ID["docker_down_service"])], ["Traceback", "INVALID"], env_extra={"FAKE_CORE_MODE": "activate"})
+    for what_, target_, say_ in (("dpkg's status", "{root}/var/lib/dpkg/status", "changed "), ("a list of apt's", "{root}/var/lib/apt/lists/osr-new", "changed ")):
+        e2e("a core that writes %s only when the box is dirty is caught by the snapshots around the dirty calls, which the invariance window of the clean calls cannot see" % what_, 1,
+            ["**FAIL** " + f_wrote(STEP_BY_ID[sid]) for sid in ("broken_dpkg", "sources_pin", "foreign_arch", "docker_down")] + [say_], ["Traceback", "INVALID", "**FAIL** " + V_INV_FILES],
+            env_extra={"FAKE_CORE_MODE": "dirtywrite", "FAKE_CORE_WRITE": target_})
     e2e("a core that refuses `busy` because PackageKit runs is caught by the step that starts it, by name", 1, ["**FAIL** " + f_quiet(STEP_BY_ID["busy_packagekit"])], ["Traceback", "INVALID"], env_extra={"FAKE_CORE_MODE": "packagekit"})
     e2e("a clean box that apt-daily is working on is an invalid run, and no FAIL of the feature", 1, ["INVALID RUN", "the clean box was not quiet", "apt-daily.service"],
         ["Traceback", "**FAIL** " + V_CLEAN_NO_REFUSE, "**FAIL** " + V_CLEAN_STATE, "**FAIL** " + V_CLEAN_AGREE], env_extra={"FAKE_CORE_MODE": "notquiet"})
