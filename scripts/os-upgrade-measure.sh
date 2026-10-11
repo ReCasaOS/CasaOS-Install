@@ -486,7 +486,9 @@ db_dump() {
     timeout -s KILL 60 docker logs --timestamps p-db >"${OUT}/db-$1-logs.txt" 2>&1 || rc=$?
     echo "${rc}" >"${OUT}/db-$1-logs.exit"
     rc=0
-    timeout -s KILL 60 docker run --rm -v pdb:/data busybox cat /data/log >"${OUT}/db-$1-file.txt" 2>"${OUT}/db-$1-file.err" || rc=$?
+    # the helper has a name (docker names one at random otherwise: a sample of the poller showed `musing_lamarr`), goes with --rm when it ends, and one that a killed call left is removed first
+    timeout -s KILL 20 docker rm -f osm-db-dump >/dev/null 2>&1 || true
+    timeout -s KILL 60 docker run --rm --name osm-db-dump -v pdb:/data busybox cat /data/log >"${OUT}/db-$1-file.txt" 2>"${OUT}/db-$1-file.err" || rc=$?
     echo "${rc}" >"${OUT}/db-$1-file.exit"
 }
 

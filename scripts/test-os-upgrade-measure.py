@@ -2032,6 +2032,17 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
     check("wait_services: nothing listening at all (000 three times) gives up the same way", "status 1" in p.stdout and bw.get("result") == "gave_up" and (bw.get("gateway"), bw.get("core"), bw.get("am")) == ("000", "000", "000"), (p.stdout, bw))
     shutil.rmtree(w, ignore_errors=True)
 
+    # the helper container that dumps the database's file has a name, and a leftover of that name is removed before it starts (a docker run without a name made `musing_lamarr`, seen in a sample of the poller)
+    w, env = world("debian")
+    p = in_world(w, env, "db_dump before; echo \"status $?\"", timeout=60)
+    dk = [x for x in calls(w) if x.startswith("docker")]
+    run_i = next((i for i, x in enumerate(dk) if x.startswith("docker run")), None)
+    rm_i = next((i for i, x in enumerate(dk) if x.startswith("docker rm")), None)
+    check("db_dump: the container that reads the database's file is called osm-db-dump, is removed when it ends, and one left over by a killed call is removed before it starts",
+          "status 0" in p.stdout and run_i is not None and rm_i is not None and rm_i < run_i and dk[rm_i] == "docker rm -f osm-db-dump"
+          and dk[run_i] == "docker run --rm --name osm-db-dump -v pdb:/data busybox cat /data/log", (p.stdout, dk))
+    shutil.rmtree(w, ignore_errors=True)
+
     # GET /v1/sys/os, asked by the guest before the hop and after the reboot: through the gateway, with the loopback secret, and what is kept of the call
     SYSOS_BODY = '{"success":200,"message":"ok","data":{"id":"debian","version_id":"11","codename":"bullseye","known":true}}'
 
@@ -2154,6 +2165,9 @@ printf '%s' "${FAKE_CODE:-200}"
     prepare_body = function_body(guest_text, "phase_prepare") or ""
     check("prepare says at once that its bash has no clock of its own or no /dev/tcp, instead of measuring nothing", "EPOCHREALTIME" in prepare_body and "tcp_open 22" in prepare_body and prepare_body.find("tcp_open 22") < prepare_body.find("marker prepare_start"))
     check("the after phase reads the units before it asks anything", after_body.find("units_dump boot") != -1 and after_body.find("units_dump boot") < after_body.find("http_code") and after_body.find("units_dump boot") < after_body.find("wait_docker"))
+    guest_code = "\n".join(ln for ln in guest_text.split("\n") if not ln.lstrip().startswith("#"))
+    docker_runs = re.findall(r"\bdocker run\b[^\n]*", guest_code)
+    check("every container the guest script starts has a name (one that Docker names at random, like the musing_lamarr of a poller's sample, cannot be told from the box's own)", len(docker_runs) >= 5 and all(" --name " in r_ for r_ in docker_runs), docker_runs)
     unit_bodies = "\n".join(function_body(guest_text, n) or "" for n in ("hop_unit_debian", "hop_unit_ubuntu", "hop_unit"))
     check("the unit never reboots the box (the harness does)", unit_bodies != "" and not re.search(r"\b(reboot|shutdown|poweroff|halt)\b", re.sub(r"#[^\n]*", "", unit_bodies)), re.findall(r"[^\n]*reboot[^\n]*", unit_bodies))
     unit_code = re.sub(r"#[^\n]*", "", unit_bodies)
