@@ -462,13 +462,25 @@ if not before_containers or not_running:
 for n, pol in CONTAINERS.items():
     if n in before_containers and before_containers[n]["policy"] != pol:
         invalid("the witness %s has restart policy %r, not %r" % (n, before_containers[n]["policy"], pol))
+# the baseline waits (180 s at the most) for the gateway, the core and AppManagement to answer 200 after the reboot that came before it, and says how long it took: a box on which
+# they never answered is said so, with what was asked last, and not as three codes that were 000 at the moment the baseline happened to ask
+baseline_wait = kv("baseline-wait")
+wait_gave_up = baseline_wait.get("result") == "gave_up"
+if has("baseline-wait") and baseline_wait.get("result") not in ("ok", "gave_up"):
+    invalid("baseline-wait says %r, not ok or gave_up: the baseline's wait for the gateway, the core and AppManagement left no usable record" % baseline_wait.get("result"))
+if wait_gave_up and "did not all answer 200 within" not in aborted:
+    invalid("the gateway, the core and AppManagement did not all answer 200 within %s s of the baseline's start (the last answers: gateway %s, core %s, AppManagement %s): the box was not ready "
+            "after its reboot, and nothing about the hop can be measured from it" % (baseline_wait.get("limit", "?"), baseline_wait.get("gateway", "?"), baseline_wait.get("core", "?"), baseline_wait.get("am", "?")))
 for code in ("gateway-before", "core-before", "am-before", "jwt-before", "internal-before"):
     got = read(code + ".code").strip()
+    if wait_gave_up:
+        continue
     if code == "internal-before":
         if not got:
             invalid("%s.code is missing: the baseline did not ask" % code)
     elif got != "200":
-        invalid("%s answered %s before the hop (it has to answer 200 for the hop to be measured)" % (code.replace("-before", ""), got or "nothing"))
+        invalid("%s answered %s before the hop (it has to answer 200 for the hop to be measured, and the baseline had waited for it: %s)" % (
+            code.replace("-before", ""), got or "nothing", ("it waited %s s and saw 200 from all three" % baseline_wait.get("waited", "?")) if baseline_wait.get("result") == "ok" else "no record of the wait"))
 if read("settle-baseline").strip() in ("", "never"):
     invalid("the witnesses that start by themselves were not running at the baseline (settle-baseline: %s)" % (read("settle-baseline").strip() or "missing"))
 dpkg_before = load_dpkg("before")
@@ -668,7 +680,8 @@ for name, why in (("refresh-update.log", "apt-get update of the refresh"), ("ref
                   ("refresh-reboot.txt", "what the refresh decided about a reboot"),
                   ("inhibit-reboot.txt", "the first probe of the inhibitor"), ("inhibit-force.txt", "the second probe of the inhibitor"), ("box-facts", "the tools of the box"),
                   ("df-start.txt", "the disk at the start"), ("df-before.txt", "the disk before the hop"), ("units-before.tsv", "the services before"),
-                  ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("dpkg-before.tsv", "the packages before"), ("docker-before.txt", "Docker before")):
+                  ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("dpkg-before.tsv", "the packages before"), ("docker-before.txt", "Docker before"),
+                  ("baseline-wait", "how long the baseline waited for the gateway, the core and AppManagement to answer 200 after the last reboot")):
     need(name, why)
 
 if DEBIAN:
@@ -973,6 +986,8 @@ show_row("  of which the full upgrade", fmt_s(span("refresh_update_done", "refre
 if mt("reboot_refresh_start") is not None:
     back = next((b[0] for b in markers.get("boot_changed", []) if b[0] > mt("reboot_refresh_start")), None)
     show_row("  the reboot the refresh asked for (the request to the next phase seeing the new boot)", fmt_s(None if back is None else back - mt("reboot_refresh_start")))
+show_row("baseline: waiting for the gateway, the core and AppManagement to answer 200 after the last reboot (the longest it will wait: %s s)" % baseline_wait.get("limit", "?"),
+         "%s s (%s)" % (baseline_wait.get("waited", "n/a"), baseline_wait.get("result", "not recorded").replace("_", " ")))
 show_row("probes of the old release (sandbox, releaseinfo-change, or Canonical's metadata)", fmt_s(span("probe_start", "probe_done")))
 if ran_hop:
     show_row("the unit (the hop, without the reboot)", fmt_s(span("hop_start", "hop_unit_end")))

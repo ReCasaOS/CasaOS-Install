@@ -685,6 +685,25 @@ settle() { # <file>: seconds until the containers that must come back are runnin
     echo never >"${OUT}/$1"
 }
 
+# wait_services [seconds]: until the gateway, the core and AppManagement each answer 200 (the poller's own probes, AppManagement with the dashboard's token), 180 s at the most.
+# They are Restart=always units that systemd starts at boot, and a baseline taken a few seconds after a reboot asks them before they are up (Debian 11 needed about 8 s where
+# the Ubuntu legs needed 4 to 7: the first real run of the d11-12 leg had AppManagement at 000 at its baseline while the poller saw it answer 200 seconds later). What was asked
+# last and how long it took go to ${OUT}/baseline-wait (result ok|gave_up, waited, limit, and the three answers); WAIT_SAID is the sentence for a wait that gave up. Status 1 then.
+wait_services() {
+    local limit="${1:-180}" start=${SECONDS} gw="" core="" am="" result=ok
+    while :; do
+        gw="$(http_code "${CASA_PORT}" /)"
+        core="$(http_code "${CASA_PORT}" /v1/sys/version/current)"
+        am="$(http_code "${CASA_PORT}" /v2/app_management/categories "$(jwt_header jwt)")"
+        if [ "${gw}" = 200 ] && [ "${core}" = 200 ] && [ "${am}" = 200 ]; then break; fi
+        if [ $((SECONDS - start)) -ge "${limit}" ]; then result=gave_up; break; fi
+        sleep 2
+    done
+    printf 'result %s\nwaited %d\nlimit %d\ngateway %s\ncore %s\nam %s\n' "${result}" $((SECONDS - start)) "${limit}" "${gw}" "${core}" "${am}" >"${OUT}/baseline-wait"
+    WAIT_SAID="the gateway, the core and AppManagement did not all answer 200 within ${limit} s of the baseline's start (the last answers: gateway ${gw}, core ${core}, AppManagement ${am}): the box was not ready after its reboot, and nothing about the hop can be measured from it"
+    [ "${result}" = ok ]
+}
+
 # ---- prepare --------------------------------------------------------------------------------------------------
 
 # update_old: apt-get update of the old release, as tolerant as the old release needs and no more: a changed Label, Origin or Codename is accepted (apt 2.2.4 and 2.6.1 take a
@@ -865,6 +884,9 @@ phase_baseline() {
     init_apt
     wait_docker 300 || abort "docker does not answer before the hop"
     settle settle-baseline
+    # the baseline asks the gateway, the core and AppManagement, and the box has just been rebooted (the rehearsal's, or the refresh's): they answer when they answer, and how long
+    # that took is written down; a box on which they never answer is not a baseline
+    wait_services "${SERVICES_WAIT:-180}" || abort "${WAIT_SAID}"
     # the reboots before this phase (the inhibitor's, the rehearsal's) left stopped the containers whose policy does not start them again by themselves: the hop's
     # reboot is where the report looks at that, so they are running when it begins, and what was started is written down
     : >"${OUT}/baseline-started"

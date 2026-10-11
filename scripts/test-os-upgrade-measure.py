@@ -371,6 +371,7 @@ def build(d, s, spec=None):
         put(d, "deps-%s.txt" % tag, "".join("%s %s\n" % (n, "none" if n == "wsdd" else "ii ") for n in CASA_DEPS))
     put(d, "settle-baseline", "2\n")
     put(d, "baseline-started", "p-no\np-on-failure\n")
+    put(d, "baseline-wait", "result ok\nwaited 6\nlimit 180\ngateway 200\ncore 200\nam 200\n")
     put(d, "settle-after", "9\n")
     put(d, "jwt-claims-jwt-before.json", json.dumps({"issued": T0 + S["baseline_start"] + 20, "claims": {"id": 1, "exp": int(T0 + S["baseline_start"] + 20 + 10800), "iss": "casaos"}}) + "\n")
     for n in ("gateway", "core", "am", "jwt", "internal"):
@@ -948,6 +949,23 @@ for name in ("gateway-before", "core-before", "am-before", "jwt-before"):
 invalid("Docker did not answer before the hop", L, "Docker did not answer before the hop", lambda d: replace(d, "docker-before.txt", "server 28.0.4", "server unavailable"))
 case("the containers that the reboots before the baseline left stopped are started again at the baseline, and the report says so", L, 0, must_have=["witnesses started again at the baseline (their policy does not start them after a reboot) | p-no, p-on-failure"])
 invalid("the baseline did not ask the core with the secret", L, "internal-before.code is missing", lambda d: remove(d, "internal-before.code"))
+# the first real run of the d11-12 leg: AppManagement answered 000 at the baseline, taken seconds after the rehearsal's reboot, while the poller saw it answer 200 a few seconds later
+WAIT_GAVE_UP = "result gave_up\nwaited 180\nlimit 180\ngateway 200\ncore 200\nam 000\n"
+WAIT_SAID = "the gateway, the core and AppManagement did not all answer 200 within 180 s of the baseline's start (the last answers: gateway 200, core 200, AppManagement 000)"
+case("the baseline waited for the gateway, the core and AppManagement to answer 200 and says how long: a row of the durations", L, 0,
+     must_have=["| baseline: waiting for the gateway, the core and AppManagement to answer 200 after the last reboot (the longest it will wait: 180 s) | 6 s (ok) |"], must_not_have=["INVALID"])
+case("the baseline waited 11 s for AppManagement: the wait is shown, and the run is a measured one", L, 0, mutate=lambda d: put(d, "baseline-wait", "result ok\nwaited 11\nlimit 180\ngateway 200\ncore 200\nam 200\n"),
+     must_have=["| 11 s (ok) |"], must_not_have=["INVALID"])
+invalid("the baseline left no record of how long it waited: nothing says that the services were up when it asked", L, "baseline-wait is missing or empty", lambda d: remove(d, "baseline-wait"))
+invalid("the baseline of the first real run (no record of a wait, AppManagement at 000): the codes are said and so is the missing wait", L, "am answered 000 before the hop (it has to answer 200 for the hop to be measured, and the baseline had waited for it: no record of the wait)",
+        seq(lambda d: remove(d, "baseline-wait"), lambda d: put(d, "am-before.code", "000\n")), has=["baseline-wait is missing or empty"])
+invalid("the baseline says something that is not ok or gave_up", L, "baseline-wait says 'maybe', not ok or gave_up", lambda d: put(d, "baseline-wait", "result maybe\nwaited 3\nlimit 180\n"))
+invalid("the baseline waited 180 s and AppManagement never answered 200: the real reason, with the last answers", L, WAIT_SAID, seq(lambda d: put(d, "baseline-wait", WAIT_GAVE_UP), lambda d: put(d, "am-before.code", "000\n")))
+case("a baseline that gave up is not three codes at 000: the generic 'answered 000 before the hop' is not said", L, 1, must_have=["INVALID RUN", WAIT_SAID], must_not_have=["answered 000 before the hop", "**GO**"],
+     mutate=seq(lambda d: put(d, "baseline-wait", WAIT_GAVE_UP), lambda d: put(d, "am-before.code", "000\n"), lambda d: put(d, "gateway-before.code", "000\n")))
+case("a baseline that gave up and aborted the phase says its reason once (the guest's own sentence), not twice", L, 1, must_have=["the guest stopped on its own account: " + WAIT_SAID],
+     mutate=seq(lambda d: put(d, "baseline-wait", WAIT_GAVE_UP), lambda d: put(d, "aborted", WAIT_SAID + "\n")), must_not_have=["- INVALID: " + WAIT_SAID])
+invalid("a wait that said ok while a code is not 200 is a contradiction in the evidence, and says what the wait saw", L, "it waited 6 s and saw 200 from all three", lambda d: put(d, "am-before.code", "000\n"))
 invalid("the containers were not running by themselves at the baseline", L, "the witnesses that start by themselves were not running at the baseline", lambda d: put(d, "settle-baseline", "never\n"))
 invalid("no docker-ce before", L, "docker-ce was not installed before the hop", lambda d: ledit(d, "dpkg-before.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")]))
 invalid("the control package is not there", L, "the control package osm-orphan was not installed before the hop", lambda d: ledit(d, "dpkg-before.tsv", lambda ls: [ln for ln in ls if not ln.startswith("osm-orphan\t")]))
@@ -1744,6 +1762,63 @@ exit 0
     check("hop-wait: a unit that failed is an ended unit (twice in a row), and what it left is collected", "status 0" in p.stdout and "hop_unit_end" in get(w, "out/timeline.tsv") and "hop_done" in get(w, "out/timeline.tsv"), (p.stdout, get(w, "out/timeline.tsv")))
     shutil.rmtree(w, ignore_errors=True)
 
+    # wait_services: the baseline waits for the gateway, the core and AppManagement to answer 200 after the reboot that came before it (180 s at the most), says how long it took and what it saw last
+    put(tool_dir, "svc.py", """import http.server, sys
+am_wait, counter = int(sys.argv[2]), sys.argv[3]
+n = [0]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code = 200
+        if self.path.startswith("/v2/app_management"):
+            n[0] += 1
+            open(counter, "w").write(str(n[0]))
+            if self.headers.get("Authorization") != "tok":
+                code = 401
+            elif n[0] <= am_wait:
+                code = 503
+        self.send_response(code); self.end_headers(); self.wfile.write(b"x")
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+""")
+
+    def services_run(am_wait, limit, up=True):
+        """wait_services against a server whose AppManagement path refuses its first am_wait calls (503) and answers 401 to a call with no token; up=False: nothing listens at all"""
+        port_ = free_port()
+        counter = os.path.join(tool_dir, "svc-count-%d" % port_)
+        srv_ = subprocess.Popen([sys.executable, os.path.join(tool_dir, "svc.py"), str(port_), str(am_wait), counter]) if up else None
+        time.sleep(1.2)
+        w_, env_ = world("debian")
+        put(w_, "auth/jwt", "Authorization: tok\n")
+        try:
+            p_ = in_world(w_, env_, 'AUTH_DIR="%s/auth"; CASA_PORT=%d; wait_services %d; echo "status $?"; echo "said: $WAIT_SAID"' % (posix(w_), port_, limit), timeout=90)
+        finally:
+            if srv_:
+                srv_.kill()
+        try:
+            asked = int(open(counter).read())
+        except (OSError, ValueError):
+            asked = 0
+        return w_, p_, kv_of(get(w_, "out/baseline-wait")), asked
+
+    def kv_of(text):
+        return dict(ln.split(" ", 1) for ln in text.splitlines() if " " in ln)
+
+    w, p, bw, asked = services_run(0, 60)
+    check("wait_services: services that already answer 200 are no wait: status 0, result ok, the three answers, one look at AppManagement, and the token of the dashboard is what it asks with",
+          "status 0" in p.stdout and bw == {"result": "ok", "waited": bw.get("waited"), "limit": "60", "gateway": "200", "core": "200", "am": "200"} and int(bw.get("waited", 99)) <= 1 and asked == 1, (p.stdout, p.stderr[-200:], bw, asked))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(3, 60)
+    check("wait_services: AppManagement that refuses its first three calls is waited for: it was asked four times, the answer is ok, and the file says 200 for all three", "status 0" in p.stdout and asked == 4 and bw.get("result") == "ok" and bw.get("am") == "200" and bw.get("gateway") == "200", (p.stdout, p.stderr[-200:], bw, asked))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(10 ** 9, 1)
+    check("wait_services: AppManagement that never answers 200 is waited for to the limit, and then status 1, result gave_up, the last answers and the real reason in WAIT_SAID",
+          "status 1" in p.stdout and bw.get("result") == "gave_up" and bw.get("limit") == "1" and int(bw.get("waited", 0)) >= 1 and bw.get("am") == "503" and bw.get("gateway") == "200" and bw.get("core") == "200" and asked >= 2
+          and "said: the gateway, the core and AppManagement did not all answer 200 within 1 s of the baseline's start (the last answers: gateway 200, core 200, AppManagement 503)" in p.stdout, (p.stdout, p.stderr[-200:], bw, asked))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(0, 1, up=False)
+    check("wait_services: nothing listening at all (000 three times) gives up the same way", "status 1" in p.stdout and bw.get("result") == "gave_up" and (bw.get("gateway"), bw.get("core"), bw.get("am")) == ("000", "000", "000"), (p.stdout, bw))
+    shutil.rmtree(w, ignore_errors=True)
+
     # GET /v1/sys/os, asked by the guest before the hop and after the reboot: through the gateway, with the loopback secret, and what is kept of the call
     SYSOS_BODY = '{"success":200,"message":"ok","data":{"id":"debian","version_id":"11","codename":"bullseye","known":true}}'
 
@@ -1846,6 +1921,9 @@ printf '%s' "${FAKE_CODE:-200}"
           bool(after_body) and not re.search(r"\bsystemctl\b[^\n]*\b(start|restart|reload|enable|stop|kill|reset-failed|try-restart|isolate)\b", after_body), re.findall(r"[^\n]*systemctl[^\n]*", after_body))
     baseline_body = function_body(guest_text, "phase_baseline") or ""
     check("the baseline starts again the two witnesses whose policy does not start them after the reboots that came before, and says which", "docker start" in baseline_body and "baseline-started" in baseline_body and "p-no p-on-failure" in baseline_body)
+    check("the baseline waits for the gateway, the core and AppManagement once the containers have settled and before it asks them for anything, and a wait that gave up ends the phase with the real reason",
+          0 < baseline_body.find("settle settle-baseline") < baseline_body.find("wait_services") < baseline_body.find("login jwt-before") and baseline_body.find("wait_services") < baseline_body.find("core-before.code")
+          and baseline_body.find("wait_services") < baseline_body.find("sys_os before") and 'wait_services "${SERVICES_WAIT:-180}" || abort "${WAIT_SAID}"' in baseline_body, baseline_body)
     sysos_body = function_body(guest_text, "sys_os") or ""
     check("sys_os asks the one route with the loopback secret (internal_header) and not with a token of the harness, and writes its files under the tag it is given",
           'internal_header' in sysos_body and "jwt_header" not in sysos_body and "/v1/sys/os" in sysos_body and "${OUT}/sysos-${tag}.json" in sysos_body and "-w '%{http_code}'" in sysos_body, sysos_body)
