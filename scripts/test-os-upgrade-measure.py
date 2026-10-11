@@ -74,10 +74,16 @@ CASA_UNITS = ["casaos.service", "casaos-gateway.service", "casaos-app-management
 OTHER_UNITS = ["ssh.service", "smbd.service", "nmbd.service", "docker.service", "containerd.service", "cron.service", "dbus.service", "systemd-logind.service", "osm-poller.service"]
 
 # the time of everything, in seconds from T0
-S = dict(prepare_start=0, refresh_start=60, refresh_done=240, prepare_done=900, inh1=920, inh1_back=1000, inh2=1030, inh2_back=1100, reboot_pre=1130, reboot_pre_back=1200,
-         baseline_start=1215, baseline_done=1260, probe_start=1262, probe_done=1700, hop_start=1710, hop_unit_end=3500, hop_done=3520, reboot_post=3530, reboot_post_back=3600,
-         after_start=3615, after_settled=3640, after_done=3680)
+S = dict(prepare_start=0, prepare_done=900, inh1=920, inh1_back=1000, inh2=1030, inh2_back=1100, reboot_pre=1130, reboot_pre_back=1200,
+         refresh_start=1215, refresh_update_done=1260, refresh_done=1400, reboot_refresh=1405, reboot_refresh_back=1460,
+         baseline_start=1480, baseline_done=1525, probe_start=1527, probe_done=1965, hop_start=1975, hop_unit_end=3765, hop_done=3785, reboot_post=3795, reboot_post_back=3865,
+         after_start=3880, after_settled=3905, after_done=3945)
 REBOOTS = [("inh1", "inh1_back"), ("inh2", "inh2_back"), ("reboot_pre", "reboot_pre_back"), ("reboot_post", "reboot_post_back")]
+
+
+def reboots(spec):
+    """the reboots of a leg, in time: the inhibitor's two, the rehearsal's, the one the refresh asks for (when it does), the one after the hop"""
+    return REBOOTS[:3] + ([("reboot_refresh", "reboot_refresh_back")] if (spec or {}).get("refresh_reboot") else []) + REBOOTS[3:]
 
 
 def put(d, name, text):
@@ -207,15 +213,37 @@ def build(d, s, spec=None):
     for tag, mounts in (("start", 25000), ("prepared", 21000), ("before", 20800), ("probed", 20500), ("hop", 14000), ("after", 14500)):
         put(d, "df-%s.txt" % tag, "Filesystem 1048576-blocks Used Available Capacity Mounted on\n/dev/vda1 30000 %d %d 30%% /\n/dev/vda1 30000 %d %d 30%% /boot\n/dev/vda1 30000 %d %d 30%% /var\n" % ((30000 - mounts, mounts) * 3))
     put(d, "df-steps.txt", "update / 20000\nfull / 14000\n")
+    # the refresh of the old release: what it upgraded, added and removed (the packages after it are the baseline's), and whether it asked for a reboot
+    stale = dict(package_set(s, "before", spec))
+    for i in range(5, 10):
+        stale["libfoo%d" % i] = "0.%d" % i
+    stale.pop("libfoo20")
+    stale["oldpkg"] = "1.0"
+    if spec.get("refresh_reboot"):
+        stale["linux-image-cloud-amd64"] = "0~" + stale["linux-image-cloud-amd64"]
+    put(d, "dpkg-refresh-before.tsv", "".join("%s\t%s\tii \n" % (n, v) for n, v in sorted(stale.items())))
+    put(d, "dpkg-refresh-after.tsv", "".join("%s\t%s\tii \n" % (n, v) for n, v in sorted(package_set(s, "before", spec).items())))
+    put(d, "refresh-update.log", "Hit:1 http://deb.debian.org/debian %s InRelease\nReading package lists...\n" % s["old_code"])
+    put(d, "refresh-upgrade.log", "Reading package lists...\nThe following packages will be upgraded:\n  libfoo5 libfoo6 libfoo7 libfoo8 libfoo9\n" + apt_summary(5, 1, 1, 0, 12, 3))
+    put(d, "refresh-reboot.txt", "yes kernel (1 linux-image package(s) new or changed)\n" if spec.get("refresh_reboot") else "no\n")
+    put(d, "sources-paused-refresh.txt", "/etc/apt/sources.list.d/docker.list\n")
+    rec(d, "upgradable-refresh", "Listing...\n")
+    for tag, req in (("refresh-before", "no"), ("refresh-after", "no")):
+        put(d, "kernel-%s.txt" % tag, "uname %s\nboot-file /boot/vmlinuz-%s 8000000\nboot-total 70000000\ndf-boot 900 650 250 /boot\nimages linux-image-cloud-amd64=%s\nreboot-required %s\n" % (
+            s["kernel"][0], s["kernel"][0], ("0~" if tag == "refresh-before" and spec.get("refresh_reboot") else "") + s["kernel"][0], req))
     # the timeline
     items = []
 
     def mark(t, name):
         items.append((t, "#\t%.6f\t%s" % (T0 + t, name)))
-    for name, key in (("prepare_start", "prepare_start"), ("refresh_start", "refresh_start"), ("refresh_done", "refresh_done"), ("prepare_done", "prepare_done"), ("inhibit_reboot_start", "inh1"),
-                      ("inhibit_force_start", "inh2"), ("reboot_pre_start", "reboot_pre"), ("baseline_start", "baseline_start"), ("baseline_done", "baseline_done"), ("probe_start", "probe_start"), ("probe_done", "probe_done")):
+    rb = reboots(spec)
+    for name, key in (("prepare_start", "prepare_start"), ("prepare_done", "prepare_done"), ("inhibit_reboot_start", "inh1"), ("inhibit_force_start", "inh2"), ("reboot_pre_start", "reboot_pre"),
+                      ("refresh_start", "refresh_start"), ("refresh_update_done", "refresh_update_done"), ("refresh_done", "refresh_done"), ("baseline_start", "baseline_start"), ("baseline_done", "baseline_done"),
+                      ("probe_start", "probe_start"), ("probe_done", "probe_done")):
         mark(S[key], name)
-    for key, back in REBOOTS[:3]:
+    if spec.get("refresh_reboot"):
+        mark(S["reboot_refresh"], "reboot_refresh_start")
+    for key, back in rb[:-1]:
         mark(S[back] + 12, "boot_changed aaa bbb")
     if skipped:
         mark(S["hop_start"], "hop_skipped")
@@ -226,7 +254,7 @@ def build(d, s, spec=None):
             mark(S[{"reboot_post_start": "reboot_post"}.get(name, name)], name)
         mark(S["reboot_post_back"] + 15, "boot_changed ccc ddd")
     # a sample a second, but where the box is down
-    down = [(S[a] + 3, S[b]) for a, b in REBOOTS] if not skipped else [(S[a] + 3, S[b]) for a, b in REBOOTS[:3]]
+    down = [(S[a] + 3, S[b]) for a, b in rb] if not skipped else [(S[a] + 3, S[b]) for a, b in rb[:-1]]
     end = S["after_done"] if not skipped else S["hop_start"] + 30
     names = ",".join(sorted(CONTAINERS))
     t = 0
@@ -235,7 +263,7 @@ def build(d, s, spec=None):
         if any(a <= t < b for a, b in down):
             continue
         row = dict(docker=s["docker"], ssh="up", smb="up", gw="200", core="200", am="200", ami="401", web="200", host="200", names=names)
-        for _, back in REBOOTS:
+        for _, back in rb:
             r = t - S[back]
             if 0 <= r < 30:       # the box just booted: what answers first
                 row.update(docker="-" if r < 4 else s["docker"], ssh="up" if r >= 2 else "down", smb="up" if r >= 6 else "down", gw="200" if r >= 18 else "000", core="200" if r >= 20 else "000",
@@ -305,7 +333,7 @@ def build(d, s, spec=None):
     put(d, "analyze.txt", "Startup finished in 3.2s (kernel) + 10.1s (userspace) = 13.3s\n")
     # witnesses: an acknowledged write every 2 s, none while the box is down
     acks, t = [], 905.0
-    gaps = [(S[a] + 2, S[b] + 35) for a, b in REBOOTS]
+    gaps = [(S[a] + 2, S[b] + 35) for a, b in rb]
     while t < S["after_done"]:
         t += 2
         if not any(a <= t < b for a, b in gaps) and not (skipped and t > S["hop_start"] + 30):
@@ -524,6 +552,14 @@ for leg in ("u22-24", "u24-26"):
          must_have=["NOT_OFFERED", "neither a pass nor a failure", "No new release found"], must_not_have=["INVALID", "**GO**"],
          rows={"The Ubuntu tool can be driven from a unit, and what it does to Docker": "NOT_OFFERED"})
 case("the report is ASCII (a runner's console may not be UTF-8)", "d11-12", 0, must_not_have=[], mutate=None)
+for leg in ("d11-12", "u24-26"):
+    case("%s: the refresh of the old release is reported on its own: its durations, its package lists, and that it needed no reboot" % leg, leg, 0,
+         must_have=["## The refresh of the old release", "5 upgraded, 1 added, 1 removed", "Upgraded: libfoo5, libfoo6, libfoo7, libfoo8, libfoo9.", "Added: libfoo20.", "Removed: oldpkg.", "  of which apt update",
+                    "  of which the full upgrade", "a reboot is not needed", "Still upgradable after the refresh: nothing"], must_not_have=["INVALID", "the reboot the refresh asked for"])
+case("d12-13: a refresh that changes the kernel asks for a reboot, the guest makes it, and the report says so", "d12-13", 0, spec={"refresh_reboot": True},
+     must_have=["a reboot is needed: kernel (1 linux-image package(s) new or changed)", "the reboot the refresh asked for"], must_not_have=["INVALID"], rows={Q_CORE: "GO"})
+case("the refresh leaves packages upgradable: they are said", "d11-12", 0, must_have=["Still upgradable after the refresh: 1 (libfoo9)"],
+     mutate=lambda d: rec(d, "upgradable-refresh", "Listing...\nlibfoo9/stable 2.9 amd64 [upgradable from: 1.9]\n"))
 
 # ---- the rows flip ---------------------------------------------------------------------------------------------------------------------
 
@@ -665,10 +701,16 @@ invalid("an empty directory proves nothing", L, "INVALID RUN", None, empty=True)
 invalid("the guest said it could not go on", L, "the guest stopped on its own account: NOT PROVEN: Docker's repository has no containerd.io 1.7", lambda d: put(d, "aborted", "NOT PROVEN: Docker's repository has no containerd.io 1.7 to start from\n"))
 invalid("evidence of another leg", L, "the evidence is of leg 'd12-13', not 'd11-12'", lambda d: put(d, "leg", "d12-13\n"))
 for leg in ("d11-12", "u22-24"):
-    for m in ("prepare_start", "refresh_start", "refresh_done", "prepare_done", "inhibit_reboot_start", "inhibit_force_start", "reboot_pre_start", "baseline_start", "baseline_done", "probe_start", "probe_done",
-              "hop_unit_end", "hop_done", "reboot_post_start", "after_start", "after_settled", "after_done"):
+    for m in ("prepare_start", "prepare_done", "inhibit_reboot_start", "inhibit_force_start", "reboot_pre_start", "refresh_start", "refresh_update_done", "refresh_done", "baseline_start", "baseline_done",
+              "probe_start", "probe_done", "hop_unit_end", "hop_done", "reboot_post_start", "after_start", "after_settled", "after_done"):
         invalid("%s: the marker %s is missing" % (leg, m), leg, "marker %s is missing" % m, drop_marker(m))
 invalid("neither hop_start nor hop_skipped", L, "neither hop_start nor hop_skipped is in the timeline", drop_marker("hop_start"))
+for name in ("refresh-update.log", "refresh-upgrade.log", "dpkg-refresh-before.tsv", "dpkg-refresh-after.tsv", "kernel-refresh-before.txt", "kernel-refresh-after.txt", "refresh-reboot.txt"):
+    invalid("a missing %s: the refresh left no evidence" % name, L, "%s is missing or empty" % name, lambda d, n=name: remove(d, n))
+invalid("the refresh asked for a reboot and the guest did not make it", "d12-13", "the refresh asked for a reboot (yes kernel (1 linux-image package(s) new or changed)) and the guest did not make it", drop_marker("reboot_refresh_start"),
+        spec={"refresh_reboot": True})
+invalid("the refresh asked for a reboot and the box never came back on another boot", "d12-13", "the guest did not reboot after the refresh asked for it",
+        lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if not (ln.startswith("#") and "boot_changed" in ln and T0 + S["reboot_refresh"] < float(ln.split("\t")[1]) <= T0 + S["baseline_start"])]), spec={"refresh_reboot": True})
 invalid("hop_timeout: the guest gave up waiting for the unit", L, "hop_timeout", lambda d: ledit(d, "timeline.tsv", lambda ls: ls + ["#\t%.6f\thop_timeout" % (T0 + S["hop_unit_end"])]))
 invalid("no reboot after the hop", L, "the guest did not reboot after the hop", no_boot_change_after("reboot_post"))
 invalid("no reboot before the hop", L, "the guest did not reboot before the hop", lambda d: ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if not (ln.startswith("#") and "boot_changed" in ln and float(ln.split("\t")[1]) < T0 + S["baseline_start"] + 1)]))
@@ -1225,12 +1267,73 @@ esac
     check("hop-wait gives up at its limit with status 3 and says so, and the unit is not touched", "status 3" in p.stdout and "hop_timeout" in get(w, "out/timeline.tsv"), p.stdout)
     shutil.rmtree(w, ignore_errors=True)
 
+    # the refresh: apt update, a full upgrade of the current release with Docker's source paused, its package lists, and the reboot it asks for
+    def refresh_world(**extra):
+        w_, env_ = world("debian")
+        fake(os.path.join(w_, "bin"), "apt-get", r"""echo "apt-get $*" >>"$FAKE_LOG"
+echo "sources: $(ls "$APT_DIR/sources.list.d" | tr '\n' ' ')" >>"$FAKE_LOG"
+case "$*" in *" update") if [ -n "$FAKE_UPDATE_FAILS" ]; then echo "E: Failed to fetch"; exit 100; fi ;; esac
+case "$*" in *"dist-upgrade"*) if [ -n "$FAKE_UPGRADE_FAILS" ]; then echo "E: dpkg failed"; exit 100; fi ;; esac
+echo "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."
+exit 0
+""")
+        return w_, dict(env_, **extra)
+
+    w, env = refresh_world()
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    c = calls(w)
+    apt_c = [x for x in c if x.startswith("apt-get ")]
+    srcs = [x for x in c if x.startswith("sources:")]
+    tl = get(w, "out/timeline.tsv")
+    check("refresh: apt update, then a full upgrade of the current release with the design's options and the phased updates, in this order, and nothing else of apt, and no reboot",
+          "status 0" in p.stdout and len(apt_c) == 2 and apt_c[0].endswith(" update") and " dist-upgrade " in apt_c[1] + " " and "Always-Include-Phased-Updates=true" in apt_c[1] and "--force-confold" in apt_c[1]
+          and not any(bad in " ".join(c) for bad in ("--no-install-recommends", "autoremove", "reboot", " -s ")), (p.stdout, p.stderr[-300:], c))
+    check("refresh: Docker's source is paused while apt runs and has its name back afterwards, and what was paused is written down apart from the hop's list",
+          len(srcs) == 2 and all("docker.list.casaos-paused" in x for x in srcs) and os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list")) and not os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused"))
+          and "docker.list" in get(w, "out/sources-paused-refresh.txt") and not os.path.exists(os.path.join(w, "out/sources-paused.txt")), (srcs, os.listdir(os.path.join(w, "apt/sources.list.d"))))
+    check("refresh: its markers in order, its logs, the packages before and after, and its answer about a reboot (none: the kernel is the same and nothing asks for one)",
+          "refresh_start" in tl and tl.index("refresh_start") < tl.index("refresh_update_done") < tl.index("refresh_done") and all(os.path.exists(os.path.join(w, "out", n)) for n in
+          ("refresh-update.log", "refresh-upgrade.log", "dpkg-refresh-before.tsv", "dpkg-refresh-after.tsv", "kernel-refresh-before.txt", "kernel-refresh-after.txt", "upgradable-refresh.txt")) and get(w, "out/refresh-reboot.txt").strip() == "no", (tl, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world()
+    fake(os.path.join(w, "bin"), "dpkg-query", r"""if [ "$#" -le 2 ]; then n=$(cat "$FAKE_STATE/dq" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$FAKE_STATE/dq"; printf 'bash\t5.1\tii \nlinux-image-cloud-amd64\t6.1.%s\tii \n' "$n"; exit 0; fi
+exit 0
+""")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: a kernel that is new or changed asks for a reboot", get(w, "out/refresh-reboot.txt").strip() == "yes kernel (1 linux-image package(s) new or changed)", (p.stdout, get(w, "out/refresh-reboot.txt")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world()
+    put(w, "reboot-required", "*** System restart required ***\n")
+    p = in_world(w, env | {"REBOOT_REQUIRED": posix(w) + "/reboot-required"}, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: a reboot-required file asks for a reboot", get(w, "out/refresh-reboot.txt").strip() == "yes reboot-required", (p.stdout, get(w, "out/refresh-reboot.txt")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world(FAKE_UPDATE_FAILS="1")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: an apt update that fails ends the run (INVALID RUN in the report), before any upgrade", "apt-get update of the old release fails before its refresh" in get(w, "out/aborted") and not [x for x in calls(w) if "dist-upgrade" in x]
+          and "refresh_update_done" not in get(w, "out/timeline.tsv") and "refresh_done" not in get(w, "out/timeline.tsv"), (get(w, "out/aborted"), calls(w)))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world(FAKE_UPGRADE_FAILS="1")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=90)
+    check("refresh: a full upgrade that fails ends the run, and says which log has the reason", "could not be brought to its last state" in get(w, "out/aborted") and "refresh_done" not in get(w, "out/timeline.tsv")
+          and "E: dpkg failed" in get(w, "out/refresh-upgrade.log"), (get(w, "out/aborted"), get(w, "out/refresh-upgrade.log")))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = refresh_world()
+    put(w, "out/aborted", "boom\n")
+    p = in_world(w, env, 'phase_refresh; echo "status $?"', timeout=60)
+    check("refresh: an earlier phase that aborted ends the run here, quietly", p.returncode == 0 and "skipped refresh" in p.stdout and not [x for x in calls(w) if x.startswith("apt-get")], (p.stdout, calls(w)))
+    shutil.rmtree(w, ignore_errors=True)
+
     # the reboot, the inhibitor, a hop that was skipped
     w, env = world("debian")
     p = in_world(w, env, '(phase_reboot pre); echo "status $?"')
     c = calls(w)
     check("reboot pre: the guest asks for its own reboot with a timer, so that the ssh session ends first, and says which boot it was", "status 0" in p.stdout and any(x.startswith("systemd-run") and "--on-active=3" in x and "systemctl reboot" in x for x in c)
           and "boot_id boot-1" in get(w, "out/reboot-pre.txt") and "method timer" in get(w, "out/reboot-pre.txt"), (p.stdout, c))
+    p = in_world(w, env, '(phase_reboot refresh); echo "status $?"')
+    check("reboot refresh: a reboot of its own, by a timer, with its marker and its boot id", "status 0" in p.stdout and any("--unit=osm-reboot-refresh" in x for x in calls(w)) and "reboot_refresh_start" in get(w, "out/timeline.tsv")
+          and "boot_id" in get(w, "out/reboot-refresh.txt"), (p.stdout, calls(w)))
+    p = in_world(w, env, '(phase_reboot sideways) 2>&1; echo "status $?"')
+    check("reboot: another word than pre, refresh or post is refused", "status 2" in p.stdout, p.stdout)
     put(w, "out/hop-skipped", "not_offered\n")
     p = in_world(w, env, '(phase_reboot post); echo "status $?"')
     check("reboot post: status 7 when the hop was skipped, and nothing is rebooted", "status 7" in p.stdout and not [x for x in calls(w) if "--unit=osm-reboot-post" in x], (p.stdout, calls(w)))
@@ -1275,6 +1378,12 @@ esac
     baseline_body = function_body(guest_text, "phase_baseline") or ""
     check("the baseline starts again the two witnesses whose policy does not start them after the reboots that came before, and says which", "docker start" in baseline_body and "baseline-started" in baseline_body and "p-no p-on-failure" in baseline_body)
     check("the container on the host network is served a file: its port answers 200", "index.html" in (function_body(guest_text, "start_things") or ""))
+    refresh_body = function_body(guest_text, "phase_refresh") or ""
+    check("prepare does not upgrade the old release any more (the refresh phase does, after Docker and ReCasaOS are on it, as the product's refresh step will)",
+          "dist-upgrade" not in (function_body(guest_text, "phase_prepare") or "dist-upgrade") and "dist-upgrade" in refresh_body)
+    check("the refresh pauses Docker's source for its own apt and gives it back, upgrades with the design's apt options, and never reboots (the runner does)",
+          all(k in refresh_body for k in ("pause_sources sources-paused-refresh.txt", "resume_sources", "dist-upgrade", "Always-Include-Phased-Updates=true", "${CONF[@]}", "refresh_update_done"))
+          and refresh_body.find("pause_sources") < refresh_body.find("dist-upgrade") < refresh_body.find("resume_sources") and not re.search(r"systemctl[^\n]*\b(reboot|poweroff|halt|kexec)\b|\b(shutdown|poweroff)\s", re.sub(r"#[^\n]*", "", refresh_body)), refresh_body)
     prepare_body = function_body(guest_text, "phase_prepare") or ""
     check("prepare says at once that its bash has no clock of its own or no /dev/tcp, instead of measuring nothing", "EPOCHREALTIME" in prepare_body and "tcp_open 22" in prepare_body and prepare_body.find("tcp_open 22") < prepare_body.find("marker prepare_start"))
     check("the after phase reads the units before it asks anything", after_body.find("units_dump boot") != -1 and after_body.find("units_dump boot") < after_body.find("http_code") and after_body.find("units_dump boot") < after_body.find("wait_docker"))
@@ -1308,6 +1417,7 @@ case "$cmd" in
         rm -f "$S/down"; echo "boot-B" >"$S/boot"
     fi
     cat "$S/boot"; exit 0 ;;
+*"refresh-reboot.txt"*) case "$FAKE_REFRESH" in yes) exit 0 ;; none) exit 2 ;; *) exit 1 ;; esac ;;
 *"os-upgrade-measure.sh reboot "*) [ "$FAKE_SKIP" = 1 ] && exit 7; echo 3 >"$S/down"; exit 0 ;;
 *"os-upgrade-measure.sh inhibit "*) case "$FAKE_INHIBIT" in down) echo 3 >"$S/down"; exit 255 ;; *) exit 0 ;; esac ;;
 *"os-upgrade-measure.sh hop-wait"*)
@@ -1330,6 +1440,13 @@ esac
     check("runner: the reboot is asked for, and the runner waits for another boot id (the guest does not answer for a while)", "status 0" in p.stdout and any("reboot pre" in x for x in get(r, "calls").splitlines()) and get(r, "state/boot").strip() == "boot-B", (p.stdout, p.stderr[-200:]))
     r, p = runner('runner_reboot post; echo "status $?"', {"FAKE_SKIP": "1"})
     check("runner: a guest that says the hop was skipped (status 7) is not waited for", "status 0" in p.stdout and "no reboot" in p.stdout and get(r, "state/boot").strip() == "boot-A", p.stdout)
+    r, p = runner('runner_refresh; echo "status $?"', {"FAKE_REFRESH": "yes"})
+    check("runner: the refresh is run, and when it asks for a reboot the guest reboots and the runner waits for another boot id", "status 0" in p.stdout and any(x.endswith("os-upgrade-measure.sh refresh") for x in get(r, "calls").splitlines())
+          and any("os-upgrade-measure.sh reboot refresh" in x for x in get(r, "calls").splitlines()) and get(r, "state/boot").strip() == "boot-B", (p.stdout, get(r, "calls")))
+    r, p = runner('runner_refresh; echo "status $?"', {"FAKE_REFRESH": "no"})
+    check("runner: a refresh that asks for no reboot is not followed by one", "status 0" in p.stdout and "needs no reboot" in p.stdout and not any("reboot refresh" in x for x in get(r, "calls").splitlines()) and get(r, "state/boot").strip() == "boot-A", (p.stdout, get(r, "calls")))
+    r, p = runner('runner_refresh; echo "status $?"', {"FAKE_REFRESH": "none"})
+    check("runner: a refresh that left no answer (it aborted) ends the step, and nothing is rebooted", "status 2" in p.stdout and not any("reboot refresh" in x for x in get(r, "calls").splitlines()), (p.stdout, get(r, "calls")))
     r, p = runner('runner_inhibit reboot; echo "status $?"', {"FAKE_INHIBIT": "down"})
     check("runner: a guest that went down under the inhibitor (ssh ends with 255) is waited for", "status 0" in p.stdout and get(r, "state/boot").strip() == "boot-B", p.stdout)
     r, p = runner('runner_inhibit force; echo "status $?"', {"FAKE_INHIBIT": "stays"})
@@ -1396,7 +1513,7 @@ wf = workflow_text()
 wf_cells = workflow_matrix(wf)
 wf_runs = workflow_runs(wf)
 STEPS = ["The measurement can say no", "Fetch the published installer", "The distribution's cloud image", "Boot it", "Prepare the old release", "Root's reboot under an inhibitor", "Root's forced reboot under an inhibitor",
-         "Reboot before the hop", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot", "Report", "What the machine says when it is not well"]
+         "Reboot before the hop", "Refresh the old release", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot", "Report", "What the machine says when it is not well"]
 check("the workflow has the steps of a leg in the order of the work", list(wf_runs) == STEPS, list(wf_runs))
 check("the workflow asks for no permission but to read the repository", re.search(r"^permissions:\n  contents: read\n", wf, re.M) is not None and ": write" not in wf)
 check("the workflow is dispatched by hand only, never by a push", re.search(r"^on:\n  workflow_dispatch:", wf, re.M) is not None and "push:" not in wf and "schedule:" not in wf and "pull_request" not in wf)
@@ -1437,11 +1554,12 @@ check("the ubuntu variant is a choice of two and reaches the guest through env",
 check("the steps that reboot the guest or wait for the unit have the time they need, and the hop has the most", "timeout-minutes: 90" in wf and wf.count("timeout-minutes: ") >= 8)
 check("the guest is told it is disposable, and which leg it is", "MEASURE_DISPOSABLE=1" in wf_runs["Prepare the old release"] and "LEG='${LEG}'" in wf_runs["Prepare the old release"])
 check("the guest script and the installer are copied to the guest after it booted, and the installer's checksum is verified", "scp -F ssh_config published/install.sh scripts/os-upgrade-measure.sh vm:" in wf_runs["Boot it"] and "sha256sum --check install.sh.sha256" in wf_runs["Fetch the published installer"])
-check("the run steps use the runner's functions of the guest script", all(("source scripts/os-upgrade-measure.sh" in wf_runs[n]) for n in ("Root's reboot under an inhibitor", "Root's forced reboot under an inhibitor", "Reboot before the hop", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot")))
+check("the run steps use the runner's functions of the guest script", all(("source scripts/os-upgrade-measure.sh" in wf_runs[n]) for n in ("Root's reboot under an inhibitor", "Root's forced reboot under an inhibitor", "Reboot before the hop", "Refresh the old release", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot")))
 CALLS = {"Root's reboot under an inhibitor": "runner_inhibit reboot", "Root's forced reboot under an inhibitor": "runner_inhibit force", "Reboot before the hop": "runner_reboot pre",
-         "Baseline and read-only probes": "runner_guest baseline\nrunner_guest probe", "The hop": "runner_hop", "Reboot after the hop": "runner_reboot post", "After the reboot": "runner_guest after"}
+         "Refresh the old release": "runner_refresh", "Baseline and read-only probes": "runner_guest baseline\nrunner_guest probe", "The hop": "runner_hop", "Reboot after the hop": "runner_reboot post", "After the reboot": "runner_guest after"}
 check("each step that drives the guest makes the call of its name, and nothing else", all(wf_runs[n].rstrip("\n").endswith(call) and wf_runs[n].count("runner_") == call.count("runner_") for n, call in CALLS.items()), {n: wf_runs[n] for n, c_ in CALLS.items() if not wf_runs[n].rstrip("\n").endswith(c_)})
-check("the guest steps come in the order: inhibitor, inhibitor with --force, reboot, baseline and probes, hop, reboot, after", [n for n in wf_runs if n in STEPS[5:12]] == STEPS[5:12])
+check("the guest steps come in the order: inhibitor, inhibitor with --force, reboot, refresh, baseline and probes, hop, reboot, after", [n for n in wf_runs if n in STEPS[5:13]] == STEPS[5:13])
+check("the refresh comes after the rehearsal reboot and right before the baseline, so that little can become upgradable before the hop", STEPS.index("Reboot before the hop") + 1 == STEPS.index("Refresh the old release") == STEPS.index("Baseline and read-only probes") - 1)
 check("NOT_OFFERED stays green and says so with a warning annotation", "::warning title=NOT_OFFERED" in wf_runs["Report"])
 
 if have_bash():

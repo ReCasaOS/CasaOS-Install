@@ -333,7 +333,7 @@ if not rows:
 
 skipped = has("hop-skipped")
 ran_hop = mt("hop_start") is not None
-base_markers = ["prepare_start", "refresh_start", "refresh_done", "prepare_done", "inhibit_reboot_start", "inhibit_force_start", "reboot_pre_start",
+base_markers = ["prepare_start", "prepare_done", "inhibit_reboot_start", "inhibit_force_start", "reboot_pre_start", "refresh_start", "refresh_update_done", "refresh_done",
                 "baseline_start", "baseline_done", "probe_start", "probe_done"]
 for m in base_markers:
     if mt(m) is None:
@@ -348,8 +348,16 @@ if ran_hop:
             invalid("marker %s is missing: the run did not get that far (a phase of the guest did not run)" % m)
     if mt("reboot_post_start") is not None and mt("after_start") is not None and not [b for b in markers.get("boot_changed", []) if mt("reboot_post_start") < b[0] <= mt("after_start")]:
         invalid("the guest did not reboot after the hop (no boot_changed between reboot_post_start and after_start)")
-if mt("reboot_pre_start") is not None and mt("baseline_start") is not None and not [b for b in markers.get("boot_changed", []) if mt("reboot_pre_start") < b[0] <= mt("baseline_start")]:
-    invalid("the guest did not reboot before the hop (no boot_changed between reboot_pre_start and baseline_start)")
+if mt("reboot_pre_start") is not None and mt("refresh_start") is not None and not [b for b in markers.get("boot_changed", []) if mt("reboot_pre_start") < b[0] <= mt("refresh_start")]:
+    invalid("the guest did not reboot before the hop (no boot_changed between reboot_pre_start and refresh_start)")
+# the refresh says whether it needs a reboot (a new kernel, a reboot-required file), and the runner makes it before the baseline
+refresh_reboot = read("refresh-reboot.txt").strip()
+if refresh_reboot.startswith("yes") and mt("refresh_done") is not None:
+    t_rr = mt("reboot_refresh_start")
+    if t_rr is None:
+        invalid("the refresh asked for a reboot (%s) and the guest did not make it (no reboot_refresh_start)" % refresh_reboot)
+    elif mt("baseline_start") is not None and not [b for b in markers.get("boot_changed", []) if t_rr < b[0] <= mt("baseline_start")]:
+        invalid("the guest did not reboot after the refresh asked for it (no boot_changed between reboot_refresh_start and baseline_start)")
 if "hop_timeout" in markers:
     invalid("the guest stopped waiting for the unit of the hop (hop_timeout)")
 
@@ -404,7 +412,7 @@ if no_space:
     invalid("the guest ran out of disk space (%s): the hop was measured on a disk that was too small" % ", ".join(no_space[:4]))
 
 # the poller: no holes but the reboots
-reboot_marks = [t for n in ("reboot_pre_start", "reboot_post_start", "inhibit_reboot_start", "inhibit_force_start") for t, _ in markers.get(n, [])]
+reboot_marks = [t for n in ("reboot_pre_start", "reboot_refresh_start", "reboot_post_start", "inhibit_reboot_start", "inhibit_force_start") for t, _ in markers.get(n, [])]
 holes = []
 for a, b in zip(rows, rows[1:]):
     if b["t"] - a["t"] > HOLE and not any(t - 5 <= a["t"] <= t + REBOOT_GRACE for t in reboot_marks):
@@ -521,7 +529,10 @@ if ran_hop:
             if not has(name):
                 invalid("%s is missing: the unit did not ask Canonical's tool again" % name)
 
-for name, why in (("inhibit-reboot.txt", "the first probe of the inhibitor"), ("inhibit-force.txt", "the second probe of the inhibitor"), ("box-facts", "the tools of the box"),
+for name, why in (("refresh-update.log", "apt-get update of the refresh"), ("refresh-upgrade.log", "the full upgrade of the refresh"), ("dpkg-refresh-before.tsv", "the packages before the refresh"),
+                  ("dpkg-refresh-after.tsv", "the packages after the refresh"), ("kernel-refresh-before.txt", "the kernel before the refresh"), ("kernel-refresh-after.txt", "the kernel after the refresh"),
+                  ("refresh-reboot.txt", "what the refresh decided about a reboot"),
+                  ("inhibit-reboot.txt", "the first probe of the inhibitor"), ("inhibit-force.txt", "the second probe of the inhibitor"), ("box-facts", "the tools of the box"),
                   ("df-start.txt", "the disk at the start"), ("df-before.txt", "the disk before the hop"), ("units-before.tsv", "the services before"),
                   ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("dpkg-before.tsv", "the packages before"), ("docker-before.txt", "Docker before")):
     need(name, why)
@@ -619,14 +630,50 @@ P("## Durations")
 P("")
 P("| phase | duration |")
 P("|---|---|")
-show_row("prepare (the old release brought to its last state, Docker, ReCasaOS, the witnesses)", fmt_s(span("prepare_start", "prepare_done")))
-show_row("  of which the old release's own dist-upgrade (the dashboard's step 'update the current release')", fmt_s(span("refresh_start", "refresh_done")))
+show_row("prepare (Docker, ReCasaOS and the witnesses on the old release)", fmt_s(span("prepare_start", "prepare_done")))
+show_row("refresh of the old release (the dashboard's step 'update the current release': apt update, a full upgrade, Docker's source paused)", fmt_s(span("refresh_start", "refresh_done")))
+show_row("  of which apt update", fmt_s(span("refresh_start", "refresh_update_done")))
+show_row("  of which the full upgrade", fmt_s(span("refresh_update_done", "refresh_done")))
+if mt("reboot_refresh_start") is not None:
+    back = next((b[0] for b in markers.get("boot_changed", []) if b[0] > mt("reboot_refresh_start")), None)
+    show_row("  the reboot the refresh asked for (the request to the next phase seeing the new boot)", fmt_s(None if back is None else back - mt("reboot_refresh_start")))
 show_row("probes of the old release (sandbox, releaseinfo-change, or Canonical's metadata)", fmt_s(span("probe_start", "probe_done")))
 if ran_hop:
     show_row("the unit (the hop, without the reboot)", fmt_s(span("hop_start", "hop_unit_end")))
     for name, s in steps.items():
         if s["end"] is not None:
             show_row("  step %s (exit %s)" % (name, s["rc"]), fmt_s(s["end"] - s["start"]))
+P("")
+
+# ---- the refresh of the old release -------------------------------------------------------------------------------------------
+
+P("## The refresh of the old release")
+P("")
+P("As the product's refresh step will do it before any hop (the release notes of the next release and the Ubuntu launcher want the box up to date): `apt-get update`, then a full upgrade of the "
+  "CURRENT release with Docker's source paused, after the rehearsal reboot and just before the baseline.")
+P("")
+rf_before, rf_after = load_dpkg("refresh-before"), load_dpkg("refresh-after")
+if rf_before and rf_after:
+    rf_added = sorted(set(rf_after) - set(rf_before))
+    rf_removed = sorted(set(rf_before) - set(rf_after))
+    rf_up = sorted(n for n in set(rf_before) & set(rf_after) if rf_before[n] != rf_after[n])
+    rf_apt = apt_parse(read("refresh-upgrade.log"))
+    P("dpkg's own count, before and after the refresh: %d upgraded, %d added, %d removed (of %d installed before, %d after). apt's own summary: %s; need to get %s; after this operation %s." % (
+        len(rf_up), len(rf_added), len(rf_removed), len(rf_before), len(rf_after), ("%d upgraded, %d new, %d to remove, %d not upgraded" % rf_apt["counts"]) if rf_apt["counts"] else "no summary line",
+        fmt_bytes(rf_apt["need"]), fmt_bytes(rf_apt["disk"])))
+    P("")
+    for label, names_ in (("Upgraded", rf_up), ("Added", rf_added), ("Removed", rf_removed)):
+        P("%s: %s." % (label, (", ".join(names_[:40]) + (" ... (%d more)" % (len(names_) - 40) if len(names_) > 40 else "")) or "none"))
+        P("")
+    fact("the refresh of the old release", "%d upgraded, %d added, %d removed, in %s; a reboot is %s" % (len(rf_up), len(rf_added), len(rf_removed), fmt_s(span("refresh_start", "refresh_done")),
+                                                                                                         "needed: " + refresh_reboot[4:].strip() if refresh_reboot.startswith("yes") else "not needed"))
+rk_before, rk_after = load_boot("refresh-before"), load_boot("refresh-after")
+P("Kernel images before the refresh `%s`, after it `%s`; the system asks for a reboot after it: %s. The refresh's own answer about a reboot: `%s`." % (
+    rk_before["images"], rk_after["images"], rk_after["reboot"] or "?", refresh_reboot or "none"))
+P("")
+still = [ln.split("/")[0] for ln in read("upgradable-refresh.txt").splitlines() if "[upgradable from" in ln]
+P("Still upgradable after the refresh: %s." % (("%d (%s)" % (len(still), ", ".join(still[:20]))) if still else "nothing"))
+fact("packages still upgradable after the refresh", ", ".join(still[:20]) or "none")
 P("")
 
 # ---- the sandbox (Debian) -----------------------------------------------------------------------------------------------------

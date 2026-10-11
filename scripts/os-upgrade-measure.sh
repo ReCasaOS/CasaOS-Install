@@ -18,11 +18,14 @@
 #   systemd, for the two long-lived pieces (`poller`, the sampler of the witnesses, and `hop-unit`, the hop itself);
 #   the CI runner, which sources this file and calls the runner_* functions (the guest has to be waited for while it reboots).
 #
-#   prepare       the old release is brought to its last state, Docker and ReCasaOS are installed, the witnesses start
+#   prepare       Docker and ReCasaOS are installed on the old release, the witnesses start
 #   inhibit <v>   root's `systemctl reboot` (v=reboot) and `systemctl reboot --force` (v=force) under
 #                 `systemd-inhibit --what=shutdown --mode=block`: refused or not (the guest goes down when it is not)
 #   reboot <t>    t=pre: the reboot before the hop (a rehearsal of the current boot, as the design's reboot_first asks);
-#                 t=post: the reboot after it, which the unit never does. Status 7 when the hop was skipped.
+#                 t=refresh: the reboot that the refresh asked for (a new kernel, a reboot-required file);
+#                 t=post: the reboot after the hop, which the unit never does. Status 7 when the hop was skipped.
+#   refresh       the old release is brought to its last state, as the product's own refresh step will do it before any hop (apt update and a
+#                 full upgrade of the CURRENT release, Docker's source paused): its own durations and package lists, and whether it needs a reboot
 #   baseline      the state of the box before the hop (units, packages, containers, health, a token of the API)
 #   probe         read-only experiments on the old release: Debian, the sandbox plan and --allow-releaseinfo-change-*;
 #                 Ubuntu, what `do-release-upgrade -c` says and what Canonical's metadata says
@@ -212,6 +215,7 @@ BACKUP_DIR="${BACKUP_DIR:-/var/backups/os-upgrade-measure}"
 BOOT_ID_FILE="${BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}"
 DPKG_LOG="${DPKG_LOG:-/var/log/dpkg.log}"
 OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
+REBOOT_REQUIRED="${REBOOT_REQUIRED:-/var/run/reboot-required}"
 APT_LOG_DIR="${APT_LOG_DIR:-/var/log/apt}"
 DISTUP_LOG_DIR="${DISTUP_LOG_DIR:-/var/log/dist-upgrade}"
 AUTH_DIR=/root/.osm-auth
@@ -738,10 +742,6 @@ phase_prepare() {
     update_old
     "${APT[@]}" install -y -q curl jq ca-certificates python3 procps iproute2 >/dev/null
     write_sources_tool "${LIBDIR}/sources.py"
-    # the old release at its last state, as the notes want it before the hop (osresearch-debian.md, step 10; osresearch-ubuntu.md, section 12, step 5)
-    marker refresh_start
-    "${APT[@]}" -y -q dist-upgrade "${CONF[@]}" -o APT::Get::Always-Include-Phased-Updates=true >"${OUT}/refresh.log" 2>&1 || abort "the old release could not be brought to its last state (${OUT}/refresh.log)"
-    marker refresh_done
     install_docker
     install_casaos
     write_config
@@ -783,7 +783,7 @@ phase_inhibit() {
 
 phase_reboot() {
     local tag="${1:-}" method=timer
-    case "${tag}" in pre | post) ;; *) echo "usage: $0 reboot pre|post" >&2; exit 2 ;; esac
+    case "${tag}" in pre | refresh | post) ;; *) echo "usage: $0 reboot pre|refresh|post" >&2; exit 2 ;; esac
     if [ "${tag}" = post ] && [ -e "${OUT}/hop-skipped" ]; then
         echo "skipped reboot post: the hop was skipped" | tee -a "${OUT}/steps.log"
         exit 7
@@ -800,6 +800,44 @@ phase_reboot() {
         systemctl reboot --force >/dev/null 2>&1 || true
     fi
     echo "method ${method}" >>"${OUT}/reboot-${tag}.txt"
+}
+
+# ---- refresh ---------------------------------------------------------------------------------------------
+
+# refresh_reboot_wanted: "yes <why>" when the refresh leaves the box wanting a reboot (a reboot-required file; a kernel package that is new or has another version
+# than before the refresh), "no" otherwise. The Ubuntu launcher refuses to start while libc6, linux-base or a kernel waits for one (osresearch-ubuntu.md, section 3).
+refresh_reboot_wanted() {
+    local why="" k
+    if [ -e "${REBOOT_REQUIRED}" ]; then why="reboot-required"; fi
+    k="$(awk -F'\t' 'FNR == NR { if ($1 ~ /^linux-image-/) before[$1] = $2; next } $1 ~ /^linux-image-/ && before[$1] != $2 { n++ } END { print n + 0 }' \
+        "${OUT}/dpkg-refresh-before.tsv" "${OUT}/dpkg-refresh-after.tsv")"
+    if [ "${k}" -gt 0 ]; then why="${why:+${why}, }kernel (${k} linux-image package(s) new or changed)"; fi
+    if [ -n "${why}" ]; then echo "yes ${why}"; else echo "no"; fi
+}
+
+# phase_refresh: the old release is brought to its last state, as the product's own "refresh" step will do it before any hop: the release notes of bookworm and
+# trixie and the Ubuntu launcher both want the box up to date (the launcher refuses when a package is upgradable and not phased). apt update, then a full upgrade of the
+# CURRENT release, with Docker's source paused: the engine is the Docker update's business, and the d11-12 leg starts on a Docker with a newer one on offer. It is its own
+# phase, with its own durations and package lists, after the rehearsal reboot and just before the baseline (so that little can become upgradable before the hop starts), and it
+# says whether it needs a reboot, which the runner then makes.
+phase_refresh() {
+    phase_begin refresh
+    guard_run
+    init_apt
+    dpkg_dump refresh-before
+    kernel_dump refresh-before
+    pause_sources sources-paused-refresh.txt
+    "${APT[@]}" update >"${OUT}/refresh-update.log" 2>&1 || abort "apt-get update of the old release fails before its refresh (${OUT}/refresh-update.log)"
+    marker refresh_update_done
+    "${APT[@]}" -y -q dist-upgrade "${CONF[@]}" -o APT::Get::Always-Include-Phased-Updates=true >"${OUT}/refresh-upgrade.log" 2>&1 ||
+        abort "the old release could not be brought to its last state (${OUT}/refresh-upgrade.log)"
+    resume_sources
+    dpkg_dump refresh-after
+    kernel_dump refresh-after
+    rec upgradable-refresh sh -c 'LC_ALL=C apt list --upgradable 2>/dev/null'
+    refresh_reboot_wanted >"${OUT}/refresh-reboot.txt"
+    marker refresh_done
+    log "refreshed: $(cat "${OUT}/refresh-reboot.txt")"
 }
 
 # ---- baseline --------------------------------------------------------------------------------------------
@@ -1064,17 +1102,25 @@ run_step() {
     df -P -m / /boot 2>/dev/null | awk -v n="${name}" 'NR > 1 {printf "%s %s %s\n", n, $6, $4}' >>"${OUT}/df-steps.txt" || true
 }
 
-# pause_sources: the sources that are not the distribution's are renamed (osresearch-ubuntu.md, section 7a; os-upgrade-design.md, section 5: the apt source
-# of Docker is paused during the hop). The names go to sources-paused.txt.
+# pause_sources [list]: the sources that are not the distribution's are renamed (osresearch-ubuntu.md, section 7a; os-upgrade-design.md, section 5: the apt source
+# of Docker is paused during the hop). The names go to $OUT/<list> (sources-paused.txt by default).
 pause_sources() {
-    local f
-    : >"${OUT}/sources-paused.txt"
+    local f list="${OUT}/${1:-sources-paused.txt}"
+    : >"${list}"
     for f in "${APT_DIR}/sources.list.d"/*.list "${APT_DIR}/sources.list.d"/*.sources; do
         [ -f "${f}" ] || continue
         if python3 "${SOURCES_PY}" foreign "${FAMILY}" "${f}"; then
             mv "${f}" "${f}.casaos-paused"
-            echo "${f}" >>"${OUT}/sources-paused.txt"
+            echo "${f}" >>"${list}"
         fi
+    done
+}
+
+# resume_sources: what pause_sources renamed gets its name back (the refresh pauses Docker's source for its own apt, and gives it back for the baseline)
+resume_sources() {
+    local f
+    for f in "${APT_DIR}/sources.list.d"/*.casaos-paused; do
+        if [ -f "${f}" ]; then mv "${f}" "${f%.casaos-paused}"; fi
     done
 }
 
@@ -1273,6 +1319,19 @@ runner_reboot() {
     runner_wait "${old}"
 }
 
+# runner_refresh: the refresh phase of the old release, and the reboot it asks for when it needs one (a new kernel, a reboot-required file); the phase writes its
+# answer in refresh-reboot.txt, and a phase that aborted left none (status 2: the step ends there, and the report says why)
+runner_refresh() {
+    local rc=0
+    runner_guest refresh
+    ssh -F ssh_config vm 'grep -q "^yes" /home/casa/osm-out/refresh-reboot.txt' || rc=$?
+    case "${rc}" in
+    0) runner_reboot refresh ;;
+    1) echo "the refresh needs no reboot" ;;
+    *) return "${rc}" ;;
+    esac
+}
+
 # runner_inhibit <reboot|force>: the phase waits 40 s after the attempt. A guest that went down under it is waited for (ssh ends with 255); one that did not is still there.
 runner_inhibit() {
     local old rc=0 new
@@ -1311,9 +1370,9 @@ main() {
         phase_prepare
         return
         ;;
-    inhibit | reboot | baseline | probe | hop | hop-wait | after | poller | hop-unit) ;;
+    inhibit | reboot | refresh | baseline | probe | hop | hop-wait | after | poller | hop-unit) ;;
     *)
-        echo "usage: $0 prepare|inhibit reboot|force|reboot pre|post|baseline|probe|hop|hop-wait|after" >&2
+        echo "usage: $0 prepare | inhibit reboot|force | reboot pre|refresh|post | refresh | baseline | probe | hop | hop-wait | after" >&2
         exit 2
         ;;
     esac
@@ -1324,6 +1383,7 @@ main() {
     case "${phase}" in
     inhibit) phase_inhibit "${2:-}" ;;
     reboot) phase_reboot "${2:-}" ;;
+    refresh) phase_refresh ;;
     baseline) phase_baseline ;;
     probe) phase_probe ;;
     hop) phase_hop ;;

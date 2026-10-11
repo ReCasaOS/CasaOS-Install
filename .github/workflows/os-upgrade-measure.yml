@@ -20,6 +20,10 @@ name: os-upgrade-measure
 #           version) the leg says NOT_OFFERED, which is neutral and visible and is never a pass.
 #   u24-26  Ubuntu 24.04 to 26.04, the same.
 #
+# Before the hop every leg's old release is refreshed, as the product's own refresh step will do it (apt update and a full upgrade of the current release,
+# Docker's source paused, a reboot when it needs one): the release notes of the next release and the Ubuntu launcher both want the box up to date, and the
+# refresh is measured on its own (its durations, its package lists, its reboot), just before the baseline so that little can become upgradable before the hop.
+#
 # Every leg also asks: does root's `systemctl reboot` (and --force) get refused under `systemd-inhibit --what=shutdown --mode=block` (the guest goes
 # down when it is not); does the unit survive the upgrade of systemd, dbus and libc6; which services bounce while dpkg runs (and which ones libc6's
 # postinst restarts); what the witnesses see (the database's silence, the port's, which containers come back by their policy); whether the core, the
@@ -223,6 +227,13 @@ jobs:
           set -euo pipefail
           source scripts/os-upgrade-measure.sh
           runner_reboot pre
+
+      - name: Refresh the old release
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          source scripts/os-upgrade-measure.sh
+          runner_refresh
 
       - name: Baseline and read-only probes
         timeout-minutes: 30
