@@ -184,7 +184,7 @@ COME_BACK=(p-always p-unless-stopped p-db p-web)
 # the dirty matrix, in the order it runs: the lightest first, Docker and AppManagement last. os-readiness-proof-report.py has the same list.
 STEP_IDS=(held held_docker broken_dpkg sources_cdrom sources_file sources_alias sources_pin sources_pin_prefs sources_proposed sources_third_party
     foreign_arch_empty foreign_arch reboot_first fstab_unresolved containers_policy containers_ports_host containers_ports_publish busy_lock busy_unit
-    busy_packagekit disk_boot apps docker_down)
+    busy_packagekit disk_boot apps docker_down_service docker_down)
 
 # EPOCHREALTIME and printf's %()T are the shell's own: a clock that does not need `date` to be installed, or to work
 now() { printf '%s' "${EPOCHREALTIME}"; }
@@ -702,6 +702,28 @@ undo_apps() {
 }
 undone_apps() { [ "$(code_of /v2/app_management/categories)" = 200 ]; }
 
+# Docker's service stopped and its SOCKET left listening: whoever connects to the socket starts the service again, and with it every container that has a restart policy.
+# The core asks the service for its state first and the daemon only when it runs, so it has to say that Docker is down, and leave it down; after_docker_down_service says what
+# the service is once the call is over. AppManagement is stopped first: it follows Docker's event stream, and when the stream breaks it connects again within a second, which
+# starts Docker (so nothing but the report could be said to have started it). The dirt waits five seconds and fails, an invalid step and no FAIL of the feature, when the
+# service came back by itself; the `apps` check, which cannot ask a stopped AppManagement, is what this dirt brings with it.
+dirty_docker_down_service() {
+    systemctl stop casaos-app-management.service
+    systemctl stop docker.service
+    [ "$(systemctl is-active docker.socket)" = active ]
+    sleep 5
+    [ "$(systemctl is-active docker.service || true)" != active ]
+}
+after_docker_down_service() { systemctl is-active docker.service || true; }
+undo_docker_down_service() {
+    systemctl start docker.service
+    wait_docker 120
+    settle step-docker_down_service.settle
+    systemctl start casaos-app-management.service
+    wait_services 120
+}
+undone_docker_down_service() { timeout -s KILL 5 docker info >/dev/null 2>&1 && [ "$(code_of /v2/app_management/categories)" = 200 ]; }
+
 # Docker stopped (and its socket: it would start it again at the first request)
 dirty_docker_down() { systemctl stop docker.socket docker.service; }
 undo_docker_down() {
@@ -728,6 +750,11 @@ run_step() {
     in_subshell "dirty_${id}" >"${OUT}/step-${id}.dirty.log" 2>&1
     echo "${STATUS}" >"${OUT}/step-${id}.dirty-rc"
     ready_call "step-${id}-dirty"
+    # what a step wants to see once the call is over, and before the undo: after_<id>, whose output is kept (docker.service, which the call must not have started)
+    if declare -F "after_${id}" >/dev/null; then
+        in_subshell "after_${id}" >"${OUT}/step-${id}.after" 2>&1
+        echo "${STATUS}" >"${OUT}/step-${id}.after-rc"
+    fi
     in_subshell "undo_${id}" >"${OUT}/step-${id}.undo.log" 2>&1
     echo "${STATUS}" >"${OUT}/step-${id}.undo-rc"
     # an undo that failed stays pending: the trap of the script tries it once more, so that the box is not left dirty

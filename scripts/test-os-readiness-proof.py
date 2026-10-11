@@ -131,12 +131,20 @@ def report_steps():
     """the Step(...) rows of the report's STEPS, read from its source without running it: [dict]"""
     with open(REPORT, newline="") as f:
         tree = ast.parse(f.read().replace("\r\n", "\n"))
+    # the rows that several steps share are constants of the report (a tuple of tuples), and are named in the steps
+    consts = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Tuple):
+            consts[node.targets[0].id] = ast.literal_eval(node.value)
+
+    def value_of(node):
+        return consts[node.id] if isinstance(node, ast.Name) and node.id in consts else ast.literal_eval(node)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "STEPS" for t in node.targets):
             rows = []
             for call in node.value.elts:
-                row = dict(zip(("id", "code"), [ast.literal_eval(a) for a in call.args]))
-                row.update({k.arg: ast.literal_eval(k.value) for k in call.keywords})
+                row = dict(zip(("id", "code"), [value_of(a) for a in call.args]))
+                row.update({k.arg: value_of(k.value) for k in call.keywords})
                 rows.append(row)
             return rows
     raise SystemExit("the report has no STEPS")
@@ -149,6 +157,9 @@ for s in STEPS:
     s.setdefault("needle", "")
     s.setdefault("forbid", ())
     s.setdefault("extras", ())
+    s.setdefault("expect", ())
+    s.setdefault("after", "")
+    s.setdefault("after_what", "")
 STEP_BY_ID = {s["id"]: s for s in STEPS}
 
 LEG = {"d11": dict(family="debian", version="11", codename="bullseye", pretty="Debian GNU/Linux 11 (bullseye)", to_version="12", to_codename="bookworm"),
@@ -161,6 +172,16 @@ check("the core's answers are there for the clean box and for each step of the m
 check("the report says what the pin step names (the box's own release, which apt does not fail on) and the publish step takes (host port 53 on a loopback alias: the gateway holds 80 and 443)",
       "own release" in STEP_BY_ID["sources_pin"]["what"] and "port 53" in STEP_BY_ID["containers_ports_publish"]["what"] and "443" in STEP_BY_ID["containers_ports_publish"]["what"]
       and "loopback" in STEP_BY_ID["containers_ports_publish"]["what"], (STEP_BY_ID["sources_pin"]["what"], STEP_BY_ID["containers_ports_publish"]["what"]))
+# what the report asks of the core is pinned here, in words of its own: the verdicts above are made from the report's own table, and a row taken out of it would take its verdict with it
+NOT_RUNNING_ROWS = tuple(("*", code, "info", "why", "not_running", "ok") for code in ("docker_swarm", "containers_policy", "containers_ports"))
+check("the report asks that a held Docker with a newer one on offer is an info that says held true (on d11, where the clean box has the warning of a newer Docker; u22 has none on offer)",
+      STEP_BY_ID["held_docker"]["expect"] == (("d11", "docker_update_pending", "info", "held", True, "warn"),), STEP_BY_ID["held_docker"]["expect"])
+check("the report asks that a Docker that is not running leaves the swarm, the policy and the ports checks saying `not_running` as info, whichever way it is stopped",
+      STEP_BY_ID["docker_down"]["expect"] == NOT_RUNNING_ROWS and STEP_BY_ID["docker_down_service"]["expect"] == NOT_RUNNING_ROWS, (STEP_BY_ID["docker_down"]["expect"], STEP_BY_ID["docker_down_service"]["expect"]))
+check("the report asks that the step that stops only Docker's service finds the service inactive after the call, and lets the `apps` check say it could not ask (AppManagement is stopped with it)",
+      STEP_BY_ID["docker_down_service"]["after"] == "inactive" and "still inactive" in STEP_BY_ID["docker_down_service"]["after_what"] and STEP_BY_ID["docker_down_service"]["extras"] == ("apps",)
+      and STEP_BY_ID["docker_down_service"]["code"] == "docker_down" and STEP_BY_ID["docker_down_service"]["sev"] == "warn" and not STEP_BY_ID["docker_down"]["after"],
+      {k: STEP_BY_ID["docker_down_service"].get(k) for k in ("after", "after_what", "extras", "code", "sev")})
 
 
 # ---- the evidence directory a healthy leg leaves ----------------------------------------------------------------------------------------------------------
@@ -294,6 +315,9 @@ def build(d, leg):
         put(d, "step-%s.dirty-rc" % sid, "0\n")
         put(d, "step-%s.undo-rc" % sid, "0\n")
         put(d, "step-%s.undone" % sid, "yes\n")
+        if s["after"]:
+            put(d, "step-%s.after" % sid, s["after"] + "\n")
+            put(d, "step-%s.after-rc" % sid, "0\n")
         t = at()
         api(d, "step-%s-dirty" % sid, t0=t, body=ready_body(leg, sid, t + 1))
         t = at()
@@ -503,19 +527,33 @@ def f_forbid(s, code):
     return "step %s: `%s` does not fire" % (s["id"], code)
 
 
+def f_expect(s, row):
+    return "step %s: `%s` is %s%s" % (s["id"], row[1], row[2], " with %s %s" % (row[3], json.dumps(row[4])) if row[3] else "")
+
+
+def f_after(s):
+    return "step %s: %s" % (s["id"], s["after_what"])
+
+
+def expects(s, leg):
+    """the rows of what the dirty answer also says that are for this leg"""
+    return [r for r in s["expect"] if r[0] in ("*", leg)]
+
+
 def steps_of(leg):
     return list(STEPS)
 
 
-def step_verdicts(s):
+def step_verdicts(s, leg):
     out = [f_quiet(s) if s["mode"] == "quiet" else f_fires(s), f_alone(s), f_undone(s)] + [f_forbid(s, c) for c in s["forbid"]]
+    out += [f_expect(s, r) for r in expects(s, leg)] + ([f_after(s)] if s["after"] else [])
     return out
 
 
 def healthy_verdicts(leg):
     v = list(GLOBAL_VERDICTS)
     for s in steps_of(leg):
-        v += step_verdicts(s)
+        v += step_verdicts(s, leg)
     return v
 
 
@@ -530,7 +568,7 @@ if not os.environ.get("GUEST_ONLY"):
     for leg_ in ("d11", "u22"):
         case("a healthy %s leg passes, and every verdict says so by name" % leg_, 0,
              ["# OS readiness proof, %s leg: PASS" % leg_] + ["**PASS** " + v for v in healthy_verdicts(leg_)] + ["**NOT TESTABLE** " + n for n in NOT_TESTABLE_NAMES],
-             ["FAIL", "INVALID", "Traceback"], leg=leg_)
+             ["FAIL", "INVALID", "Traceback", "NOT TESTABLE** step"], leg=leg_)
     case("a healthy u22 leg runs the alias step, as Debian does (devel is Ubuntu's alias)", 0, ["**PASS** " + f_fires(STEP_BY_ID["sources_alias"])], ["NOT TESTABLE** step sources_alias"], leg="u22")
     case("a healthy d11 leg runs the alias step", 0, ["**PASS** " + f_fires(STEP_BY_ID["sources_alias"])], ["NOT TESTABLE** step sources_alias"])
     case("the report lists the clean box check by check, with the text of the clean answer and the codes the core added", 0,
@@ -882,7 +920,7 @@ if not os.environ.get("GUEST_ONLY"):
     for leg_ in ("d11", "u22"):
         for s in steps_of(leg_):
             sid, code_, sev_ = s["id"], s["code"], s["sev"]
-            if leg_ == "u22" and s["id"] not in ("held", "sources_alias", "sources_third_party", "foreign_arch_empty", "containers_policy", "busy_lock", "busy_packagekit", "disk_boot", "docker_down"):
+            if leg_ == "u22" and s["id"] not in ("held", "sources_alias", "sources_third_party", "foreign_arch_empty", "containers_policy", "busy_lock", "busy_packagekit", "disk_boot", "docker_down_service", "docker_down"):
                 continue
             tag = "(%s)" % leg_
             D, C = "step-%s-dirty" % sid, "step-%s-clean" % sid
@@ -900,6 +938,36 @@ if not os.environ.get("GUEST_ONLY"):
                       lambda d, D=D, c=code_, n=s["needle"]: jdata(d, D, lambda x: [cc.update(json.loads(json.dumps(cc).replace(n, "x"))) for cc in x["checks"] if cc["code"] == c]), leg=leg_)
             for fcode in s["forbid"]:
                 fails("step %s: %s fires where it must not %s" % (sid, fcode, tag), f_forbid(s, fcode), lambda d, D=D, c=fcode: make(d, D, c, "refuse"), leg=leg_)
+            # what the dirty answer also has to say (a held Docker is an info that says held; a stopped one says it did not look), on this leg
+            for row in expects(s, leg_):
+                rcode, rsev, rkey, rvalue, rclean = row[1], row[2], row[3], row[4], row[5]
+                name_ = f_expect(s, row)
+                wrong_sev = "warn" if rsev != "warn" else "refuse"
+                other_clean = "refuse" if rclean != "refuse" else "warn"
+                fails("step %s: %s has another severity (%s, not %s) %s" % (sid, rcode, wrong_sev, rsev, tag), name_, lambda d, D=D, c=rcode, w=wrong_sev: set_sev(d, D, c, w), leg=leg_)
+                fails("step %s: %s is not in the answer %s" % (sid, rcode, tag), name_, lambda d, D=D, c=rcode: drop_check(d, D, c), leg=leg_, extra=["is not in the answer"])
+                case("step %s: %s is %s as it has to be %s" % (sid, rcode, rsev, tag), 0, ["**PASS** " + name_], ["FAIL"], leg=leg_)
+                if rkey:
+                    other = (not rvalue) if isinstance(rvalue, bool) else "other"
+                    fails("step %s: %s has another value under %s %s" % (sid, rcode, rkey, tag), name_,
+                          lambda d, D=D, c=rcode, k=rkey, o=other: jdata(d, D, lambda x: [cc["data"].update({k: o}) for cc in x["checks"] if cc["code"] == c]), leg=leg_)
+                    fails("step %s: %s has no %s %s" % (sid, rcode, rkey, tag), name_,
+                          lambda d, D=D, c=rcode, k=rkey: jdata(d, D, lambda x: [cc["data"].pop(k, None) for cc in x["checks"] if cc["code"] == c]), leg=leg_)
+                    if isinstance(rvalue, bool):
+                        fails("step %s: %s has %s as a number and not a boolean %s" % (sid, rcode, rkey, tag), name_,
+                              lambda d, D=D, c=rcode, k=rkey, v=rvalue: jdata(d, D, lambda x: [cc["data"].update({k: int(v)}) for cc in x["checks"] if cc["code"] == c]), leg=leg_)
+                # the clean box says another severity of the code: the dirt cannot be told from what is there (the clean box is not the one the row is for)
+                case("step %s: a clean box that says %s is %s, not %s, cannot show the dirt: NOT TESTABLE %s" % (sid, rcode, other_clean, rclean, tag), 1, ["**NOT TESTABLE** " + name_], ["Traceback"], leg=leg_,
+                     mutate=lambda d, c=rcode, o=other_clean: make(d, "ready-base", c, o))
+            if s["after"]:
+                for bad_ in ("active", "activating", "failed"):
+                    fails("step %s: after the call the guest saw %s %s" % (sid, bad_, tag), f_after(s), lambda d, sid=sid, b=bad_: put(d, "step-%s.after" % sid, b + "\n"), leg=leg_)
+                case("step %s: after the call the guest saw inactive %s" % (sid, tag), 0, ["**PASS** " + f_after(s)], ["FAIL"], leg=leg_)
+                invalid("step %s: the guest did not say what it saw once the call was over %s" % (sid, tag), "step %s: the guest did not say what it saw once the call was over" % sid, lambda d, sid=sid: remove(d, "step-%s.after" % sid),
+                        leg=leg_, silent=[f_after(s), f_fires(s)])
+                invalid("step %s: what the guest saw after the call is empty %s" % (sid, tag), "step %s: the guest did not say what it saw once the call was over" % sid, lambda d, sid=sid: put(d, "step-%s.after" % sid, "\n"), leg=leg_, silent=[f_after(s)])
+                invalid("step %s: the command that looks after the call failed %s" % (sid, tag), "exit 1)", lambda d, sid=sid: put(d, "step-%s.after-rc" % sid, "1\n"), leg=leg_, silent=[f_after(s)])
+                invalid("step %s: the command that looks after the call did not run %s" % (sid, tag), "exit none)", lambda d, sid=sid: remove(d, "step-%s.after-rc" % sid), leg=leg_, silent=[f_after(s)])
             fails("step %s: a check nobody expected fires with it %s" % (sid, tag), f_alone(s), lambda d, D=D: make(d, D, "bootloader", "refuse"), leg=leg_, extra=["also fires: bootloader"])
             fails("step %s: a warning nobody expected fires with it %s" % (sid, tag), f_alone(s), lambda d, D=D: make(d, D, "ram", "warn"), leg=leg_, extra=["also fires: ram"])
             for extra_ in s["extras"]:
@@ -932,7 +1000,7 @@ if not os.environ.get("GUEST_ONLY"):
     fails("step apps: backup_age that becomes a refuse with it is one that fires", f_alone(STEP_BY_ID["apps"]), lambda d: make(d, "step-apps-dirty", "backup_age", "refuse"), extra=["also fires: backup_age"])
     fails("step docker_down: containers_policy fires with it (the daemon is not asked when it does not run)", f_alone(STEP_BY_ID["docker_down"]), lambda d: make(d, "step-docker_down-dirty", "containers_policy", "refuse"),
           extra=["also fires: containers_policy"])
-    check("the report knows which steps may bring a check with them: only the disk steps, whose dirt is on the filesystem of /", {s["id"]: tuple(s["extras"]) for s in STEPS if s["extras"]} == {"disk_boot": ("disk_root", "disk_archives")},
+    check("the report knows which steps may bring a check with them: the disk steps, whose dirt is on the filesystem of /, and the stopped service of Docker, which stops AppManagement with it", {s["id"]: tuple(s["extras"]) for s in STEPS if s["extras"]} == {"disk_boot": ("disk_root", "disk_archives"), "docker_down_service": ("apps",)},
           {s["id"]: s["extras"] for s in STEPS if s["extras"]})
     # a step that is untestable because the clean box already fires its code is not a pass and not a fail
     case("step reboot_first: a clean box that already has the code cannot tell it from the dirt: NOT TESTABLE, and the clean box is a FAIL of its own", 1,
@@ -1114,10 +1182,12 @@ for name, step in (("p-no", "containers_policy"), ("p-hostnet", "containers_port
 fill = os.path.join(os.environ["BOOT_DIR"], "osr-fill")
 if os.path.exists(fill) and int(open(fill).read().strip() or 0) > 0:
     steps.append("disk_boot")
-if not active("casaos-app-management.service"):
+docker_off = not active("docker.service")
+service_only = docker_off and active("docker.socket")
+if not active("casaos-app-management.service") and not service_only:
     steps.append("apps")
-if not active("docker.service"):
-    steps.append("docker_down")
+if docker_off:
+    steps.append("docker_down_service" if service_only else "docker_down")
 if len(steps) > 1:
     reply(500, {"success": 500, "message": "the stand-in core knows one dirt at a time: %s" % ", ".join(steps)})
 at = datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1142,6 +1212,10 @@ if mode == "notquiet" and not steps:
 # a Default-Release that no source offers makes apt fail, and the core with it
 if steps == ["sources_pin"] and release != L["codename"]:
     wrong = "apt_fails"
+# a core that asks the daemon whatever the service says: the socket starts it, and it sees a Docker that runs (and AppManagement that does not)
+if mode == "activate" and steps == ["docker_down_service"]:
+    open(os.path.join(F, "active", "docker.service"), "w").close()
+    steps = ["apps"]
 body = M["answer"](steps[0] if steps else "", leg, at, wrong)
 if mode == "leak":
     body["data"]["text"] += "host %s\n" % open(os.path.join(F, "hostname")).read().strip()
@@ -1498,6 +1572,25 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
     gcase("docker_down: Docker and its socket are stopped, and the undo brings them back, waits for Docker, and for the containers that come back by themselves", 'in_subshell dirty_docker_down; in_subshell undone_docker_down; echo "$STATUS" >"$OUT/d"; in_subshell undo_docker_down; echo "$STATUS" >"$OUT/u"; in_subshell undone_docker_down; echo "$STATUS" >"$OUT/v"',
           files={"out/d": "1\n", "out/u": "0\n", "out/v": "0\n", "out/step-docker_down.settle": "*"})
     gcase("docker_down: an undo whose containers do not come back is a failed undo", 'systemctl() { case "$1" in start) : >"$FAKE/active/docker.service" ;; esac; }; : >"$FAKE/containers"; in_subshell undo_docker_down; echo "$STATUS" >"$OUT/u"', files={"out/u": "1\n", "out/step-docker_down.settle": "never\n"})
+    gcase("docker_down_service: AppManagement and Docker's service are stopped, the socket is left listening, and nothing starts the service again", 'in_subshell dirty_docker_down_service; echo "$STATUS" >"$OUT/rc1"; ls "$FAKE/active" >"$OUT/active"',
+          files={"out/rc1": "0\n", "out/active": "casaos-gateway.service\ncasaos-message-bus.service\ncasaos.service\ncontainerd.service\ndocker.socket\nssh.service\n"})
+    gcase("docker_down_service: a service that comes back by itself within the five seconds is a dirt that failed (an invalid step, not a FAIL of the feature)", 'sleep() { : >"$FAKE/active/docker.service"; }; in_subshell dirty_docker_down_service; echo "$STATUS" >"$OUT/rc1"',
+          files={"out/rc1": "1\n"})
+    gcase("docker_down_service: a socket that does not listen makes a dirt that is not the one this step is for", 'rm "$FAKE/active/docker.socket"; in_subshell dirty_docker_down_service; echo "$STATUS" >"$OUT/rc1"', files={"out/rc1": "1\n"})
+    gcase("docker_down_service: AppManagement is stopped before Docker's service, so that its connection to the socket cannot be what starts it", 'systemctl() { echo "systemctl $*" >>"$FAKE/calls"; case "$1" in is-active) echo active ;; esac; }; in_subshell dirty_docker_down_service',
+          ordered=["systemctl stop casaos-app-management.service", "systemctl stop docker.service"], no_calls=["stop docker.socket", "stop docker.service docker.socket"])
+    gcase("docker_down_service: what the guest sees after the call is the state of docker.service, and it is a success whatever the state is", 'in_subshell dirty_docker_down_service; in_subshell after_docker_down_service >"$OUT/a"; echo "$STATUS" >"$OUT/rc_a"; : >"$FAKE/active/docker.service"; in_subshell after_docker_down_service >"$OUT/b"; echo "$STATUS" >"$OUT/rc_b"',
+          files={"out/a": "inactive\n", "out/rc_a": "0\n", "out/b": "active\n", "out/rc_b": "0\n"})
+    gcase("docker_down_service: the undo starts the service, waits for Docker and for the containers, brings AppManagement back and waits for the services, in that order",
+          'systemctl() { echo "systemctl $*" >>"$FAKE/calls"; }; wait_docker() { echo "wait_docker $1" >>"$FAKE/calls"; }; settle() { echo "settle $1" >>"$FAKE/calls"; }; wait_services() { echo "wait_services $1" >>"$FAKE/calls"; }; in_subshell undo_docker_down_service',
+          ordered=["systemctl start docker.service", "wait_docker 120", "settle step-docker_down_service.settle", "systemctl start casaos-app-management.service", "wait_services 120"])
+    gcase("docker_down_service: the box is back when Docker answers and AppManagement does", 'in_subshell undone_docker_down_service; echo "$STATUS" >"$OUT/a"; rm "$FAKE/active/casaos-app-management.service"; in_subshell undone_docker_down_service; echo "$STATUS" >"$OUT/b"; '
+          ': >"$FAKE/active/casaos-app-management.service"; rm "$FAKE/active/docker.service"; in_subshell undone_docker_down_service; echo "$STATUS" >"$OUT/c"', files={"out/a": "0\n", "out/b": "1\n", "out/c": "1\n"})
+    gcase("run_step: what a step looks at after the call is kept, after the call and before the undo", STUBS + 'after_x() { echo after >>"$FAKE/calls"; echo seen; }; run_step x',
+          files={"out/step-x.after": "seen\n", "out/step-x.after-rc": "0\n"}, ordered=["dirty", "ready_call step-x-dirty", "after", "undo", "undone", "ready_call step-x-clean"])
+    gcase("run_step: a step that looks at nothing after the call leaves no record of it", STUBS + 'run_step x', files={"out/step-x.after": None, "out/step-x.after-rc": None})
+    gcase("run_step: a look after the call that failed is recorded, and the undo is made all the same", STUBS + 'after_x() { echo broke; false; }; run_step x',
+          files={"out/step-x.after-rc": "1\n", "out/step-x.undo-rc": "0\n", "out/step-x.undone": "yes\n"}, calls=["undo"])
     gcase("foreign_arch_empty: an architecture with no package, and the undo takes it away", 'in_subshell dirty_foreign_arch_empty; cat "$FAKE/archs" >"$OUT/a"; in_subshell undone_foreign_arch_empty; echo "$STATUS" >"$OUT/d"; in_subshell undo_foreign_arch_empty; in_subshell undone_foreign_arch_empty; echo "$STATUS" >"$OUT/u"',
           files={"out/a": "i386\n", "out/d": "1\n", "out/u": "0\n"})
     gcase("foreign_arch: the architecture and a package of it built from nothing (no network), and the undo purges the package then removes the architecture, in that order",
@@ -1760,6 +1853,8 @@ esac
     e2e("a core that fires a check nobody expected with every dirt is caught step by step", 1, ["**FAIL** " + f_alone(STEP_BY_ID["held"]), "also fires: network_uplink"], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "extra", "FAKE_CORE_CODE": "network_uplink"})
     e2e("a core that answers 500 is caught as a route that fails", 1, ["**FAIL** " + V_ROUTE], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang500"})
+    e2e("a core that asks the daemon of a stopped service through its listening socket starts Docker, and is caught by the step that stops only the service, by name", 1,
+        ["**FAIL** " + f_after(STEP_BY_ID["docker_down_service"]), "**FAIL** " + f_fires(STEP_BY_ID["docker_down_service"])], ["Traceback", "INVALID"], env_extra={"FAKE_CORE_MODE": "activate"})
     e2e("a core that refuses `busy` because PackageKit runs is caught by the step that starts it, by name", 1, ["**FAIL** " + f_quiet(STEP_BY_ID["busy_packagekit"])], ["Traceback", "INVALID"], env_extra={"FAKE_CORE_MODE": "packagekit"})
     e2e("a clean box that apt-daily is working on is an invalid run, and no FAIL of the feature", 1, ["INVALID RUN", "the clean box was not quiet", "apt-daily.service"],
         ["Traceback", "**FAIL** " + V_CLEAN_NO_REFUSE, "**FAIL** " + V_CLEAN_STATE, "**FAIL** " + V_CLEAN_AGREE], env_extra={"FAKE_CORE_MODE": "notquiet"})

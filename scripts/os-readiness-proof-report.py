@@ -25,9 +25,12 @@ What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud imag
   - the CLEAN box: the answers of that window (and one more) have no refuse; every warn and info is a fact of the report. A `busy` that names a unit (apt-daily)
     on the clean box is a box that a package manager was working on: the run is INVALID for it, and is not a FAIL of the feature;
   - the DIRTY MATRIX: one way of dirtying the guest at a time (a hold, an unfinished dpkg journal, a source of each kind, a foreign architecture, a
-    reboot flag, a lock, a missing fstab device, a container with no restart policy, a nearly full disk, AppManagement and Docker stopped...), a call, the
-    undo, a call: the exact code with the exact severity has to appear, nothing else may appear with it, and after the undo the answer has to be the
-    clean one again.
+    reboot flag, a lock, PackageKit running, a missing fstab device, a container with no restart policy, a nearly full disk, AppManagement stopped, Docker
+    stopped with its socket and Docker's service stopped alone with its socket listening...), a call, the undo, a call: the exact code with the exact severity
+    has to appear, nothing else may appear with it, and after the undo the answer has to be the clean one again. A step may be asked more (expect): a Docker
+    on hold with a newer one on offer is an info that says held true on d11, a Docker that is not running leaves three checks saying why not_running; and
+    after the call (after) the guest says what it sees: docker.service is still inactive when only the service was stopped, which a report that asked the
+    daemon through the listening socket would have started.
 
 What these guests cannot do is NOT TESTABLE, with the reason: uptime_long (180 days), container, virt_xen, unproven_arch (the guest is a KVM amd64 machine),
 an AppManagement operation in progress (none can be held open cheaply).
@@ -86,16 +89,29 @@ MAX_NAMED = 12
 class Step:
     """a way of dirtying the guest: id; the code it must make fire (or, mode quiet, leave quiet) and its severity; mode fires (the code is not in the clean
     answer), names (the code is in the clean answer already, and what the step adds must be named in it: needle) or quiet; forbid: codes that must not
-    fire (a hold on Docker is not a hold); extras: codes (patterns) that may become worse with it because the dirt has that effect too"""
+    fire (a hold on Docker is not a hold); extras: codes (patterns) that may become worse with it because the dirt has that effect too; expect: rows
+    (leg, code, severity, key, value, clean) of what the dirty answer also says: the code has this severity, and its data has this value under the key (no key: the
+    severity alone), on this leg (* for both); clean is the severity the same code has on the clean box, which the row needs: a clean box that says another is a
+    box on which the dirt cannot be told from what is there, NOT TESTABLE; after: what the guest saw once the call was over (after_<id> of the guest script), and
+    after_what says what that means"""
 
-    def __init__(self, id, code, mode="fires", sev="refuse", needle="", forbid=(), extras=(), what="", see=""):
+    def __init__(self, id, code, mode="fires", sev="refuse", needle="", forbid=(), extras=(), what="", see="", expect=(), after="", after_what=""):
         self.id, self.code, self.mode, self.sev, self.needle = id, code, mode, sev, needle
         self.forbid, self.extras, self.what, self.see = forbid, extras, what, see
+        self.expect, self.after, self.after_what = expect, after, after_what
+
+
+# what a box says of Docker when its daemon is not asked: nothing was looked at, and the check says so (the daemon is not asked, since asking would start it)
+NOT_RUNNING = (("*", "docker_swarm", "info", "why", "not_running", "ok"), ("*", "containers_policy", "info", "why", "not_running", "ok"),
+               ("*", "containers_ports", "info", "why", "not_running", "ok"))
 
 
 STEPS = [
     Step("held", "held", what="apt-mark hold libc6", see="libc6"),
-    Step("held_docker", "held_docker", sev="info", forbid=("held",), what="apt-mark hold docker-ce (harmless, the source is paused: not a hold)"),
+    # the guest does not hold Docker on the clean box: only this step does. A newer Docker on offer (the d11 guest has 28.0.4 with a 29) is a warning there, and an
+    # info that says the packages are held and that Docker can be updated from the dashboard with the hold (held true) here
+    Step("held_docker", "held_docker", sev="info", forbid=("held",), what="apt-mark hold docker-ce (harmless, the source is paused: not a hold)",
+         expect=(("d11", "docker_update_pending", "info", "held", True, "warn"),)),
     Step("broken_dpkg", "broken_dpkg", what="a file of digits only in /var/lib/dpkg/updates"),
     Step("sources_cdrom", "sources_cdrom", what="a cdrom: source"),
     Step("sources_file", "sources_cdrom", what="a file: source"),
@@ -116,7 +132,12 @@ STEPS = [
     Step("busy_packagekit", "busy", mode="quiet", what="PackageKit running (the real unit on an Ubuntu, a unit of its name on a Debian): it is no package operation, and `busy` stays quiet"),
     Step("disk_boot", "disk_boot", extras=("disk_root", "disk_archives"), what="a file that leaves 200 MiB free on the filesystem of /boot (the root one on these images)"),
     Step("apps", "apps", what="AppManagement stopped (the core cannot ask: it fails closed)"),
-    Step("docker_down", "docker_down", sev="warn", what="Docker stopped, and its socket (the core asks the service, and does not start it by asking the daemon)"),
+    # AppManagement follows Docker's event stream and, when it breaks, connects again within a second: to a socket that is listening, which starts Docker. It is stopped
+    # first, so that nothing but the report can be the one that starts it again; its `apps` check then cannot ask it, which this dirt brings with it
+    Step("docker_down_service", "docker_down", sev="warn", extras=("apps",), expect=NOT_RUNNING,
+         what="Docker's service stopped and its socket left listening, and AppManagement stopped (asking the daemon would start it)",
+         after="inactive", after_what="docker.service is still inactive after the call: asking did not start Docker through its socket"),
+    Step("docker_down", "docker_down", sev="warn", expect=NOT_RUNNING, what="Docker stopped, and its socket (the core asks the service, and does not start it by asking the daemon)"),
 ]
 # what these guests cannot do, and why (the report lists them: NOT TESTABLE is visible and never a pass)
 NOT_TESTABLE = [
@@ -483,6 +504,8 @@ F_FIRES = "step %s: the dirty box makes `%s` %s"
 F_QUIET = "step %s: the dirty box leaves `%s` quiet"
 F_UNDONE = "step %s: after the undo the answer is the clean one again (the code is gone, nothing else is left)"
 F_ALONE = "step %s: nothing else fires with it"
+F_EXPECT = "step %s: `%s` is %s%s"
+F_AFTER = "step %s: %s"
 F_FORBID = "step %s: `%s` does not fire"
 
 
@@ -761,6 +784,10 @@ for s in STEPS:
     if not dirty_rc or not undo_rc or not undone:
         invalid("step %s: it did not run to its end (dirty-rc, undo-rc or undone is missing)" % s.id)
         continue
+    after_state, after_rc = read("step-%s.after" % s.id).strip(), read("step-%s.after-rc" % s.id).strip()
+    if s.after and (after_rc != "0" or not after_state):
+        invalid("step %s: the guest did not say what it saw once the call was over (step-%s.after is missing or empty, or its command failed: exit %s)" % (s.id, s.id, after_rc or "none"))
+        continue
     trusted = True
     if dirty_rc != "0":
         invalid("step %s: the box could not be dirtied (exit %s): %s" % (s.id, dirty_rc, cell(" ".join(read("step-%s.dirty.log" % s.id).split())[-160:], 160)))
@@ -803,6 +830,20 @@ for s in STEPS:
             verdict(F_FIRES % (s.id, s.code, s.sev), ok, "%s is %s%s" % (s.code, sev or "not in the answer", "" if not s.needle or k is None or s.needle in json.dumps(k) else ", and does not name %s" % s.needle))
     for code in s.forbid:
         verdict(F_FORBID % (s.id, code), code not in now_bad, "%s is %s" % (code, sev_map(dirty).get(code, "not in the answer")))
+    for leg_, code, want, key, value, clean_sev in s.expect:
+        if leg_ not in ("*", leg):
+            continue
+        name = F_EXPECT % (s.id, code, want, " with %s %s" % (key, json.dumps(value)) if key else "")
+        if sev_map(base).get(code) != clean_sev:
+            not_testable(name, "the clean box says `%s` is %s, not %s: the dirt cannot be told from what is there" % (code, sev_map(base).get(code, "absent"), clean_sev))
+            continue
+        k = check_of(dirty, code)
+        d = k.get("data") if k is not None and isinstance(k.get("data"), dict) else {}
+        has = key in d and d[key] == value and isinstance(d[key], bool) == isinstance(value, bool)
+        verdict(name, k is not None and k.get("severity") == want and (not key or has),
+                "%s is %s%s" % (code, k.get("severity") if k is not None else "not in the answer", (" and %s is %s" % (key, cell(json.dumps(d.get(key))))) if key and k is not None else ""))
+    if s.after:
+        verdict(F_AFTER % (s.id, s.after_what), after_state == s.after, "after the call the guest saw %s, wanted %s" % (cell(after_state, 30), s.after))
     # a code is worse when its severity went down the ladder refuse, warn, anything else: a warn of the clean box that is a refuse with the dirt is one
     worse = sorted(c for c, v in now_sev.items() if RANK.get(v, 2) < RANK.get(base_sev.get(c), 2))
     extra = [c for c in worse if not allowed(s, c)]

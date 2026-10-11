@@ -23,10 +23,14 @@ name: os-readiness-proof
 #     INVALID RUN for it, and no FAIL of the feature;
 #   - the DIRTY MATRIX: the guest is dirtied in one way at a time (a hold, an unfinished dpkg journal, a cdrom, file, alias (stable, devel), proposed and
 #     third-party source, a Default-Release of the box's own release and a pin, a foreign architecture, a reboot flag, a lock, a running package update, a
-#     PackageKit that runs (it is no package operation: `busy` stays quiet), a missing fstab device, containers that will not come back or that take the host's ports (53 on a loopback alias: the gateway holds 80 and 443), a nearly
-#     full disk, AppManagement and Docker stopped...), the report is asked, the dirt is undone (a trap runs the undo when the script dies in the middle), and
-#     the report is asked again: the exact code with the exact severity has to appear, nothing else may become worse with it (a warning of the clean box that
-#     is a refusal with the dirt is a code that fires), and after the undo the answer has to be the clean one again.
+#     PackageKit that runs (it is no package operation: `busy` stays quiet), a missing fstab device, containers that will not come back or that take the host's
+#     ports (53 on a loopback alias: the gateway holds 80 and 443), a nearly full disk, AppManagement stopped, Docker stopped with its socket and Docker's
+#     service stopped alone with its socket listening...), the report is asked, the dirt is undone (a trap runs the undo when the script dies in the middle),
+#     and the report is asked again: the exact code with the exact severity has to appear, nothing else may become worse with it (a warning of the clean box
+#     that is a refusal with the dirt is a code that fires), and after the undo the answer has to be the clean one again. Some steps are asked more: a Docker
+#     whose packages are on hold, with a newer one on offer, is an info that says so (held true); a Docker that is not running leaves the swarm, containers
+#     and ports checks saying they did not look (why not_running); and after the call on Docker's service stopped alone, docker.service is still inactive (a
+#     report that asked the daemon through the listening socket would have started it, and every container with a restart policy with it).
 # scripts/os-readiness-proof-report.py judges what the guest recorded (PASS, FAIL, NOT TESTABLE with its reason, or INVALID RUN), and fails the job for a FAIL
 # and for an INVALID RUN alike. Nothing is judged in the guest. A step whose undo failed is an INVALID RUN, never a FAIL of the feature.
 #

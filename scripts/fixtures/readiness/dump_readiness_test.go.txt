@@ -36,7 +36,7 @@ var proofLegs = []proofLeg{
 var proofSteps = []string{
 	"held", "held_docker", "broken_dpkg", "sources_cdrom", "sources_file", "sources_alias", "sources_pin", "sources_pin_prefs", "sources_proposed",
 	"sources_third_party", "foreign_arch_empty", "foreign_arch", "reboot_first", "fstab_unresolved", "containers_policy", "containers_ports_host",
-	"containers_ports_publish", "busy_lock", "busy_unit", "busy_packagekit", "disk_boot", "apps", "docker_down",
+	"containers_ports_publish", "busy_lock", "busy_unit", "busy_packagekit", "disk_boot", "apps", "docker_down_service", "docker_down",
 }
 
 const (
@@ -144,8 +144,15 @@ func proofBox(t *testing.T, l proofLeg, step string) *fakeProbe {
 		}
 	case "apps":
 		f.appsErr = errors.New("the box cannot ask AppManagement")
+	case "docker_down_service":
+		// Docker's service stopped and its socket left listening, and AppManagement stopped with it (it would connect to the socket
+		// again within a second, and start Docker): the daemon is not asked, and the apps check cannot ask AppManagement
+		dockerService("inactive", "loaded")(f)
+		f.set(dockerSocket, "")
+		f.appsErr = errors.New("the box cannot ask AppManagement")
 	case "docker_down":
 		dockerService("inactive", "loaded")(f)
+		f.remove(dockerSocket)
 	default:
 		t.Fatalf("no such step %q", step)
 	}
@@ -175,6 +182,14 @@ func TestDumpReadinessFixtures(t *testing.T) {
 			}
 			if err := os.WriteFile(filepath.Join(dir, name+".json"), append(body, '\n'), 0o644); err != nil {
 				t.Fatal(err)
+			}
+			if step == "docker_down" || step == "docker_down_service" {
+				// the daemon of a service that does not run is not asked: not by the client, not by a command that opens the socket
+				for _, argv := range f.attemptedCommands() {
+					if argv[0] == "docker" && strings.Join(argv, " ") != "docker --version" {
+						t.Fatalf("%s/%s: the core asked the daemon: %q", l.name, step, argv)
+					}
+				}
 			}
 			if step == "busy_packagekit" {
 				for _, argv := range f.attemptedCommands() {
