@@ -40,15 +40,23 @@ name: docker-update-proof
 #           no update (docker-ce is already at the candidate: the kill came after dpkg had unpacked it)
 #           or refuse with `dpkg`, and the report says which it was (the one after the repair has to
 #           refuse nothing), and the repair the dashboard names (dpkg --configure -a, then
-#           apt-get -f install) has to complete it.
+#           apt-get -f install) has to complete it. Debian 12 alone puts docker-ce, docker-ce-cli and
+#           containerd.io on hold (apt-mark hold) before its first check, as an owner does who wants
+#           Docker where it is, and its real update goes ahead over the hold on the owner's confirmation
+#           (allow_held true), as `apt-get install --only-upgrade --allow-change-held-packages` would:
+#           the check has to offer it with held true and the three names, a POST that does not confirm
+#           the hold has to be refused with `held`, and afterwards apt-mark showhold (dpkg's own
+#           answer) has to still list the three, the status has to say holds_kept, and the unit's log
+#           has to carry the HELD and HOLDS lines. On every leg a hold of docker-ce for a moment is
+#           offered and refused the same way, and with it lifted the check says held false.
 #
 # What each leg asserts (the report lists every verdict by name):
 #   the check offers the update (versions, major_jump, the plan and its plan_id); the plan
 #   is judged on what dpkg did with it: the upgrades are engine packages, the new packages
 #   (at most 10) have valid names, nothing is removed, and the packages dpkg added and
 #   upgraded are exactly the plan's (a run that brought no new package says "No new
-#   dependency was exercised"); the containers listing; the refusals, none of which changes the engine (a held docker-ce, a
-#   dpkg lock held by another process, a running package update, an unfinished dpkg journal (a file
+#   dependency was exercised"); the containers listing; the refusals, none of which changes the engine (a held docker-ce that
+#   the POST does not confirm, a dpkg lock held by another process, a running package update, an unfinished dpkg journal (a file
 #   of digits only in /var/lib/dpkg/updates, which the guest makes and removes again: the check and the
 #   POST refuse it with `dpkg`, and the same plan is offered once it is gone), a plan that is not the plan,
 #   a body that is not a plan_id, a token in the query, a refresh token); the run (the POST is
@@ -121,13 +129,14 @@ jobs:
             kill_install: '1'
           - leg: minor
             name: Debian 12
-            label: the previous patch to the current one, then a Docker that cannot start
+            label: the previous patch to the current one over a hold, then a Docker that cannot start
             id: debian
             version: '12'
             base: https://cloud.debian.org/images/cloud/bookworm/latest
             image: debian-12-genericcloud-amd64.qcow2
             sums: SHA512SUMS
             algo: sha512sum
+            hold_docker: '1'
           - leg: minor
             name: Debian 13
             label: the previous patch to the current one, then a Docker that cannot start
@@ -161,6 +170,7 @@ jobs:
       INSTALLER_ARGS: ${{ matrix.args }}
       DOCKER_FROM: ${{ matrix.docker_from }}
       KILL_INSTALL: ${{ matrix.kill_install }}
+      HOLD_DOCKER: ${{ matrix.hold_docker }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -253,7 +263,7 @@ jobs:
         run: |
           set -euo pipefail
           scp -F ssh_config published/install.sh scripts/docker-update-proof.sh vm:
-          ssh -F ssh_config vm "sudo env PROOF_DISPOSABLE=1 EXPECT_ID='${EXPECT_ID}' EXPECT_VERSION_ID='${EXPECT_VERSION_ID}' INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' PROOF_KILL_INSTALL='${KILL_INSTALL}' OUT=/home/casa/proof bash docker-update-proof.sh ${LEG}"
+          ssh -F ssh_config vm "sudo env PROOF_DISPOSABLE=1 EXPECT_ID='${EXPECT_ID}' EXPECT_VERSION_ID='${EXPECT_VERSION_ID}' INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' PROOF_KILL_INSTALL='${KILL_INSTALL}' PROOF_HOLD_DOCKER='${HOLD_DOCKER}' OUT=/home/casa/proof bash docker-update-proof.sh ${LEG}"
 
       # Red for a verdict that fails and for a run that proves nothing alike.
       - name: Report
@@ -263,8 +273,8 @@ jobs:
           mkdir -p out
           ssh -F ssh_config vm 'sudo tar -C /home/casa/proof -cf - .' | tar -xf - -C out || true
           test -s out/timeline.tsv || { { echo "the run left no evidence: nothing to report"; cat out/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
-          # `kill` when this leg also killed the unit in the middle of the install: the report then demands the evidence of it
-          python3 scripts/docker-update-proof-report.py out "${LEG}" ${KILL_INSTALL:+kill} | tee -a "${GITHUB_STEP_SUMMARY}"
+          # `kill` when this leg also killed the unit in the middle of the install, `hold` when it put Docker's packages on hold: the report then demands the evidence of it
+          python3 scripts/docker-update-proof-report.py out "${LEG}" ${KILL_INSTALL:+kill} ${HOLD_DOCKER:+hold} | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: What the machine says when it is not well
         if: always()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn what docker-update-proof.sh wrote into verdicts, or say the run is invalid.
 
-    docker-update-proof-report.py <out dir> <major|minor> [kill]
+    docker-update-proof-report.py <out dir> <major|minor> [kill] [hold]
 
 Prints a markdown report (and writes it to <out dir>/report.md).
 
@@ -34,6 +34,14 @@ The legs:
             unpacked it) or refuses with `dpkg` (an update is pending), and which of the two it was (the check
             after the repair refuses nothing), and that the repair the dashboard will name (dpkg --configure -a,
             then apt-get -f install) completes the install.
+
+One minor leg is also given `hold`: Docker's packages (docker-ce, docker-ce-cli, containerd.io) were put on hold before the first check, as an owner
+does who wants Docker where it is. The dashboard does not refuse a hold: the check offers the update with `held` true and the names, a POST that does not
+confirm the hold is refused with `held`, and the update goes ahead on the owner's word (allow_held true), as `apt-get install --only-upgrade
+--allow-change-held-packages` would, and leaves the hold alone. The report then wants the evidence that the hold survived: what dpkg itself says
+(`apt-mark showhold`) before the update and after it, what the status says (held, held_packages, holds_kept), and the HELD and HOLDS lines of the unit's log.
+On every other leg docker-ce alone is held for a moment, for the refusals: the check offers the update with `held` true, the POST that does not confirm
+is refused with `held`, and with the hold lifted the check says `held` false and gives another plan_id (a hold is part of what was confirmed).
 
 On every leg, before the first update, while it is on offer, the guest makes a file of digits only in
 /var/lib/dpkg/updates (apt's own rule for an unfinished dpkg journal) and removes it again: the check has to
@@ -75,7 +83,10 @@ VERSION_RE = re.compile(r"^([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]*(:[a-z0-9]+)?$")   # dockerpkg.ValidName
 DISTRO_DOCKER = ("docker.io", "containerd", "docker-compose-v2", "docker-buildx")   # the distribution's, in conflict with Docker's own packages
 MAX_NEW = 10           # dockerpkg.MaxNewPackages
-MARKER_RE = re.compile(r"^CASAOS_DOCKER_UPDATE_([A-Z_]+) ([0-9a-f]{32})(?: (.*))?$")
+HELD_PROOF = ["containerd.io", "docker-ce", "docker-ce-cli"]   # what the held leg puts on hold, in the order the core sorts held_packages
+PLAN_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+PREFIX = "CASAOS_DOCKER_UPDATE_"
+MARKER_RE = re.compile(r"^" + PREFIX + r"([A-Z_]+) ([0-9a-f]{32})(?: (.*))?$")
 PIN_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$")   # name=version, the shape of a pin in PREVIOUS and in a rollback command
 # systemd rewrites ${NAME} in the command line of a transient unit: a name it has no value for becomes the empty string. From v254 on it says so, in
 # one of two words (src/core/exec-invoke.c): "Referenced but unset environment variable evaluates to an empty string: Package" for a name that is valid
@@ -96,6 +107,15 @@ K_AUDIT = "kill -9: dpkg --audit lists the half-finished install that `dpkg --co
 K_REPAIR = "kill -9: after `dpkg --configure -a` and `apt-get -f install` dpkg --audit is empty and Docker answers"
 K_DIRTY = "kill -9: the next check after the kill, before the repair, offers no update (docker-ce is at the candidate version) or refuses with `dpkg`"
 K_CLEAN = "kill -9: after the repair the check refuses nothing"
+V_HELD_CHECK = "a held Docker is offered by the check, with held true and the held packages named, and the plan the manual command would run"
+V_HELD_POST = "POST while Docker's packages are held, with no confirmation: 409 `held`, naming the held packages"
+V_HELD_POST_FALSE = "POST while Docker's packages are held, with allow_held false: 409 `held`, naming the held packages"
+V_UNHELD = "with the hold lifted the update is offered again, held false, with a plan_id that is not the held plan's (and is the first check's, when that had no hold)"
+V_AGAIN = "before the update the check offers the first check's plan again, held as it was then"
+V_FIRST_HELD = "the first check, with Docker's packages on hold, offers the update with held true and the three held packages named"
+V_HOLDS = "after the update apt-mark showhold (dpkg's own answer) still lists the packages that were on hold"
+V_HELD_STATUS = "the status of the run over a hold says held true, names the held packages, and says the hold was kept"
+V_HELD_LOG = "the log has the HELD line (the packages on hold at the start) and the HOLDS line (those still on hold at the end), the hold untouched"
 V_DPKG_CHECK = "an unfinished dpkg journal is refused by the check with `dpkg`, with no button"
 V_DPKG_POST = "POST while dpkg has an unfinished journal: 409 `dpkg`"
 V_DPKG_GONE = "after the unfinished journal is gone the update is offered again, with the same plan"
@@ -318,6 +338,20 @@ def audit_of(name):
     return int(m.group(1)), rest.strip()
 
 
+def showhold_of(name):
+    """the names `apt-mark showhold` listed (sorted), in a file the harness recorded: its first line is `exit N`, the rest is what it said. None when the file is missing
+    or the command failed: that is the harness's, not the hold's"""
+    first, _, rest = read(name).partition("\n")
+    m = re.match(r"^exit (\d+)$", first.strip())
+    if not m:
+        invalid("%s is missing or not a recorded apt-mark showhold (its first line is `exit N`)" % name)
+        return None
+    if m.group(1) != "0":
+        invalid("%s: apt-mark showhold exited %s, so it says nothing about what is on hold" % (name, m.group(1)))
+        return None
+    return sorted(ln.strip() for ln in rest.splitlines() if NAME_RE.match(ln.strip()))
+
+
 def lost_writes(logs_name, file_name):
     """(the ids the database acknowledged, the ids its file on the volume holds, the acknowledged ones the file does not hold)"""
     acked = re.findall(r"^\S+ ack (\S+)$", read(logs_name), re.M)
@@ -396,10 +430,13 @@ def check_log(text, label, want_terminal, order):
     # a kind that is missing counts -1 and breaks the order, except at the front, which the first-line rule below catches
     idx = [kinds.index(k) if k in kinds else -1 for k in order]
     ordered = idx == sorted(idx)
-    last = nonempty[-1].split(" ")[0] if nonempty else ""
+    # the unit reads what is still on hold as it ends, which may be after the terminal marker it printed on its way out: one HOLDS line right after that marker is the unit's
+    # last word, and anything else after the marker is trailing output
+    ending = nonempty[:-1] if len(nonempty) > 1 and nonempty[-1].startswith(PREFIX + "HOLDS ") and nonempty[-2].startswith(PREFIX + want_terminal + " ") else nonempty
+    last = ending[-1].split(" ")[0] if ending else ""
     first = nonempty[0].split(" ")[0] if nonempty else ""
     verdict("%s: the log has the markers in the order of the work, one nonce, one terminal marker, last" % label,
-            ordered and len({m[1] for m in marks}) == 1 and terms == [want_terminal] and last == "CASAOS_DOCKER_UPDATE_" + want_terminal
+            ordered and len({m[1] for m in marks}) == 1 and terms == [want_terminal] and last == PREFIX + want_terminal
             and first == "CASAOS_DOCKER_UPDATE_QUEUED",
             "kinds %s; nonces %d; terminal markers %s; last line %r" % (",".join(kinds), len({m[1] for m in marks}), terms, nonempty[-1][:60] if nonempty else ""))
     return marks
@@ -409,12 +446,20 @@ if leg not in ("major", "minor"):
     invalid("the leg is %r: major or minor" % leg)
     finish()
 # `kill`: this leg also kills the unit with SIGKILL during the install, so the evidence of that is required (and is not looked for on a leg that did not)
+# `hold`: this leg puts Docker's packages on hold before the first check and has the update go ahead over the hold, so the evidence of that is required too
 for option in options:
-    if option != "kill":
-        invalid("the report does not know the option %r (the only one is `kill`)" % option)
+    if option not in ("kill", "hold"):
+        invalid("the report does not know the option %r (the options are `kill` and `hold`)" % option)
 kill_expected = "kill" in options
+hold_expected = "hold" in options
 if kill_expected and leg != "minor":
     invalid("the kill -9 injection belongs to a minor leg")
+if hold_expected and leg != "minor":
+    invalid("the update over a hold belongs to a minor leg")
+if not hold_expected and (read("holds-before.txt").strip() or read("holds-after.txt").strip()):
+    invalid("holds-before.txt or holds-after.txt exists: the guest put Docker's packages on hold and the report was not asked to judge it (give it `hold`)")
+# what the refusals hold: docker-ce alone, or the three the leg holds from the start
+want_held = HELD_PROOF if hold_expected else ["docker-ce"]
 
 aborted = read("aborted").strip()
 if aborted:
@@ -554,7 +599,8 @@ P("")
 P("| | |")
 P("|---|---|")
 P("| system | %s |" % (read("os").strip() or "?"))
-P("| leg | %s: %s |" % (leg, "a major jump, the owner's case" if leg == "major" else "the previous patch to the current one, then a failure injected"))
+P("| leg | %s: %s%s |" % (leg, "a major jump, the owner's case" if leg == "major" else "the previous patch to the current one, then a failure injected",
+                           "; docker-ce, docker-ce-cli and containerd.io on hold from before the first check" if hold_expected else ""))
 P("| docker-ce at the start | %s (daemon %s) |" % (installed_full or "?", before.get("docker", "?")))
 P("| docker-ce on offer | %s |" % (candidate_full or "?"))
 for key_, label_ in (("apt", "apt"), ("systemd", "systemd"), ("dpkg", "dpkg"), ("sh", "/bin/sh")):
@@ -592,9 +638,18 @@ verdict("the plan's docker-ce is the one dpkg has and the one apt offers",
         on(code is not None, dce.get("current_version") == installed_full and dce.get("candidate_version") == candidate_full),
         "plan %r -> %r, dpkg %r, apt %r" % (dce.get("current_version"), dce.get("candidate_version"), installed_full, candidate_full))
 plan_id = up.get("plan_id")
-want_id = hashlib.sha256("\n".join(sorted("%s %s>%s" % (p.get("name"), p.get("current_version"), p.get("candidate_version"))
-                                          for p in plan if isinstance(p, dict))).encode()).hexdigest()
-verdict("plan_id is the sha256 of the sorted `name current>candidate` lines", on(code is not None, plan_id == want_id), "got %r, computed %r" % (plan_id, want_id))
+# the check made with no hold: the first one on a leg that began with none, the one after the hold was lifted on the leg that holds Docker's packages. A hold is part of
+# the plan_id (it is what the owner confirmed), so the formula that is the plan's alone is the one of a check made without one
+free_code, free_body = resp("packages-unheld")
+free = dobj(free_body, "docker", "update")
+ref_code, ref = (free_code, free) if hold_expected else (code, up)
+ref_plan = [p for p in ref.get("packages", []) if isinstance(p, dict)] if isinstance(ref.get("packages"), list) else []
+want_id = hashlib.sha256("\n".join(sorted("%s %s>%s" % (p.get("name"), p.get("current_version"), p.get("candidate_version")) for p in ref_plan)).encode()).hexdigest()
+verdict("plan_id is the sha256 of the sorted `name current>candidate` lines", on(ref_code is not None, ref.get("plan_id") == want_id),
+        "got %r, computed %r%s" % (ref.get("plan_id"), want_id, " (the check made with the hold lifted)" if hold_expected else ""))
+if hold_expected:
+    verdict(V_FIRST_HELD, on(code is not None, code == 200 and up.get("available") is True and not up.get("refusal") and up.get("held") is True and up.get("held_packages") == HELD_PROOF),
+            "HTTP %s, available %r, refusal %r, held %r, held_packages %r (wanted %s)" % (code, up.get("available"), up.get("refusal"), up.get("held"), up.get("held_packages"), HELD_PROOF))
 if secs("packages-1") is not None:
     P("The first check took %.1f s (apt-get update and the simulations included)." % secs("packages-1"))
     P("")
@@ -619,18 +674,39 @@ verdict("the status before any run is idle and supported", on(code is not None, 
 
 # ---- refusals: nothing of the engine changes ------------------------------------------------------------
 
-def refused(label, name, codes):
+def refused(label, name, codes, detail=None):
+    """detail: the names the refusal has to give in refusal_detail (in any order)"""
     code, body = resp(name)
     d = dobj(body)
-    verdict(label, on(code is not None, code == 409 and d.get("error_code") in codes and bool(d.get("error")) and body.get("message") == d.get("error")),
-            "HTTP %s, error_code %r (wanted %s), error %r, message %r" % (code, d.get("error_code"), " or ".join(codes), d.get("error"), body.get("message")))
+    names = d.get("refusal_detail")
+    verdict(label, on(code is not None, code == 409 and d.get("error_code") in codes and bool(d.get("error")) and body.get("message") == d.get("error")
+                      and (detail is None or (isinstance(names, list) and sorted(map(str, names)) == detail))),
+            "HTTP %s, error_code %r (wanted %s), error %r, message %r%s" % (code, d.get("error_code"), " or ".join(codes), d.get("error"), body.get("message"),
+                                                                              "" if detail is None else ", refusal_detail %r (wanted %s)" % (names, detail)))
 
 
+def packages_of(u):
+    """what a check's plan lists, as (name, current, candidate), sorted"""
+    return sorted(((str(p.get("name")), str(p.get("current_version")), str(p.get("candidate_version"))) for p in (u.get("packages") if isinstance(u.get("packages"), list) else [])
+                   if isinstance(p, dict)))
+
+
+# Docker's packages on hold (docker-ce alone, or the three the held leg holds): the check offers the update and says so, a POST that does not confirm the hold is
+# refused with `held`, and with the hold lifted the check says it no more
 code, body = resp("packages-held")
 hu = dobj(body, "docker", "update")
-verdict("a held docker-ce is refused by the check with `held`, with no button", on(code is not None, code == 200 and hu.get("refusal") == "held" and hu.get("available") is False),
-        "HTTP %s, refusal %r, available %r" % (code, hu.get("refusal"), hu.get("available")))
-refused("POST while docker-ce is held: 409 `held`", "held-post", ("held",))
+verdict(V_HELD_CHECK, on(code is not None and free_code is not None, code == 200 and hu.get("available") is True and not hu.get("refusal") and hu.get("held") is True
+                         and hu.get("held_packages") == want_held and packages_of(hu) == packages_of(free)),
+        "HTTP %s, available %r, refusal %r, held %r, held_packages %r (wanted %s); the packages are %s the ones of the check made with the hold lifted" %
+        (code, hu.get("available"), hu.get("refusal"), hu.get("held"), hu.get("held_packages"), want_held, "the same as" if packages_of(hu) == packages_of(free) else "not"))
+refused(V_HELD_POST, "held-post", ("held",), want_held)
+refused(V_HELD_POST_FALSE, "held-false-post", ("held",), want_held)
+verdict(V_UNHELD, on(free_code is not None and code is not None and (hold_expected or plan_seen),
+                     free_code == 200 and free.get("available") is True and not free.get("refusal") and not free.get("held") and not free.get("held_packages")
+                     and isinstance(free.get("plan_id"), str) and bool(PLAN_ID_RE.match(free["plan_id"])) and free.get("plan_id") != hu.get("plan_id")
+                     and (hold_expected or free.get("plan_id") == plan_id)),
+        "HTTP %s, available %r, refusal %r, held %r, held_packages %r, plan_id %r (the held plan's %r; the first check's %r)" %
+        (free_code, free.get("available"), free.get("refusal"), free.get("held"), free.get("held_packages"), free.get("plan_id"), hu.get("plan_id"), plan_id))
 refused("POST while dpkg is locked: 409 `maintenance`", "lock-post", ("maintenance",))
 # the spec files "a generic package update is running" under `running` and under `maintenance`
 refused("POST while the generic package update runs: 409 `running` or `maintenance`", "unit-post", ("running", "maintenance"))
@@ -643,8 +719,8 @@ verdict(V_DPKG_CHECK, on(code is not None, code == 200 and ju.get("refusal") == 
 refused(V_DPKG_POST, "journal-post", ("dpkg",))
 code, body = resp("packages-journal-gone")
 gu = dobj(body, "docker", "update")
-verdict(V_DPKG_GONE, on(code is not None and plan_seen, code == 200 and gu.get("available") is True and not gu.get("refusal") and gu.get("plan_id") == plan_id),
-        "HTTP %s, available %r, refusal %r, plan_id %r (first %r)" % (code, gu.get("available"), gu.get("refusal"), gu.get("plan_id"), plan_id))
+verdict(V_DPKG_GONE, on(code is not None and ref_code is not None, code == 200 and gu.get("available") is True and not gu.get("refusal") and gu.get("plan_id") == ref.get("plan_id")),
+        "HTTP %s, available %r, refusal %r, plan_id %r (the check made with no hold %r)" % (code, gu.get("available"), gu.get("refusal"), gu.get("plan_id"), ref.get("plan_id")))
 refused("POST with a plan_id that is not the plan: 409 `changed`", "wrong-post", ("changed",))
 code, _ = resp("bad-post")
 verdict("POST with a body that is not a plan_id: 400", on(code is not None, code == 400), "HTTP %s" % code)
@@ -655,10 +731,12 @@ verdict("POST with a refresh token: 401", on(code is not None, code == 401), "HT
 refused("POST with the dashboard's own token in the header reaches the route (wrong plan: 409 `changed`)", "jwt-post", ("changed",))
 code, body = resp("packages-2")
 up2 = dobj(body, "docker", "update")
-verdict("after the hold is lifted the update is offered again, with the same plan", on(code is not None and plan_seen, code == 200 and up2.get("available") is True and up2.get("plan_id") == plan_id),
-        "HTTP %s, available %r, plan_id %r (first %r)" % (code, up2.get("available"), up2.get("plan_id"), plan_id))
-P("The refusal checks ran on the live box and changed nothing of the engine: docker-ce held and released, dpkg's lock held by another process, "
-  "a stand-in transient unit named casaos-package-update.service kept active, and POSTs with a wrong plan_id or a body that is not one.")
+verdict(V_AGAIN, on(code is not None and plan_seen, code == 200 and up2.get("available") is True and up2.get("plan_id") == plan_id and bool(up2.get("held")) == hold_expected
+                    and (up2.get("held_packages") or []) == (HELD_PROOF if hold_expected else [])),
+        "HTTP %s, available %r, plan_id %r (first %r), held %r, held_packages %r" % (code, up2.get("available"), up2.get("plan_id"), plan_id, up2.get("held"), up2.get("held_packages")))
+P("The refusal checks ran on the live box and changed nothing of the engine: %s held and released, dpkg's lock held by another process, "
+  "a stand-in transient unit named casaos-package-update.service kept active, and POSTs with a wrong plan_id or a body that is not one." %
+  ("docker-ce, docker-ce-cli and containerd.io" if hold_expected else "docker-ce"))
 P("")
 
 # ---- the run -------------------------------------------------------------------------------------------
@@ -733,6 +811,39 @@ if all(journals.values()):
 verdict("the DAEMON marker records the running version", on(marks, field("DAEMON").strip() == expected_to), "DAEMON: %r (wanted %r)" % (field("DAEMON"), expected_to))
 logged_nr = sorted(m[2].split()[0] for m in marks if m[0] == "NOTRETURNED" and m[2].split())
 verdict("the NOTRETURNED markers are the containers the status lists", on(marks and fd, logged_nr == [n for n, _ in nr_pairs]), "log %r, status %r" % (logged_nr, [n for n, _ in nr_pairs]))
+
+# ---- the update over a hold: the held leg only --------------------------------------------------------------
+
+if hold_expected:
+    hold_before, hold_after = showhold_of("holds-before.txt"), showhold_of("holds-after.txt")
+    # a box where the three were not on hold when the update was asked for proves nothing about the hold surviving it: the harness's, not the feature's
+    if hold_before is not None and not set(HELD_PROOF) <= set(hold_before):
+        invalid("apt-mark showhold lists %s when the update was asked for, not all of %s: the packages were not on hold, and what the update left says nothing of the hold" %
+                (", ".join(hold_before) or "nothing", ", ".join(HELD_PROOF)))
+    verdict(V_HOLDS, on(hold_before is not None and hold_after is not None and set(HELD_PROOF) <= set(hold_before), set(HELD_PROOF) <= set(hold_after or [])),
+            "apt-mark showhold before the update: %s; after it: %s (wanted at least %s)" % (", ".join(hold_before or []) or "nothing", ", ".join(hold_after or []) or "nothing", ", ".join(HELD_PROOF)))
+    verdict(V_HELD_STATUS, on(fd, fd.get("held") is True and fd.get("held_packages") == HELD_PROOF and fd.get("holds_kept") is True),
+            "held %r, held_packages %r (wanted %s), holds_kept %r" % (fd.get("held"), fd.get("held_packages"), HELD_PROOF, fd.get("holds_kept")))
+    # the unit's own words (the HELD line at its start, the HOLDS line at its end): the names it found on hold, and the ones still on hold. A status the core
+    # derived from them says the same, and the report asks both: on a system whose systemd is older than 254 an emptied variable in the script leaves no line in the journal, and
+    # a HOLDS line made of nothing is what shows it
+    queued_nonce = next((m[1] for m in marks if m[0] == "QUEUED"), None)
+    kinds_ = [m[0] for m in marks]
+    held_lines = [m for m in marks if m[0] == "HELD" and m[1] == queued_nonce]
+    holds_lines = [m for m in marks if m[0] == "HOLDS" and m[1] == queued_nonce]
+    names_of = lambda ms: sorted(ms[0][2].split()) if len(ms) == 1 and ms[0][2].strip() != "-" else None
+    in_order = len(held_lines) == 1 and len(holds_lines) == 1 and kinds_.index("HELD") < kinds_.index("HOLDS")
+    verdict(V_HELD_LOG, on(marks, in_order and names_of(held_lines) == HELD_PROOF and names_of(holds_lines) == HELD_PROOF),
+            "HELD lines: %r, HOLDS lines: %r (wanted one of each, naming %s, HELD first)" %
+            ([m[2] for m in held_lines], [m[2] for m in holds_lines], " ".join(HELD_PROOF)))
+    P("## The update over a hold")
+    P("")
+    P("docker-ce, docker-ce-cli and containerd.io were put on hold with apt-mark before the first check. The check offered the update all the same, with `held` true; a POST that "
+      "did not confirm the hold was refused with `held`; the update was then asked for with `allow_held` true, as `apt-get install --only-upgrade --allow-change-held-packages` "
+      "would run it. What dpkg says is on hold (`apt-mark showhold`): before the update %s; after it %s. The status says held %r, holds_kept %r; the log's HELD line says %r "
+      "and its HOLDS line %r. The proof lifted the hold itself once that was recorded, so that the failure injection could put the box back." % (", ".join(hold_before or []) or "nothing", ", ".join(hold_after or []) or "nothing", fd.get("held"), fd.get("holds_kept"),
+                                  held_lines[0][2] if held_lines else None, holds_lines[0][2] if holds_lines else None))
+    P("")
 
 # ---- what the box says afterwards -------------------------------------------------------------------------
 

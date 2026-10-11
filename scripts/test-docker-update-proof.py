@@ -12,7 +12,9 @@ agrees; the same leg on a box that kept nftables passes too, and says that no ne
 exercised. The rollback after the major jump is an observation, recorded and never judged, and every leg ends with a failure injection (the major leg's is a failed
 major jump that offers no way back). The text-only functions of docker-update-proof.sh (which version a leg starts from, whether
 nftables may be taken out) are tested too, when bash is here, and so is the step that takes it out, with
-stand-ins for apt, dpkg, systemctl and docker.
+stand-ins for apt, dpkg, systemctl and docker. One minor leg puts Docker's packages on hold before its first check and has the update go ahead
+over the hold, which the report is told with `hold`: its evidence (what dpkg says is on hold before and after, the status, the HELD and HOLDS lines of
+the log) has a case of its own for each way it can be wrong, and every leg has the cases of the hold that the refusals set for a moment.
 
 REPORT=<path> and PROOF_SCRIPT=<path> run the cases against other copies of the report and of the guest
 script, to see that a broken one is caught. TEST_BASH=<path> names a bash where plain `bash` is not the one.
@@ -62,6 +64,11 @@ HAD_NFT = dict(LEGS["major"], new=[], removed=[], present=NFT,
 NO_NEED = dict(LEGS["major"], new=[])
 # the minor leg that also kills the unit in the middle of the install (the report is told so with `kill`)
 KILL_MINOR = dict(LEGS["minor"], kill=True)
+# the minor leg that puts docker-ce, docker-ce-cli and containerd.io on hold before the first check and has the update go ahead over the hold (the report is told so with
+# `hold`): Debian 12 in the workflow, whose systemd (252) writes no line about an emptied variable of the unit's command line
+HELD3 = ["containerd.io", "docker-ce", "docker-ce-cli"]
+HOLD_MINOR = dict(LEGS["minor"], os="Debian GNU/Linux 12 (bookworm)", hold=True, systemd="systemd 252 (252.39-1~deb12u2)",
+                  plan=[(n, "5:29.8.1-1~debian.12~bookworm", "5:29.8.2-1~debian.12~bookworm") for n in ("docker-ce", "docker-ce-cli", "docker-ce-rootless-extras")])
 
 
 def many_new(n):
@@ -78,9 +85,12 @@ def ok(data):
     return {"success": 200, "message": "ok", "data": data}
 
 
-def refusal(code, text=None):
+def refusal(code, text=None, detail=None):
     text = text or "the reason for %s" % code
-    return {"success": 409, "message": text, "data": {"error": text, "error_code": code}}
+    data = {"error": text, "error_code": code}
+    if detail is not None:
+        data["refusal_detail"] = detail
+    return {"success": 409, "message": text, "data": data}
 
 
 def plan_hash(plan):
@@ -116,7 +126,10 @@ def dpkg_text(s, after):
     """what `dpkg-query -W` lists before the update or after it: the base of the box, Docker's packages at the version they have then,
     the new ones only after; what the harness took out is `rc` (removed, configuration kept) until the update brings it back"""
     rows = [(n, v, "ii") for n, v in BASE + s.get("present", [])]
-    rows += [(n, k if after else c, "ii") for n, c, k in s["plan"]]
+    # a package on hold is `hi` for dpkg, upgraded or not
+    rows += [(n, k if after else c, "hi" if s.get("hold") and n in HELD3 else "ii") for n, c, k in s["plan"]]
+    if s.get("hold"):
+        rows.append(("containerd.io", "2.4.1-2~debian.12~bookworm", "hi"))   # on hold, and not in the plan
     brought = {n for n, _ in s["new"]}
     if after:
         rows += [(n, k, "ii") for n, k in s["new"]]
@@ -125,10 +138,17 @@ def dpkg_text(s, after):
     return "".join("%s\t%s\t%s \n" % row for row in sorted(rows))
 
 
-def packages_body(s, available=True, refusal_code="", version=None):
+def plan_id_for(s, held=None):
+    """the plan_id the core gives a plan: the hash of its lines, and another one when a hold is part of what is confirmed"""
+    h = plan_hash(full_plan(s))
+    return hashlib.sha256((h + "\nheld " + " ".join(sorted(held))).encode()).hexdigest() if held else h
+
+
+def packages_body(s, available=True, refusal_code="", version=None, held=None):
+    """held: the names of the engine packages that are on hold when the check is made"""
     plan = [dict(name=n, current_version=c, candidate_version=k) for n, c, k in s["plan"]]
     plan += [dict(name=n, current_version="", candidate_version=k, new=True) for n, k in s["new"]]
-    update = dict(available=available, refusal=refusal_code, refusal_detail=[], packages=plan, plan_id=plan_hash(full_plan(s)),
+    update = dict(available=available, refusal=refusal_code, refusal_detail=[], packages=plan, plan_id=plan_id_for(s, held), held=bool(held), held_packages=sorted(held or []),
                   **{"from": s["start"], "to": s["to"], "major_jump": s["major_jump"]})
     return ok({"supported": True, "count": 0, "docker": dict(installed=True, version=version or s["start"], update=update)})
 
@@ -138,7 +158,7 @@ MAJOR_JUMP = [False]   # what every status says of the jump: build() sets it to 
 
 def status_data(state, outcome="", **kw):
     d = {"supported": True, "state": state, "outcome": outcome, "error": "", "error_code": "", "exit_code": None, "started_at": "", "completed_at": "",
-         "from": "", "to": "", "major_jump": MAJOR_JUMP[0], "not_returned": [], "rollback_command": ""}
+         "from": "", "to": "", "major_jump": MAJOR_JUMP[0], "not_returned": [], "rollback_command": "", "held": False, "held_packages": []}
     d.update(kw)
     return d
 
@@ -182,10 +202,11 @@ def plan_line(s):
 
 def success_log(s, t_dl):
     prev = " ".join("%s=%s" % (n, c) for n, c, _ in s["plan"])
-    lines = [marker("QUEUED", iso(T0 + 100)), plan_line(s), marker("STARTED", iso(T0 + 101)), marker("PREVIOUS", prev)]
+    held = " ".join(HELD3) if s.get("hold") else "-"    # what the unit finds on hold at its start, and what is still on hold before it ends
+    lines = [marker("QUEUED", iso(T0 + 100)), plan_line(s), marker("STARTED", iso(T0 + 101)), marker("HELD", held), marker("PREVIOUS", prev)]
     lines += ["container: %s %s" % (n, p) for n, p in sorted(CONTAINERS.items())]
     lines += ["Reading package lists...", marker("DOWNLOADED", iso(t_dl)), "Unpacking docker-ce ...", marker("INSTALLED", iso(T0 + 140)),
-              marker("DAEMON", s["to"]), marker("NOTRETURNED", "p-no no"), marker("SUCCESS", iso(T0 + 190))]
+              marker("DAEMON", s["to"]), marker("NOTRETURNED", "p-no no"), marker("HOLDS", held), marker("SUCCESS", iso(T0 + 190))]
     return "\n".join(lines) + "\n"
 
 
@@ -256,17 +277,24 @@ def build(d, leg, s=None):
         return "\n".join(out) + "\n"
     success_extra = dict(outcome="success", started_at=iso(T0 + 100), completed_at=iso(T0 + 190), **{"from": s["start"], "to": s["to"]},
                          not_returned=[{"name": "p-no", "restart_policy": "no"}])
+    if s.get("hold"):
+        success_extra.update(held=True, held_packages=HELD3, holds_kept=True)
     put(d, "status.jsonl", samples(102, 190, "succeeded", success_extra))
     api(d, "status-idle", 200, ok(status_data("idle")))
     put(d, "status-final.json", json.dumps(ok(dict(status_data("succeeded", **success_extra), log=success_log(s, t_dl)))))
 
-    api(d, "packages-1", 200, packages_body(s), secs=21.5)
-    api(d, "packages-2", 200, packages_body(s))
-    api(d, "packages-held", 200, packages_body(s, available=False, refusal_code="held"))
+    # the first check and the one before the update see the hold the leg started with (the held leg's three, or none); the refusals hold docker-ce alone, or the three again
+    first_held = HELD3 if s.get("hold") else None
+    refusal_held = HELD3 if s.get("hold") else ["docker-ce"]
+    api(d, "packages-1", 200, packages_body(s, held=first_held), secs=21.5)
+    api(d, "packages-2", 200, packages_body(s, held=first_held))
+    api(d, "packages-held", 200, packages_body(s, held=refusal_held))
+    api(d, "packages-unheld", 200, packages_body(s))
     api(d, "containers-before", 200, ok({"running": True, "containers": [
         {"name": n, "image": "busybox", "restart_policy": p, "host_network": n == "p-host",
          "ports": [{"port": 80, "protocol": "tcp", "host_port": 18081}] if n == "p-web" else []} for n, p in sorted(CONTAINERS.items())]}))
-    api(d, "held-post", 409, refusal("held"))
+    api(d, "held-post", 409, refusal("held", detail=refusal_held))
+    api(d, "held-false-post", 409, refusal("held", detail=refusal_held))
     api(d, "lock-post", 409, refusal("maintenance"))
     api(d, "unit-post", 409, refusal("running"))
     api(d, "wrong-post", 409, refusal("changed"))
@@ -316,8 +344,12 @@ def build(d, leg, s=None):
     put(d, "dependency-path", s["dependency"])
     put(d, "unit-journal.txt", JOURNAL)
     put(d, "unit-journal-end.txt", JOURNAL)
-    put(d, "box-facts", box_facts(SYSTEMD[leg]))
+    put(d, "box-facts", box_facts(s.get("systemd") or SYSTEMD[leg]))
     put(d, "apt-simulation.txt", simulation_text(s))
+    if s.get("hold"):
+        # dpkg's own answer when the update was asked for and when it had ended: the three are on hold both times
+        put(d, "holds-before.txt", "exit 0\n" + "\n".join(HELD3) + "\n")
+        put(d, "holds-after.txt", "exit 0\n" + "\n".join(HELD3) + "\n")
 
     if s.get("kill"):
         # the unit killed while dpkg ran a maintainer script of containerd.io's: no terminal marker, no INSTALLED, a package half installed
@@ -326,7 +358,7 @@ def build(d, leg, s=None):
                 "installation can probably be completed by retrying it; the packages can be removed using\n"
                 "dselect or dpkg --remove to remove them (including their configuration files):\n"
                 " containerd.io  Open Source Container Runtime\n")
-        kl = [marker("QUEUED", iso(T0 + 205)), plan_line(s), marker("STARTED", iso(T0 + 206)), marker("PREVIOUS", pins), "container: p-always always", marker("DOWNLOADED", iso(T0 + 215)), "Unpacking containerd.io ..."]
+        kl = [marker("QUEUED", iso(T0 + 205)), plan_line(s), marker("STARTED", iso(T0 + 206)), marker("HELD", "-"), marker("PREVIOUS", pins), "container: p-always always", marker("DOWNLOADED", iso(T0 + 215)), "Unpacking containerd.io ..."]
         kill_extra = dict(outcome="failed", error="The update did not leave a result: it stopped before it finished.", error_code="no_result", started_at=iso(T0 + 205),
                           completed_at=iso(T0 + 262), **{"from": s["start"]}, rollback_command="sudo apt-get install --allow-downgrades " + pins)
         api(d, "kill-packages", 200, packages_body(s))
@@ -353,8 +385,8 @@ def build(d, leg, s=None):
     # a major jump has no rollback command: the status says which jump it was (from the PREVIOUS marker, to from the PLAN line) and gives none
     fail_extra = dict(outcome="failed", error="The update failed: Docker did not start again.", error_code="daemon", started_at=iso(T0 + 300), completed_at=iso(T0 + 400),
                       **{"from": s["start"], "to": s["to"]}, rollback_command="" if s["major_jump"] else "sudo apt-get install --allow-downgrades " + fail_pins)
-    fl = [marker("QUEUED", iso(T0 + 300)), plan_line(s), marker("STARTED", iso(T0 + 301)), marker("PREVIOUS", fail_pins),
-          marker("DOWNLOADED", iso(T0 + 310)), marker("INSTALLED", iso(T0 + 330)), marker("FAILED", iso(T0 + 400) + " daemon")]
+    fl = [marker("QUEUED", iso(T0 + 300)), plan_line(s), marker("STARTED", iso(T0 + 301)), marker("HELD", "-"), marker("PREVIOUS", fail_pins),
+          marker("DOWNLOADED", iso(T0 + 310)), marker("INSTALLED", iso(T0 + 330)), marker("HOLDS", "-"), marker("FAILED", iso(T0 + 400) + " daemon")]
     put(d, "docker-update-fail.log", "\n".join(fl) + "\n")
     put(d, "fail-status.jsonl", "\n".join("%f\t200\t%s" % (T0 + t_, json.dumps(status_data("running" if t_ < 400 else "failed", **(fail_extra if t_ >= 400 else {}))))
                                           for t_ in range(302, 401, 2)) + "\n")
@@ -474,9 +506,11 @@ def rollback_follows_log(d):
 
 def case(name, want_code, must_have=(), must_not_have=(), leg="major", mutate=None, empty=False, spec=None, follow=False, args=None):
     """follow: the guest ran on the log as mutated, so the rollback it did is the one of that log's PREVIOUS marker
-    args: what the report is given after the leg; `kill` when the leg is the one that kills the unit (the spec says so), unless it is said here"""
+    args: what the report is given after the leg; `kill` when the leg is the one that kills the unit and `hold` when it is the one that holds Docker's packages (the spec says
+    so), unless it is said here"""
     if args is None:
-        args = ["kill"] if (spec or LEGS.get(leg) or {}).get("kill") else []
+        sp = spec or LEGS.get(leg) or {}
+        args = (["kill"] if sp.get("kill") else []) + (["hold"] if sp.get("hold") else [])
     count[0] += 1
     with tempfile.TemporaryDirectory() as d:
         if not empty:
@@ -618,11 +652,91 @@ fails("host networking is not reported", "the published port and the host networ
 fails("a box that is not idle before the first run", "the status before any run is idle", lambda d: jedit(d, "status-idle.json", lambda j: j["data"].update(state="failed")))
 
 # the refusals
-fails("a held docker-ce that is not refused by the check", "a held docker-ce is refused by the check", lambda d: jedit(d, "packages-held.json", lambda j: update(j).update(refusal="", available=True)))
-fails("a held docker-ce refused with another code", "a held docker-ce is refused by the check", lambda d: jedit(d, "packages-held.json", lambda j: update(j).update(refusal="plan")))
-fails("a held docker-ce that still has a button", "a held docker-ce is refused by the check", lambda d: jedit(d, "packages-held.json", lambda j: update(j).update(available=True)))
-fails("a POST while held that goes through", "POST while docker-ce is held", lambda d: api(d, "held-post", 200, ok(status_data("running"))))
-fails("a POST while held refused with `changed`", "POST while docker-ce is held", lambda d: api(d, "held-post", 409, refusal("changed")))
+# a hold. The check offers the update and says that it is held (docker-ce alone on every leg, the three packages on the leg that holds them from the start), a POST that does
+# not confirm the hold is refused with `held` naming the packages, and with the hold lifted the check says it no more and gives another plan_id
+V_HELD_CHECK = "a held Docker is offered by the check, with held true and the held packages named, and the plan the manual command would run"
+V_HELD_POST = "POST while Docker's packages are held, with no confirmation: 409 `held`, naming the held packages"
+V_HELD_POST_FALSE = "POST while Docker's packages are held, with allow_held false: 409 `held`, naming the held packages"
+V_UNHELD = "with the hold lifted the update is offered again, held false, with a plan_id that is not the held plan's (and is the first check's, when that had no hold)"
+V_AGAIN = "before the update the check offers the first check's plan again, held as it was then"
+V_PLAN_ID = "plan_id is the sha256"
+
+
+def upd(name, fn):
+    return lambda d: jedit(d, name + ".json", lambda j: fn(update(j)))
+
+
+def held_cases(leg_, spec):
+    """the check and the POSTs of a hold, on a leg that holds docker-ce alone for a moment and on the leg that holds the three from the start"""
+    holds = bool(spec and spec.get("hold"))
+    names = HELD3 if holds else ["docker-ce"]
+    other = ["docker-ce-cli"] if not holds else names[:2]     # names that are not the held ones
+    s_ = spec or LEGS[leg_]
+    tag = "%s%s" % (leg_, ", Docker's packages on hold from the start" if holds else "")
+    kw = dict(leg=leg_, spec=spec)
+    case("a healthy %s leg offers a held Docker, refuses to update it unconfirmed, and offers it with no hold once it is lifted" % tag, 0,
+         ["**PASS** " + V_HELD_CHECK, "**PASS** " + V_HELD_POST, "**PASS** " + V_HELD_POST_FALSE, "**PASS** " + V_UNHELD, "**PASS** " + V_AGAIN], ["**FAIL**", "INVALID"], **kw)
+    fails("a held Docker that the check still refuses with `held` (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(refusal="held", available=False)), **kw)
+    fails("a held Docker that the check refuses for another reason (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(refusal="plan", available=False)), **kw)
+    fails("a held Docker that the check does not offer, with nothing refused (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(available=False)), **kw)
+    fails("a held Docker that the check offers with a refusal all the same (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(refusal="plan")), **kw)
+    fails("a held Docker that the check does not say is held (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(held=False)), **kw)
+    fails("a held Docker whose check has no held field at all (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.pop("held")), **kw)
+    fails("a held Docker that says held in words and not as a boolean (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(held="true")), **kw)
+    fails("a held Docker whose held packages are not named (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(held_packages=[])), **kw)
+    fails("a held Docker whose held packages are not the held ones (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(held_packages=other)), **kw)
+    fails("a held Docker whose held packages list one that is not held (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(held_packages=sorted(names + ["nftables"]))), **kw)
+    fails("a held Docker whose plan is not the plan with no hold (%s)" % tag, V_HELD_CHECK, upd("packages-held", lambda u: u.update(packages=u["packages"][:-1])), **kw)
+    fails("a POST while Docker's packages are held that goes through (%s)" % tag, V_HELD_POST, lambda d: api(d, "held-post", 200, ok(status_data("running"))), **kw)
+    fails("a POST while held that is refused with `changed` (%s)" % tag, V_HELD_POST, lambda d: api(d, "held-post", 409, refusal("changed", detail=names)), **kw)
+    fails("a POST while held that is refused with `held` and names nothing (%s)" % tag, V_HELD_POST, lambda d: api(d, "held-post", 409, refusal("held")), **kw)
+    fails("a POST while held that is refused with `held` and names other packages (%s)" % tag, V_HELD_POST, lambda d: api(d, "held-post", 409, refusal("held", detail=other)), **kw)
+    fails("a POST while held that is refused with `held` and names them in a string (%s)" % tag, V_HELD_POST, lambda d: api(d, "held-post", 409, refusal("held", detail=" ".join(names))), **kw)
+    fails("a POST with allow_held false that goes through (%s)" % tag, V_HELD_POST_FALSE, lambda d: api(d, "held-false-post", 200, ok(status_data("running"))), **kw)
+    fails("a POST with allow_held false that is refused with `changed` (%s)" % tag, V_HELD_POST_FALSE, lambda d: api(d, "held-false-post", 409, refusal("changed", detail=names)), **kw)
+    fails("a POST with allow_held false that is refused with `held` and names nothing (%s)" % tag, V_HELD_POST_FALSE, lambda d: api(d, "held-false-post", 409, refusal("held")), **kw)
+    fails("a POST with allow_held false that is refused with `held` and names other packages (%s)" % tag, V_HELD_POST_FALSE,
+          lambda d: api(d, "held-false-post", 409, refusal("held", detail=other)), **kw)
+    fails("a check with the hold lifted that still says held (%s)" % tag, V_UNHELD, upd("packages-unheld", lambda u: u.update(held=True)), **kw)
+    fails("a check with the hold lifted that still names held packages (%s)" % tag, V_UNHELD, upd("packages-unheld", lambda u: u.update(held_packages=["docker-ce"])), **kw)
+    fails("a check with the hold lifted that gives the plan_id of the held plan: the hold is not in the plan_id (%s)" % tag, V_UNHELD,
+          upd("packages-unheld", lambda u: u.update(plan_id=plan_id_for(s_, names))), **kw)
+    fails("a check with the hold lifted that does not offer the update (%s)" % tag, V_UNHELD, upd("packages-unheld", lambda u: u.update(available=False)), **kw)
+    fails("a check with the hold lifted that refuses (%s)" % tag, V_UNHELD, upd("packages-unheld", lambda u: u.update(refusal="plan")), **kw)
+    fails("a check with the hold lifted whose plan_id is not a plan_id (%s)" % tag, V_UNHELD, upd("packages-unheld", lambda u: u.update(plan_id="not a plan id")), **kw)
+    fails("a check with the hold lifted that says nothing of Docker's update (%s)" % tag, V_UNHELD, lambda d: jedit(d, "packages-unheld.json", lambda j: j["data"]["docker"].pop("update")), **kw)
+    fails("a check before the update that offers another plan (%s)" % tag, V_AGAIN, upd("packages-2", lambda u: u.update(plan_id="b" * 64)), **kw)
+    fails("a check before the update that does not offer it (%s)" % tag, V_AGAIN, upd("packages-2", lambda u: u.update(available=False)), **kw)
+    if holds:
+        fails("a check before the update that does not say the hold is back (%s)" % tag, V_AGAIN, upd("packages-2", lambda u: u.update(held=False, held_packages=[])), **kw)
+        fails("a check before the update that names only two of the held packages (%s)" % tag, V_AGAIN, upd("packages-2", lambda u: u.update(held_packages=names[:2])), **kw)
+        fails("a check before the update that names the held packages but says held false (%s)" % tag, V_AGAIN, upd("packages-2", lambda u: u.update(held=False)), **kw)
+    else:
+        fails("a check before the update that still says the hold is there (%s)" % tag, V_AGAIN, upd("packages-2", lambda u: u.update(held=True, held_packages=["docker-ce"])), **kw)
+        fails("a check before the update that says held true and names nothing (%s)" % tag, V_AGAIN, upd("packages-2", lambda u: u.update(held=True)), **kw)
+    case("a check with no hold that leaves the held fields out is a check with no hold (%s)" % tag, 0, ["PASS"], ["**FAIL**", "INVALID"],
+         mutate=lambda d: [jedit(d, n + ".json", lambda j: [update(j).pop(k) for k in ("held", "held_packages")]) for n in (("packages-unheld",) if holds else ("packages-1", "packages-2", "packages-unheld"))], **kw)
+    invalid("no check with the hold on offer (%s)" % tag, "no answer was recorded for packages-held: that step did not run", lambda d: remove(d, "packages-held.code", "packages-held.json"),
+            silent=(V_HELD_CHECK, V_UNHELD), **kw)
+    invalid("no POST that does not confirm the hold (%s)" % tag, "no answer was recorded for held-post: that step did not run", lambda d: remove(d, "held-post.code", "held-post.json"),
+            silent=(V_HELD_POST,), **kw)
+    invalid("no POST with allow_held false (%s)" % tag, "no answer was recorded for held-false-post: that step did not run", lambda d: remove(d, "held-false-post.code", "held-false-post.json"),
+            silent=(V_HELD_POST_FALSE,), **kw)
+    invalid("no check with the hold lifted (%s)" % tag, "no answer was recorded for packages-unheld: that step did not run", lambda d: remove(d, "packages-unheld.code", "packages-unheld.json"),
+            silent=(V_HELD_CHECK, V_UNHELD, V_PLAN_ID), **kw)
+    invalid("no check before the update (%s)" % tag, "no answer was recorded for packages-2: that step did not run", lambda d: remove(d, "packages-2.code", "packages-2.json"), silent=(V_AGAIN,), **kw)
+    invalid("a check with the hold on offer that curl could not send (%s)" % tag, "curl could not reach the core for packages-held",
+            lambda d: (api(d, "packages-held", 0, curl=7), remove(d, "packages-held.json")), silent=(V_HELD_CHECK, V_UNHELD), **kw)
+    invalid("a POST that does not confirm the hold that curl could not send (%s)" % tag, "curl could not reach the core for held-false-post",
+            lambda d: (api(d, "held-false-post", 0, curl=7), remove(d, "held-false-post.json")), silent=(V_HELD_POST_FALSE,), **kw)
+
+
+for leg_ in ("major", "minor"):
+    held_cases(leg_, None)
+held_cases("minor", HOLD_MINOR)
+fails("a check with the hold lifted that offers another plan than the first check, which had no hold", V_UNHELD, upd("packages-unheld", lambda u: u.update(plan_id="d" * 64)))
+fails("a plan_id that is not the hash of the plan, made with the hold lifted (the leg that holds from the start)", V_PLAN_ID, upd("packages-unheld", lambda u: u.update(plan_id="d" * 64)),
+      leg="minor", spec=HOLD_MINOR)
 fails("a POST while dpkg is locked that goes through", "POST while dpkg is locked", lambda d: api(d, "lock-post", 200, ok(status_data("running"))))
 fails("a POST while dpkg is locked refused with `running`", "POST while dpkg is locked", lambda d: api(d, "lock-post", 409, refusal("running")))
 fails("a POST while a package update runs that goes through", "POST while the generic package update runs", lambda d: api(d, "unit-post", 200, ok(status_data("running"))))
@@ -636,7 +750,6 @@ fails("a body that is not a plan_id accepted", "POST with a body that is not a p
 fails("a token in the query that is accepted", "POST with the token in the query only", lambda d: api(d, "query-post", 409, refusal("changed")))
 fails("a refresh token that is accepted", "POST with a refresh token", lambda d: api(d, "refresh-post", 409, refusal("changed")))
 fails("the dashboard's own token refused", "POST with the dashboard's own token", lambda d: api(d, "jwt-post", 401, {"message": "nope"}))
-fails("a plan that is not offered again after the hold", "after the hold is lifted", lambda d: jedit(d, "packages-2.json", lambda j: update(j).update(plan_id="b" * 64)))
 
 # an unfinished dpkg journal: the guest makes a file of digits only in /var/lib/dpkg/updates while the update is on offer, on every leg; the check and the POST refuse it with
 # `dpkg`, and with the file gone the same plan is on offer again
@@ -1064,6 +1177,113 @@ case("new packages named in the plan that dpkg did not install are not claimed a
 case("a plan whose id counts the new packages: dropping one from the list is a different plan", 1, ["**FAIL** plan_id is the sha256"], ["INVALID"],
      mutate=lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(packages=[p for p in pkgs(j) if p["name"] != "libedit2"])))
 
+# the update over a hold: the minor leg that puts docker-ce, docker-ce-cli and containerd.io on hold before its first check and is given `hold`. The check offers the update
+# with held true, the update goes ahead on the confirmation, and dpkg's own answer, the status and the unit's log all say that the hold is still there
+V_FIRST_HELD = "the first check, with Docker's packages on hold, offers the update with held true and the three held packages named"
+V_HOLDS = "after the update apt-mark showhold (dpkg's own answer) still lists the packages that were on hold"
+V_HELD_STATUS = "the status of the run over a hold says held true, names the held packages, and says the hold was kept"
+V_HELD_LOG = "the log has the HELD line (the packages on hold at the start) and the HOLDS line (those still on hold at the end), the hold untouched"
+HOLD_HEALTHY = ["Docker update proof, minor leg: PASS", "; docker-ce, docker-ce-cli and containerd.io on hold from before the first check", "## The update over a hold",
+                "**PASS** " + V_FIRST_HELD, "**PASS** " + V_HOLDS, "**PASS** " + V_HELD_STATUS, "**PASS** " + V_HELD_LOG,
+                "before the update containerd.io, docker-ce, docker-ce-cli; after it containerd.io, docker-ce, docker-ce-cli", "The status says held True, holds_kept True",
+                "the log's HELD line says 'containerd.io docker-ce docker-ce-cli' and its HOLDS line 'containerd.io docker-ce docker-ce-cli'",
+                "**NOT APPLICABLE** " + V_JOURNAL]
+
+
+def hfails(name, verdict, mutate, extra=()):
+    fails(name, verdict, mutate, leg="minor", spec=HOLD_MINOR, extra=extra)
+
+
+def hinvalid(name, reason, mutate, silent=()):
+    invalid(name, reason, mutate, leg="minor", spec=HOLD_MINOR, silent=silent)
+
+
+def hfinal(fn):
+    return lambda d: jedit(d, "status-final.json", lambda j: fn(final(j)))
+
+
+def hlog(fn):
+    return lambda d: ledit(d, "docker-update.log", fn)
+
+
+HELD_LINE = marker("HELD", " ".join(HELD3))
+HOLDS_LINE = marker("HOLDS", " ".join(HELD3))
+case("a healthy minor leg that holds Docker's packages passes: the update goes ahead over the hold and the hold is still there", 0, HOLD_HEALTHY, ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR)
+case("other holds on the box are not the proof's business", 0, ["**PASS** " + V_HOLDS], ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR,
+     mutate=lambda d: [put(d, n, "exit 0\nlinux-image-amd64\n" + "\n".join(HELD3) + "\nvim\n") for n in ("holds-before.txt", "holds-after.txt")])
+case("the packages in any order, with blank lines and noise between them, are the packages", 0, ["**PASS** " + V_HOLDS], ["**FAIL**", "INVALID", "something apt-mark said"], leg="minor", spec=HOLD_MINOR,
+     mutate=lambda d: put(d, "holds-after.txt", "exit 0\n\ndocker-ce-cli\nW: something apt-mark said\ndocker-ce\n\ncontainerd.io\n"))
+# the first check
+hfails("a first check with Docker's packages on hold that does not say so", V_FIRST_HELD, upd("packages-1", lambda u: u.update(held=False)))
+hfails("a first check with Docker's packages on hold that has no held field", V_FIRST_HELD, upd("packages-1", lambda u: u.pop("held")))
+hfails("a first check that names only two of the three held packages", V_FIRST_HELD, upd("packages-1", lambda u: u.update(held_packages=["docker-ce", "docker-ce-cli"])))
+hfails("a first check that names the held packages in another order", V_FIRST_HELD, upd("packages-1", lambda u: u.update(held_packages=["docker-ce", "docker-ce-cli", "containerd.io"])))
+hfails("a first check that still refuses a hold, as the core did before (held, no button)", V_FIRST_HELD, upd("packages-1", lambda u: u.update(refusal="held", available=False)))
+hfails("a first check that refuses for another reason", V_FIRST_HELD, upd("packages-1", lambda u: u.update(refusal="plan", available=False)))
+# dpkg's own answer
+hfails("a hold that the update lifted: dpkg lists none of the packages", V_HOLDS, lambda d: put(d, "holds-after.txt", "exit 0\n"), extra=["after it: nothing"])
+hfails("a hold that the update lifted for one package", V_HOLDS, lambda d: put(d, "holds-after.txt", "exit 0\ncontainerd.io\ndocker-ce\n"), extra=["after it: containerd.io, docker-ce"])
+hfails("a hold that dpkg lists on other packages only", V_HOLDS, lambda d: put(d, "holds-after.txt", "exit 0\nlinux-image-amd64\n"))
+hinvalid("no record of what dpkg said when the update was asked for", "holds-before.txt is missing or not a recorded apt-mark showhold", lambda d: remove(d, "holds-before.txt"), silent=(V_HOLDS,))
+hinvalid("no record of what dpkg said after the update", "holds-after.txt is missing or not a recorded apt-mark showhold", lambda d: remove(d, "holds-after.txt"), silent=(V_HOLDS,))
+hinvalid("a record of apt-mark showhold with no exit status", "holds-after.txt is missing or not a recorded apt-mark showhold", lambda d: put(d, "holds-after.txt", "\n".join(HELD3) + "\n"), silent=(V_HOLDS,))
+hinvalid("an apt-mark showhold that failed after the update", "holds-after.txt: apt-mark showhold exited 100", lambda d: put(d, "holds-after.txt", "exit 100\nE: boom\n"), silent=(V_HOLDS,))
+hinvalid("an apt-mark showhold that failed when the update was asked for", "holds-before.txt: apt-mark showhold exited 1", lambda d: put(d, "holds-before.txt", "exit 1\n" + "\n".join(HELD3) + "\n"), silent=(V_HOLDS,))
+hinvalid("a box where one of the three was not on hold when the update was asked for", "apt-mark showhold lists containerd.io, docker-ce when the update was asked for, not all of",
+         lambda d: put(d, "holds-before.txt", "exit 0\ncontainerd.io\ndocker-ce\n"), silent=(V_HOLDS,))
+hinvalid("a box where nothing was on hold when the update was asked for", "apt-mark showhold lists nothing when the update was asked for", lambda d: put(d, "holds-before.txt", "exit 0\n"), silent=(V_HOLDS,))
+# the status
+hfails("a run over a hold whose status does not say it was held", V_HELD_STATUS, hfinal(lambda s: s.update(held=False)))
+hfails("a run over a hold whose status has no held field", V_HELD_STATUS, hfinal(lambda s: s.pop("held")))
+hfails("a run over a hold whose status names no held package", V_HELD_STATUS, hfinal(lambda s: s.update(held_packages=[])))
+hfails("a run over a hold whose status names two of the three", V_HELD_STATUS, hfinal(lambda s: s.update(held_packages=["containerd.io", "docker-ce"])))
+hfails("a run over a hold whose status says the hold was not kept", V_HELD_STATUS, hfinal(lambda s: s.update(holds_kept=False)))
+hfails("a run over a hold whose status does not say whether it was kept", V_HELD_STATUS, hfinal(lambda s: s.pop("holds_kept")))
+hfails("a run over a hold whose status says it was kept in words and not as a boolean", V_HELD_STATUS, hfinal(lambda s: s.update(holds_kept="true")))
+# the unit's own words
+hfails("a log with no HELD line (a unit that does not say what it found on hold)", V_HELD_LOG, hlog(lambda ls: [ln for ln in ls if not ln.startswith(PREFIX + "HELD ")]))
+hfails("a log with no HOLDS line (a unit that does not say what it left on hold)", V_HELD_LOG, hlog(lambda ls: [ln for ln in ls if not ln.startswith(PREFIX + "HOLDS ")]))
+hfails("a HELD line that found nothing on hold", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, marker("HELD", "-")))
+hfails("a HELD line that found two of the three", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, marker("HELD", "containerd.io docker-ce")))
+hfails("a HOLDS line with nothing on hold: the hold is gone", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "-")))
+hfails("a HOLDS line that lost a hold, though the status says it was kept", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "containerd.io docker-ce")))
+hfails("a HOLDS line that names a package that was not on hold at the start", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", " ".join(HELD3) + " bash")))
+hfails("a HOLDS line that systemd emptied (the script's variables gone)", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "")))
+hfails("a HELD line that systemd emptied", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, marker("HELD", "")))
+hfails("a HELD line with a name that is not a name", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, marker("HELD", "containerd.io docker-ce docker-ce;reboot")))
+hfails("a HOLDS line with a command in it", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "containerd.io docker-ce $(reboot)")))
+hfails("a HELD line of another nonce is somebody else's text", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, PREFIX + "HELD " + "f" * 32 + " " + " ".join(HELD3)),
+       extra=["**FAIL** success: the log has the markers"])
+hfails("a HOLDS line of another nonce is somebody else's text", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, PREFIX + "HOLDS " + "f" * 32 + " " + " ".join(HELD3)),
+       extra=["**FAIL** success: the log has the markers"])
+hfails("two HELD lines", V_HELD_LOG, hlog(lambda ls: [x for ln in ls for x in ([ln, ln] if ln.startswith(PREFIX + "HELD ") else [ln])]))
+hfails("two HOLDS lines", V_HELD_LOG, hlog(lambda ls: [x for ln in ls for x in ([ln, ln] if ln.startswith(PREFIX + "HOLDS ") else [ln])]))
+hfails("a HOLDS line before the HELD line", V_HELD_LOG, hlog(swap_kinds("HELD", "HOLDS")))
+# the unit reads what is still on hold as it ends, which may be after the terminal marker: one HOLDS line right after it is the unit's last word, and nothing else may follow
+case("a HOLDS line right after the terminal marker is the unit's last word", 0, ["**PASS** " + V_HELD_LOG, "**PASS** success: the log has the markers"], ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR,
+     mutate=hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2]]))
+hfails("a HOLDS line after the terminal marker that is followed by output", "success: the log has the markers", hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2], "dpkg: trailing output"]))
+hfails("two HOLDS lines after the terminal marker", V_HELD_LOG, hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2], ls[-2]]), extra=["**FAIL** success: the log has the markers"])
+hfails("a HOLDS line after the terminal marker, and one before it", V_HELD_LOG, hlog(lambda ls: ls[:-1] + [ls[-1], ls[-2]]))
+hinvalid("no log on the leg that holds Docker's packages", "docker-update.log was not collected", lambda d: remove(d, "docker-update.log"), silent=(V_HELD_LOG,))
+hinvalid("no last status on the leg that holds Docker's packages", "status-final.json holds no status", lambda d: remove(d, "status-final.json"), silent=(V_HELD_STATUS,))
+hfails("a held package that the run removed", "the run removed no package", lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce-cli\t")]))
+hfails("a held package the run did not upgrade", "dpkg upgraded exactly the plan's upgrades", lambda d: replace(d, "dpkg-after.tsv", "docker-ce-cli\t5:29.8.2-1~debian.12~bookworm\thi", "docker-ce-cli\t5:29.8.1-1~debian.12~bookworm\thi"))
+# a leg that holds nothing does not need the lines a leg that holds something needs
+for leg_ in ("major", "minor"):
+    case("a leg that holds nothing passes with the HOLDS line after the terminal marker (%s)" % leg_, 0, ["PASS"], ["**FAIL**", "INVALID"], leg=leg_,
+         mutate=lambda d: [ledit(d, n, lambda ls: ls[:-2] + [ls[-1], ls[-2]]) for n in ("docker-update.log", "docker-update-fail.log")])
+    case("a leg that holds nothing passes with the logs of a core that prints no HELD and HOLDS line (%s)" % leg_, 0, ["PASS"], ["**FAIL**", "INVALID"], leg=leg_,
+         mutate=lambda d: [ledit(d, n, lambda ls: [ln for ln in ls if not ln.startswith((PREFIX + "HELD ", PREFIX + "HOLDS "))]) for n in ("docker-update.log", "docker-update-fail.log")])
+# `hold` is asked for where the guest put the packages on hold, and nowhere else
+case("a report asked to judge the update over a hold on the major leg", 1, ["INVALID RUN", "the update over a hold belongs to a minor leg"], [], args=["hold"])
+case("a guest that put Docker's packages on hold and a report that was not asked to judge it", 1,
+     ["INVALID RUN", "holds-before.txt or holds-after.txt exists: the guest put Docker's packages on hold and the report was not asked to judge it"], [], leg="minor", spec=HOLD_MINOR, args=[])
+case("a report asked for the hold when the guest did not do it", 1, ["INVALID RUN", "holds-before.txt is missing or not a recorded apt-mark showhold", "holds-after.txt is missing or not a recorded apt-mark showhold"],
+     ["**FAIL** " + V_HOLDS], leg="minor", args=["hold"])
+case("a report given the kill and the hold both, as the leg that does both would", 0, ["PASS", "**PASS** " + V_HOLDS, "kill -9: the log agrees with the status"], ["**FAIL**", "INVALID"], leg="minor",
+     spec=dict(HOLD_MINOR, kill=True))
+
 # a tool of the harness that failed on the guest (a date that cannot read a time, a curl that reaches nothing, an apt that cannot fetch, a docker CLI that
 # cannot run) is not a wrong value of the feature: it is an invalid run, and says nothing about the button. Each case has its twin, the value the feature
 # gets wrong, which stays a FAIL.
@@ -1100,11 +1320,11 @@ V_CHECK = "GET /v1/sys/packages offers the Docker update"
 V_POST = "POST /v1/sys/docker/update with the right plan_id starts the run"
 for status in (6, 7):
     invalid("a first check that curl could not send (exit %d)" % status, "curl could not reach the core for packages-1", lambda d, status=status: (api(d, "packages-1", 0, curl=status), remove(d, "packages-1.json")),
-            silent=(V_CHECK, "after the hold is lifted", "after the unfinished journal is gone"))
+            silent=(V_CHECK, V_AGAIN, V_UNHELD, "after the unfinished journal is gone"))
 invalid("a POST that curl could not send", "curl could not reach the core for update-post", lambda d: (api(d, "update-post", 0, curl=7), remove(d, "update-post.json")), silent=(V_POST,))
 for status in (28, 52, 56):
     fails("a POST that curl reached the core with and got no answer to (exit %d)" % status, V_POST, lambda d, status=status: (api(d, "update-post", 0, secs=60.0, curl=status), remove(d, "update-post.json")))
-case("a curl that failed after the core had answered is its answer", 0, ["PASS"], ["**FAIL**", "INVALID"], mutate=lambda d: api(d, "held-post", 409, refusal("held"), curl=23))
+case("a curl that failed after the core had answered is its answer", 0, ["PASS"], ["**FAIL**", "INVALID"], mutate=lambda d: api(d, "held-post", 409, refusal("held", detail=["docker-ce"]), curl=23))
 
 V_DB = "no acknowledged write of the database is lost"
 invalid("a database file that docker could not read", "db-file.exit: docker run ... cat exited 125", lambda d: (put(d, "db-file.exit", "125\n"), put(d, "db-file.txt", "")), silent=(V_DB,))
@@ -1748,18 +1968,72 @@ esac
     kill_case("dpkg_journal_refusal leaves a journal that is not its own alone, and asks nothing", JOURNAL_STUBS + 'echo theirs >"$DPKG_JOURNAL"; ( dpkg_journal_refusal ); true',
               files={"aborted": "dpkg already has a journal*", "updates-0001": "theirs\n"}, no_calls=["call_as", "post_plan"])
 
+    # post_plan: the body of a POST is the plan_id, and allow_held only where the owner's word is given or refused (ALLOW_HELD true or false); jq is a stand-in that says the filter
+    JQ = 'jq() { printf "%s" "$5"; }; call_as() { echo "call_as $2 body=$5" >>"$FAKE/calls"; }; '
+    kill_case("post_plan sends the plan_id alone when there is nothing to confirm", JQ + 'post_plan p abc', calls=["call_as p body={plan_id: $p}"], no_calls=["allow_held"])
+    kill_case("post_plan sends the plan_id alone when ALLOW_HELD is empty", JQ + 'ALLOW_HELD= post_plan p abc', calls=["call_as p body={plan_id: $p}"], no_calls=["allow_held"])
+    kill_case("post_plan adds allow_held true when the hold is confirmed", JQ + 'ALLOW_HELD=true post_plan p abc', calls=["call_as p body={plan_id: $p, allow_held: true}"])
+    kill_case("post_plan adds allow_held false when it is not", JQ + 'ALLOW_HELD=false post_plan p abc', calls=["call_as p body={plan_id: $p, allow_held: false}"])
+    for bad in ("1", "yes", "True", "true; reboot", "true}; {x"):
+        kill_case("post_plan stops the run on an ALLOW_HELD that is neither true nor false (%r), and sends nothing" % bad, JQ + '( ALLOW_HELD="$1" post_plan p abc ) || true'.replace('"$1"', "'" + bad + "'"),
+                  files={"aborted": "post_plan: ALLOW_HELD is true, false or empty, not %s\n" % bad}, no_calls=["call_as"])
+    kill_case("the ALLOW_HELD of one POST does not reach the next", JQ + 'ALLOW_HELD=true post_plan p abc; post_plan q abc', calls=["call_as p body={plan_id: $p, allow_held: true}", "call_as q body={plan_id: $p}"])
+
+    # the hold, with stand-ins for what it calls: it is set, asked about, refused and lifted, in that order
+    MARK = {"apt-mark": "#!/bin/sh\necho \"apt-mark $*\" >>\"$FAKE/calls\"\nif [ \"$1\" = showhold ]; then for n in $FAKE_HOLDS; do echo \"$n\"; done; exit \"${FAKE_MARK_RC:-0}\"; fi\n"}
+    HR = ('apt-mark() { echo "apt-mark $*" >>"$FAKE/calls"; }; plan_id_of() { if [ "$1" = packages-unheld ]; then echo "${FAKE_UNHELD_ID-id-$1}"; else echo "id-$1"; fi; }; '
+          'call_as() { echo "call_as $2 $3 $4" >>"$FAKE/calls"; }; post_plan() { echo "post_plan $1 $2 allow=${ALLOW_HELD-unset}" >>"$FAKE/calls"; }; PLAN_ID=first; ')
+    ONE = ["apt-mark hold docker-ce", "call_as packages-held GET /v1/sys/packages", "post_plan held-post id-packages-held allow=unset", "post_plan held-false-post id-packages-held allow=false",
+           "apt-mark unhold docker-ce", "call_as packages-unheld GET /v1/sys/packages"]
+    kill_case("hold_refusals holds docker-ce, asks the check, POSTs without the confirmation and with allow_held false, lifts the hold, and asks again", HR + 'hold_refusals; echo "$PLAN_ID" >"$OUT/plan"',
+              files={"plan": "id-packages-unheld\n"}, ordered=ONE, no_calls=["docker-ce-cli", "containerd.io", "apt-mark showhold"])
+    THREE = [s.replace("docker-ce", "docker-ce docker-ce-cli containerd.io") if s.startswith("apt-mark") else s for s in ONE]
+    kill_case("hold_refusals, on the leg that holds the three, holds and lifts the three", HR + 'hold_refusals; echo "$PLAN_ID" >"$OUT/plan"', dict(HOLD_RUN="1"),
+              files={"plan": "id-packages-unheld\n"}, ordered=THREE)
+    kill_case("hold_refusals stops the run when the check with the hold lifted has no plan_id", HR + '( hold_refusals ) || true', dict(FAKE_UNHELD_ID=""),
+              files={"aborted": "after the hold was lifted the check has no plan_id\n"})
+    kill_case("hold_refusals POSTs the first check's plan when the held check has none", HR.replace('echo "id-$1"; fi', 'if [ "$1" = packages-held ]; then echo; else echo "id-$1"; fi; fi') + 'hold_refusals',
+              calls=["post_plan held-post first allow=unset", "post_plan held-false-post first allow=false"])
+
+    # dpkg's own answer
+    kill_case("record_holds records the exit status of apt-mark showhold, then the names it said", 'record_holds h.txt', dict(FAKE_HOLDS="containerd.io docker-ce"), fakes=MARK,
+              files={"h.txt": "exit 0\ncontainerd.io\ndocker-ce\n"}, calls=["apt-mark showhold"])
+    kill_case("record_holds records nothing on hold as an exit status and no name", 'record_holds h.txt', dict(FAKE_HOLDS=""), fakes=MARK, files={"h.txt": "exit 0\n"})
+    kill_case("record_holds records an apt-mark that fails, and its words", 'record_holds h.txt', dict(FAKE_HOLDS="boom", FAKE_MARK_RC="100"), fakes=MARK, files={"h.txt": "exit 100\nboom\n"})
+    kill_case("hold_docker puts the three on hold, and lift_holds lifts them", 'hold_docker; lift_holds', fakes=MARK,
+              ordered=["apt-mark hold docker-ce docker-ce-cli containerd.io", "apt-mark unhold docker-ce docker-ce-cli containerd.io"])
+    kill_case("cleanup lifts every hold the proof may have set, whatever step the run ended at", '( true; cleanup ); true', fakes=MARK, calls=["apt-mark unhold docker-ce docker-ce-cli containerd.io"])
+    kill_case("a package on hold (hi) is installed for the snapshot, one that was removed (rc) or is not there (un) is not",
+              SNAP + 'dpkg() { printf "ii  containerd.io  2.4.1-2  amd64  x\\nhi  docker-ce  5:29.8.2-1  amd64  y\\nrc  docker-old  1  amd64  z\\nun  docker.io  <none>  amd64  w\\n"; }; '
+              'systemctl() { printf "MainPID=7\\nNRestarts=0\\n"; }; date() { echo 2026-10-09T00:00:00Z; }; snapshot after; grep "^packages " "$OUT/snapshot-after.txt" >"$OUT/p"; true',
+              files={"p": "packages containerd.io=2.4.1-2 docker-ce=5:29.8.2-1 \n"})
+    ENGINE_HELD = "apt-get -s --no-remove -o Debug::NoLocking=true -o Dpkg::Use-Pty=0 --allow-change-held-packages install --only-upgrade --no-install-recommends "
+    kill_case("apt_simulation adds --allow-change-held-packages on the leg that holds Docker's packages, as the core does when engine packages are on hold", 'apt_simulation',
+              dict(FAKE_INSTALLED="docker-ce docker-ce-cli containerd.io", HOLD_RUN="1"), fakes=ffakes, calls=[ENGINE_HELD + "docker-ce docker-ce-cli containerd.io LC_ALL=C"])
+    kill_case("apt_simulation does not add it on a leg that holds nothing", 'apt_simulation', dict(FAKE_INSTALLED="docker-ce", HOLD_RUN="0"), fakes=ffakes,
+              calls=[ENGINE_SIM + "docker-ce LC_ALL=C"], no_calls=["--allow-change-held-packages"])
+
+    # update_run, with stand-ins for what it calls: on the held leg dpkg is asked what is on hold before the POST and after the run, and the POST of the plan carries the owner's word
+    UR = ('dpkg_dump() { :; }; marker() { :; }; log() { :; }; sleep() { :; }; settle() { :; }; snapshot() { :; }; collect_journal() { :; }; db_dump() { :; }; runtime_log() { echo "$OUT/runtime.log"; }; '
+          'jq() { echo x; }; record_holds() { echo "record_holds $1" >>"$FAKE/calls"; }; post_plan() { echo "post_plan $1 $2 allow=${ALLOW_HELD-unset}" >>"$FAKE/calls"; echo 200 >"$OUT/$1.code"; }; '
+          'poll_status() { echo "poll_status $1" >>"$FAKE/calls"; }; code_of() { echo 200; }; call_as() { echo "call_as $2" >>"$FAKE/calls"; }; AUTH_DIR="$OUT"; CASA_URL=http://x; PLAN_ID=abc; ')
+    kill_case("update_run, on the leg that holds Docker's packages, asks dpkg what is on hold, confirms the plan with allow_held, and asks dpkg again once the run has ended", UR + 'update_run',
+              dict(HOLD_RUN="1"), ordered=["record_holds holds-before.txt", "post_plan update-post abc allow=true", "post_plan running-post abc allow=unset", "poll_status status", "record_holds holds-after.txt"])
+    kill_case("update_run, on a leg that holds nothing, asks dpkg nothing and sends no allow_held", UR + 'update_run', calls=["post_plan update-post abc allow=", "poll_status status"],
+              no_calls=["record_holds", "allow=true", "allow=false"])
+
     # main() is what a machine runs and nothing here can: its steps are read in the order they stand, and the conditions of the ones that belong to one leg
     with open(SCRIPT, newline="") as f:
         main_body = re.search(r"^main\(\) \{\n(.*?)^\}", f.read().replace("\r\n", "\n"), re.M | re.S).group(1)
-    step_names = ["guard_run", "install_docker", "install_casaos", "prepare_dependency_path", "start_things", "box_facts", "apt_simulation", "snapshot before", "images_dump before",
-                  "refusals", "update_run", "rollback_run", "kill_run", "failure_run", "collect_journal unit-journal-end.txt"]
+    step_names = ["guard_run", "install_docker", "install_casaos", "prepare_dependency_path", "start_things", "box_facts", "hold_docker", "apt_simulation", "snapshot before", "images_dump before",
+                  "refusals", "update_run", "lift_holds", "rollback_run", "kill_run", "failure_run", "collect_journal unit-journal-end.txt"]
     count[0] += 1
     steps_in_order = re.findall(r"^\s+(?:if \[[^\]]*\]; then )?(%s)\b" % "|".join(re.escape(n) for n in step_names), main_body, re.M)
     if steps_in_order != step_names:
         failures.append("main() runs %r, wanted %r" % (steps_in_order, step_names))
     else:
         print("ok: main() runs the steps in the order of the work")
-    for step_, cond_ in (("rollback_run", '"${LEG}" = major'), ("kill_run", '"${KILL_INSTALL}" = 1')):
+    for step_, cond_ in (("rollback_run", '"${LEG}" = major'), ("kill_run", '"${KILL_INSTALL}" = 1'), ("hold_docker", '"${HOLD_RUN}" = 1'), ("lift_holds", '"${HOLD_RUN}" = 1')):
         count[0] += 1
         line_ = next((ln for ln in main_body.splitlines() if step_ in ln), "")
         if cond_ not in line_ or "then " + step_ + "; fi" not in line_:
@@ -1779,9 +2053,13 @@ esac
             ("the guest script refuses a PROOF_KILL_INSTALL that is not 1", {"PROOF_KILL_INSTALL": "2"}, "minor", "PROOF_KILL_INSTALL is 1 or empty"),
             ("the guest script refuses the kill injection on the major leg", {"PROOF_KILL_INSTALL": "1", "DOCKER_FROM": "28.0.4"}, "major", "belongs to a minor leg"),
             ("the guest script takes PROOF_KILL_INSTALL=1 on a minor leg (and then refuses a machine that is not disposable)", {"PROOF_KILL_INSTALL": "1"}, "minor", "disposable machine"),
-            ("the guest script takes an empty PROOF_KILL_INSTALL on a minor leg", {"PROOF_KILL_INSTALL": ""}, "minor", "disposable machine")):
+            ("the guest script takes an empty PROOF_KILL_INSTALL on a minor leg", {"PROOF_KILL_INSTALL": ""}, "minor", "disposable machine"),
+            ("the guest script refuses a PROOF_HOLD_DOCKER that is not 1", {"PROOF_HOLD_DOCKER": "2"}, "minor", "PROOF_HOLD_DOCKER is 1 or empty"),
+            ("the guest script refuses the update over a hold on the major leg", {"PROOF_HOLD_DOCKER": "1", "DOCKER_FROM": "28.0.4"}, "major", "belongs to a minor leg"),
+            ("the guest script takes PROOF_HOLD_DOCKER=1 on a minor leg (and then refuses a machine that is not disposable)", {"PROOF_HOLD_DOCKER": "1"}, "minor", "disposable machine"),
+            ("the guest script takes an empty PROOF_HOLD_DOCKER on a minor leg", {"PROOF_HOLD_DOCKER": ""}, "minor", "disposable machine")):
         count[0] += 1
-        env = {k: v for k, v in os.environ.items() if k not in ("PROOF_DISPOSABLE", "PROOF_KILL_INSTALL")}
+        env = {k: v for k, v in os.environ.items() if k not in ("PROOF_DISPOSABLE", "PROOF_KILL_INSTALL", "PROOF_HOLD_DOCKER")}
         env.update(env_extra)
         p = subprocess.run([BASH, SCRIPT.replace("\\", "/"), leg], capture_output=True, text=True, env=env)
         if p.returncode != 2 or want_text not in p.stderr:
@@ -1867,6 +2145,9 @@ refusals_text = re.search(r"^refusals\(\) \{\n(.*?)^\}", guest_text, re.M | re.S
 positions = [refusals_text.group(1).find(s) if refusals_text else -1 for s in ("post_plan unit-post", "\n    dpkg_journal_refusal\n", "post_plan wrong-post")]
 check("refusals() asks for the unfinished dpkg journal after the package update stand-in and before the wrong plans, once", -1 not in positions and positions == sorted(positions)
       and refusals_text.group(1).count("dpkg_journal_refusal") == 1, positions)
+positions = [refusals_text.group(1).find(s) if refusals_text else -1 for s in ("\n    hold_refusals\n", "lockhold.py", 'then apt-mark hold "${PROOF_HOLDS[@]}"', "call_as internal packages-2")]
+check("refusals() sets the hold, asks about it and lifts it once, before the lock and the package update stand-in, and puts the held leg's hold back only before the last check",
+      -1 not in positions and positions == sorted(positions) and refusals_text.group(1).count("hold_refusals") == 1 and refusals_text.group(1).count("apt-mark") == 1, positions)
 
 wf = workflow_text()
 wf_cells = workflow_matrix(wf)
@@ -1913,6 +2194,11 @@ prove = next((s for n, s in wf_runs.items() if n == "Prove it"), "")
 report_step = next((s for n, s in wf_runs.items() if n == "Report"), "")
 check("the guest is told to kill the unit where the cell says so", "PROOF_KILL_INSTALL='${KILL_INSTALL}'" in prove and "KILL_INSTALL: ${{ matrix.kill_install }}" in wf)
 check("the report is told to expect the kill where the guest was", "${KILL_INSTALL:+kill}" in report_step)
+holds = [c for c in wf_cells if c.get("hold_docker")]
+check("one cell puts Docker's packages on hold, and it is Debian 12 (a minor leg)", len(holds) == 1 and holds[0].get("leg") == "minor" and (holds[0].get("id"), holds[0].get("version")) == ("debian", "12")
+      and holds[0].get("hold_docker") == "1", holds)
+check("the guest is told to hold Docker's packages where the cell says so", "PROOF_HOLD_DOCKER='${HOLD_DOCKER}'" in prove and "HOLD_DOCKER: ${{ matrix.hold_docker }}" in wf)
+check("the report is told to expect the hold where the guest was", "${HOLD_DOCKER:+hold}" in report_step)
 # the release the legs install: the latest one, or the tag that was named, which may be a pre-release (a candidate that is not the latest release yet)
 check("the tag comes from the input, then from the repository variable DOCKER_PROOF_TAG, and the job knows which event it is",
       "TAG: ${{ inputs.tag || vars.DOCKER_PROOF_TAG }}" in wf and "EVENT: ${{ github.event_name }}" in wf)
