@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.23] - 2026-10-11
+
+Components: CasaOS `v0.4.69`, CasaOS-UI `v0.4.83`. Unchanged from v0.5.22: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The dashboard says where your system stands in its security support.** A badge in the top bar appears when the free (Debian) or standard (Ubuntu) security updates of your operating system have ended, or end within 180 days; it opens a window with the date, the vendor's separate extended programme where there is one (Debian ELTS, Ubuntu Pro), the next release and the official upgrade documentation. Debian 11, which has had no free security updates since 31 August 2026, is the case that made it. It is read-only, it asks nobody anything, and it says plainly that ReCasaOS cannot upgrade the operating system for you yet: take a snapshot of the machine first, keep console access for when it does not start, and know that there is no automatic way back. Raspberry Pi OS, Armbian, DietPi, Proxmox, OpenMediaVault and every other derivative show nothing, because their support is not Debian's or Ubuntu's. One push message is sent per system, version and state (and only once a message really went out), when a channel is configured.
+
 ## [0.5.22] - 2026-10-10
 
 Components: CasaOS `v0.4.68`, CasaOS-UI `v0.4.82`. Unchanged from v0.5.21: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
