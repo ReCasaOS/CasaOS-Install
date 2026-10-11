@@ -462,13 +462,34 @@ if not before_containers or not_running:
 for n, pol in CONTAINERS.items():
     if n in before_containers and before_containers[n]["policy"] != pol:
         invalid("the witness %s has restart policy %r, not %r" % (n, before_containers[n]["policy"], pol))
+# the baseline waits (180 s at the most) for the gateway, the core and AppManagement to answer 200 after the reboot that came before it, and says how long it took: a box on which
+# they never answered is said so, with what was asked last, and not as three codes that were 000 at the moment the baseline happened to ask
+baseline_wait = kv("baseline-wait")
+wait_gave_up = baseline_wait.get("result") == "gave_up"
+if has("baseline-wait") and baseline_wait.get("result") not in ("ok", "gave_up"):
+    invalid("baseline-wait says %r, not ok or gave_up: the baseline's wait for the gateway, the core and AppManagement left no usable record" % baseline_wait.get("result"))
+if wait_gave_up and "did not all answer 200 within" not in aborted:
+    invalid("the gateway, the core and AppManagement did not all answer 200 within %s s of the baseline's start (the last answers: gateway %s, core %s, AppManagement %s): the box was not ready "
+            "after its reboot, and nothing about the hop can be measured from it" % (baseline_wait.get("limit", "?"), baseline_wait.get("gateway", "?"), baseline_wait.get("core", "?"), baseline_wait.get("am", "?")))
+# the after phase waits the same way after the reboot of the hop (180 s at the most) before it asks the services anything, and writes it down the same way (after-wait). Unlike the baseline's, a wait that
+# gave up does not make the run invalid: a service that never answered within 180 s is the finding (NO-GO of the row about the core coming back), and what the phase collected after it is still read
+after_wait = kv("after-wait")
+if has("after-wait") and after_wait.get("result") not in ("ok", "gave_up"):
+    invalid("after-wait says %r, not ok or gave_up: the wait after the reboot left no usable record" % after_wait.get("result"))
+if after_wait.get("result") == "ok":
+    for key, name in (("gateway", "the gateway"), ("core", "the core"), ("am", "AppManagement")):
+        if after_wait.get(key) != "200":
+            invalid("after-wait says ok while %s's last answer was %s: the record contradicts itself" % (name, after_wait.get(key) or "missing"))
 for code in ("gateway-before", "core-before", "am-before", "jwt-before", "internal-before"):
     got = read(code + ".code").strip()
+    if wait_gave_up:
+        continue
     if code == "internal-before":
         if not got:
             invalid("%s.code is missing: the baseline did not ask" % code)
     elif got != "200":
-        invalid("%s answered %s before the hop (it has to answer 200 for the hop to be measured)" % (code.replace("-before", ""), got or "nothing"))
+        invalid("%s answered %s before the hop (it has to answer 200 for the hop to be measured, and the baseline had waited for it: %s)" % (
+            code.replace("-before", ""), got or "nothing", ("it waited %s s and saw 200 from all three" % baseline_wait.get("waited", "?")) if baseline_wait.get("result") == "ok" else "no record of the wait"))
 if read("settle-baseline").strip() in ("", "never"):
     invalid("the witnesses that start by themselves were not running at the baseline (settle-baseline: %s)" % (read("settle-baseline").strip() or "missing"))
 dpkg_before = load_dpkg("before")
@@ -632,7 +653,10 @@ if ran_hop:
                       ("os-after", "the release after the reboot"), ("reboot-pre.txt", "the reboot before the hop"), ("reboot-post.txt", "the reboot after it"),
                       ("kernel-before.txt", "the kernel before"), ("kernel-after.txt", "the kernel after"), ("docker-before.txt", "Docker before"), ("docker-after.txt", "Docker after"),
                       ("deps-before.txt", "the installer's dependencies before"), ("deps-after.txt", "the installer's dependencies after"),
+                      ("after-wait", "how long the after phase waited for the gateway, the core and AppManagement to answer 200 after the reboot of the hop: without it nothing says that they were given the time to come up"),
                       ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("hop-journal.txt", "the journal of the hop"), ("dpkg-hop.log", "dpkg's own log of the hop")):
+        if name == "dpkg-hop.log" and unit_ended:
+            continue    # a unit that ended itself before its first apt had nothing for dpkg to log: the reason it ended is the finding, and not the empty log that follows from it
         need(name, why)
     if unit_done:
         need("unit-end.txt", "the unit's last facts")
@@ -668,7 +692,8 @@ for name, why in (("refresh-update.log", "apt-get update of the refresh"), ("ref
                   ("refresh-reboot.txt", "what the refresh decided about a reboot"),
                   ("inhibit-reboot.txt", "the first probe of the inhibitor"), ("inhibit-force.txt", "the second probe of the inhibitor"), ("box-facts", "the tools of the box"),
                   ("df-start.txt", "the disk at the start"), ("df-before.txt", "the disk before the hop"), ("units-before.tsv", "the services before"),
-                  ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("dpkg-before.tsv", "the packages before"), ("docker-before.txt", "Docker before")):
+                  ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("dpkg-before.tsv", "the packages before"), ("docker-before.txt", "Docker before"),
+                  ("baseline-wait", "how long the baseline waited for the gateway, the core and AppManagement to answer 200 after the last reboot")):
     need(name, why)
 
 if DEBIAN:
@@ -973,12 +998,16 @@ show_row("  of which the full upgrade", fmt_s(span("refresh_update_done", "refre
 if mt("reboot_refresh_start") is not None:
     back = next((b[0] for b in markers.get("boot_changed", []) if b[0] > mt("reboot_refresh_start")), None)
     show_row("  the reboot the refresh asked for (the request to the next phase seeing the new boot)", fmt_s(None if back is None else back - mt("reboot_refresh_start")))
+show_row("baseline: waiting for the gateway, the core and AppManagement to answer 200 after the last reboot (the longest it will wait: %s s)" % baseline_wait.get("limit", "?"),
+         "%s s (%s)" % (baseline_wait.get("waited", "n/a"), baseline_wait.get("result", "not recorded").replace("_", " ")))
 show_row("probes of the old release (sandbox, releaseinfo-change, or Canonical's metadata)", fmt_s(span("probe_start", "probe_done")))
 if ran_hop:
     show_row("the unit (the hop, without the reboot)", fmt_s(span("hop_start", "hop_unit_end")))
     for name, s in steps.items():
         if s["end"] is not None:
             show_row("  step %s (exit %s)" % (name, s["rc"]), fmt_s(s["end"] - s["start"]))
+    show_row("after the reboot: waiting for the gateway, the core and AppManagement to answer 200 (the longest it will wait: %s s)" % after_wait.get("limit", "?"),
+             "%s s (%s)" % (after_wait.get("waited", "n/a"), after_wait.get("result", "not recorded").replace("_", " ")))
 P("")
 
 # ---- the refresh of the old release -------------------------------------------------------------------------------------------
@@ -1211,7 +1240,7 @@ if ran_hop and u_before and u_hop:
         t0s, t1s = cfg.get("half-configured"), cfg.get("installed")
         P("dpkg's log: libc6 half-configured at %s, installed at %s." % (t0s or "n/a", t1s or "n/a"))
         lib = []
-        for step in ("full", "minimal", "recover_full"):
+        for step in ("full", "minimal", "recover_full") if DEBIAN else ("upgrader",):
             txt = step_text(step)
             m = re.search(r"Setting up libc6[^\n]*\n((?:(?!Setting up |Processing triggers|Preparing to unpack)[^\n]*\n)*)", txt)
             if m:
@@ -1221,12 +1250,14 @@ if ran_hop and u_before and u_hop:
         for blk in inline:
             names += [ln.split(":")[0].strip() for ln in blk.splitlines() if ":" in ln]
         names = sorted(set(names))
-        P("Services named by libc6's postinst in apt's output: %s." % (", ".join(names) or "none (the output of the step has no such line)"))
+        said_nothing = re.search(r"^Nothing to restart\.", "\n".join(lib), re.M) is not None
+        P("Services named by libc6's postinst in %s: %s." % ("apt's output" if DEBIAN else "the output of the Ubuntu tool (step-upgrader.log)", ", ".join(names) or (
+            "none (its postinst said 'Nothing to restart.')" if said_nothing else "none (the output has no such line)")))
         P("")
         for ln in lib[:14]:
             P("    " + ln[:150])
         P("")
-        fact("services libc6 %s -> %s restarted (its postinst, non-interactive)" % (ver_from, ver_to), ", ".join(names) or "none named")
+        fact("services libc6 %s -> %s restarted (its postinst, non-interactive)" % (ver_from, ver_to), ", ".join(names) or ("none: its postinst said 'Nothing to restart.'" if said_nothing else "none named"))
         if not t0s or not t1s:
             open_q("when libc6 was configured: dpkg's log of the hop has no half-configured/installed pair for it")
 
@@ -1475,7 +1506,8 @@ if ran_hop:
     casa = sorted(n for n in ub if CASA_UNITS_RE.match(n) and ub[n]["active"] == "active")
     P("## ReCasaOS after the reboot")
     P("")
-    P("The after phase starts nothing: it reads the units first (`units-boot`), waits, then asks. (The harness's own test checks that the phase has no start, restart or enable of a unit.)")
+    P("The after phase starts nothing: it reads the units first (`units-boot`), waits for the gateway, the core and AppManagement to answer 200 (the baseline's own wait, at most %s s: AppManagement "
+      "needs 11 to 13 s on Debian and 4 to 7 s on Ubuntu after a boot), and only then asks them. (The harness's own test checks that the phase has no start, restart or enable of a unit.)" % after_wait.get("limit", "180"))
     P("")
     P("| unit | before | first look | settled | restarted by systemd after the first look |")
     P("|---|---|---|---|---|")
@@ -1490,22 +1522,38 @@ if ran_hop:
         show_row(n, ub[n]["active"], a.get("active", "?"), b.get("active", "?"), "yes" if again else "no")
     P("")
     codes = {k: read("%s-after.code" % k).strip() for k in ("gateway", "core", "internal", "am", "jwt")}
-    P("Asked once settled: gateway %s, core %s, core with the loopback secret %s, AppManagement with the token of the baseline's login %s." % (codes["gateway"], codes["core"], codes["internal"], codes["am"]))
+    P("The wait after the reboot: %s s of the %s s it allows, result %s (the last answers: gateway %s, core %s, AppManagement %s). Asked again once the wait ended: gateway %s, core %s, core with the loopback secret %s, "
+      "AppManagement with the token of the baseline's login %s." % (after_wait.get("waited", "n/a"), after_wait.get("limit", "?"), after_wait.get("result", "not recorded").replace("_", " "),
+                                                                     after_wait.get("gateway", "?"), after_wait.get("core", "?"), after_wait.get("am", "?"), codes["gateway"], codes["core"], codes["internal"], codes["am"]))
     P("")
     answered = {k: reboot_times.get(lbl) for k, lbl in (("gateway", "the gateway answers 200"), ("core", "the core answers 200"), ("am", "AppManagement answers 200"))} if boot_row is not None else {}
-    # the harness starts nothing in this phase, so a unit with another InvocationID was brought back by systemd's own Restart=: that is coming back by itself, and it is said, not failed.
-    # What decides is that every unit is active, that each answered after the reboot, and that all three still answer 200 once settled
-    unaided = bool(casa) and not down_after and all(answered.get(k) is not None for k in ("gateway", "core", "am")) and all(codes[k] == "200" for k in ("gateway", "core", "am"))
+    # the wait is the record of whether they answered, and the poller's samples say when each did: a wait that says they all answered while the poller never saw one of them answer cannot both be true
+    services = (("gateway", "the gateway"), ("core", "the core"), ("am", "AppManagement"))
+    if after_wait.get("result") == "ok" and boot_row is not None:
+        for key, name in services:
+            if answered.get(key) is None:
+                invalid("after-wait says %s answered 200 and the poller never saw it answer after the reboot: the evidence contradicts itself" % name)
+    never = [name for key, name in services if after_wait.get(key) != "200"] or ["one of the three"]
+    took = "seconds after the first sample of the box: gateway %s, core %s, AppManagement %s" % (fmt_s(answered.get("gateway")), fmt_s(answered.get("core")), fmt_s(answered.get("am")))
+    # What decides: all three answered 200 within the wait (it ends as soon as they do: a service that is slow to come up is not a service that does not), and no casaos unit that is not active, nor that systemd
+    # had to restart after the first look (the harness starts nothing in this phase: a unit with another InvocationID crashed and was brought back by its Restart=, which is not coming up by itself)
+    unaided = bool(casa) and after_wait.get("result") == "ok" and not down_after and not moved
     if not casa:
         answer("The core, the gateway and AppManagement come back by themselves", "OPEN", "no active casaos service in units-before")
         open_q("the core coming back: units-before lists no casaos service")
     else:
-        note = ("restarted by systemd after the first look (its Restart= brought %s back): %s" % ("it" if len(moved) == 1 else "them", ", ".join(moved))) if moved else "none restarted after the first look"
-        hop_answer("The core, the gateway and AppManagement come back by themselves", "GO" if unaided else "NO-GO",
-                   ("all %d casaos units active; %s; first answer after the first sample of the box: gateway %s, core %s, AppManagement %s; asked once settled: %s, %s, %s" % (
-                       len(casa), note, fmt_s(answered.get("gateway")), fmt_s(answered.get("core")), fmt_s(answered.get("am")), codes["gateway"], codes["core"], codes["am"])) if unaided else
-                   "not active after the reboot: %s; %s; answered: %s; asked once settled: gateway %s, core %s, AppManagement %s" % (
-                       ", ".join(down_after) or "none", note, ", ".join("%s %s" % (k, fmt_s(v)) for k, v in answered.items()) or "n/a", codes["gateway"], codes["core"], codes["am"]))
+        said = [("the gateway, the core and AppManagement all answered 200 within the wait (it took %s s of the %s s it allows)" % (after_wait.get("waited", "?"), after_wait.get("limit", "?")))
+                if after_wait.get("result") == "ok" else
+                ("%s never answered 200 within %s s of the wait (the last answers: gateway %s, core %s, AppManagement %s)" % (
+                    never[0] if len(never) == 1 else ", ".join(never[:-1]) + " and " + never[-1], after_wait.get("limit", "?"), after_wait.get("gateway", "?"), after_wait.get("core", "?"), after_wait.get("am", "?")))]
+        if down_after:
+            said.append("not active after the reboot: %s" % ", ".join(down_after))
+        if moved:
+            said.append("restarted by systemd after the first look, so it did not come up by itself (its Restart= brought %s back): %s" % ("it" if len(moved) == 1 else "them", ", ".join(moved)))
+        elif not down_after:
+            said.append("all %d casaos units active, none restarted by systemd after the first look" % len(casa))
+        said += [took, "asked again once the wait ended: gateway %s, core %s, AppManagement %s" % (codes["gateway"], codes["core"], codes["am"])]
+        hop_answer("The core, the gateway and AppManagement come back by themselves", "GO" if unaided else "NO-GO", "; ".join(said))
     # a token issued before the hop
     claims = {}
     try:
@@ -1628,39 +1676,71 @@ if not DEBIAN:
         for n in ["osm-orphan", "osm-orphan-held"] + engine_before:
             show_row(n, d_before.get(n, "-"), d_hop.get(n, "REMOVED"), d_after.get(n, "REMOVED"), "yes" if n in held_set else "no")
         P("")
-        P("Docker's source files after the unit (`sources-dir-after.txt`) and after the reboot (`sources-dir-end.txt`):")
+        P("Docker's source files after the unit (`sources-dir-after.txt`) and after the reboot (`sources-dir-end.txt`), from the listing of sources.list.d:")
         P("")
         for tagf in ("sources-dir-after.txt", "sources-dir-end.txt"):
-            names_ = sorted({m.group(1) for m in re.finditer(r"\s(\S*docker\S*)", read(tagf))})
-            P("- %s: %s" % (tagf, ", ".join(names_) or "no file with docker in its name"))
-            fact("final state of Docker's apt source (%s)" % tagf, ", ".join(names_) or "none")
+            names_ = sorted({m.group(1) for m in re.finditer(r"^[-l]\S*\s+\d+\s+\S+\s+\S+\s+\d+\s+\w+\s+\d+\s+\S+\s+(\S*docker\S*)$", read(tagf), re.M)})
+            said = ", ".join(names_) or "no file with docker in its name"
+            if names_ and all(n.endswith(".casaos-paused") for n in names_):
+                said += " (still under the name this harness gave it)"
+            P("- %s: %s" % (tagf, said))
+            fact("Docker's apt source %s" % ("after the unit" if "after" in tagf else "after the reboot"), said)
+        P("")
+        P("Docker's source was renamed (`*.casaos-paused`) by this harness before the tool ran, and nothing gives it back: apt and the tool ignore a file with that extension. What is shown above is "
+          "that rename and not what the tool does with a third-party source: what the tool does with a source of Docker's that it can read is NOT measured here.")
         P("")
         unheld_removed = [n for n in engine_before if n not in held_set and n not in d_hop]
         held_removed = [n for n in held_set if n in d_before and n not in d_hop]
         orphan_gone = "osm-orphan" not in d_hop
         orphan_held_gone = "osm-orphan-held" not in d_hop
-        fact("obsolete packages are removed without a question (the control that no repository has)", "yes: osm-orphan was removed" if orphan_gone else "no: osm-orphan is still installed")
-        fact("apt-mark hold on a package the tool wants to remove", ("kept: osm-orphan-held is still installed" if not orphan_held_gone else "NOT respected: osm-orphan-held was removed") + "; held engine packages removed: %s" % (", ".join(sorted(held_removed)) or "none"))
+        # the tool's own log says what it took for obsolete and for removal: the last "Obsolete:" line and the last "remove_candidates:" line (the cleanup after the upgrade)
+        log_obsolete = re.findall(r"^\S+ \S+ DEBUG Obsolete: (.*)$", read("dist-upgrade-main.log"), re.M)
+        log_cands = re.findall(r"^\S+ \S+ DEBUG remove_candidates: (.*)$", read("dist-upgrade-main.log"), re.M)
+        watched = ENGINE + ["osm-orphan", "osm-orphan-held"]
+        named_obsolete = sorted(n for n in (log_obsolete[-1].split() if log_obsolete else []) if n in watched)
+        taken_for_removal = sorted(n for n in re.findall(r"'([A-Za-z0-9][^']*)'", log_cands[-1] if log_cands else "") if n in watched)
+        removed_any = bool(orphan_gone or orphan_held_gone or unheld_removed or held_removed)
+        fact("the tool removes a package that no repository carries (the control osm-orphan, put there with dpkg -i)", "yes: osm-orphan was removed" if orphan_gone else "no: osm-orphan is still installed after the unit")
+        fact("what the tool's own log (dist-upgrade/main.log) says of Docker's engine and the controls", ("named Obsolete: %s; taken for removal: %s" % (", ".join(named_obsolete) or "none of them", ", ".join(taken_for_removal) or "none of them"))
+             if log_obsolete or log_cands else "no Obsolete or remove_candidates line found in main.log (not copied, or another version of the tool)")
+        fact("apt-mark hold on a package the tool names obsolete", ("kept: osm-orphan-held is still installed" if not orphan_held_gone else "NOT respected: osm-orphan-held was removed") + "; held engine packages removed: %s" % (", ".join(sorted(held_removed)) or "none"))
+        if not removed_any:
+            P("**What this means.** The tool removed none of the packages that it names Obsolete in its own log (%s). Not osm-orphan, which no repository carries, and not Docker's engine, whose source this "
+              "harness paused and which is therefore in the same position as osm-orphan (in this run the tool left alone a package that no repository carries); the Docker packages that were not held stayed too. "
+              "So in this setup, a cloud image with Docker installed by hand and its source paused, the tool is not what threatens Docker, and the questions of the hold and of `RemoveObsoletes=no` are moot here: there "
+              "was nothing for either of them to hold back. Only a control that IS in a repository of the old release and gone from the next one could decide them, and this harness does not install one "
+              "(a Docker whose source is not paused is another setup, and is not measured either)." % (", ".join(named_obsolete) or "its log was not read"))
+            P("")
         if variant == "hold":
             # the tool removing what no repository has (osm-orphan, held by nothing) is the positive control of the hold: without it nothing says that the hold was ever exercised
             hold_ans = "NO-GO" if held_removed or orphan_held_gone else "GO" if orphan_gone else "OPEN"
             hop_answer("apt-mark hold keeps Docker's engine through the tool", hold_ans,
-                       "held and removed: %s; the unheld Docker packages removed: %s (the same rule that removes osm-orphan: %s)" % (
-                           ", ".join(sorted(held_removed)) or "none", ", ".join(unheld_removed) or "none", "removed" if orphan_gone else "NOT removed: the tool removed nothing, so the hold was not exercised"))
+                       "held and removed: %s; the unheld Docker packages removed: %s; osm-orphan (unheld, and carried by no repository, as Docker's engine is with its source paused): %s" % (
+                           ", ".join(sorted(held_removed)) or "none", ", ".join(unheld_removed) or "none",
+                           "removed, so the tool does remove such a package and the hold was exercised" if orphan_gone else "NOT removed: the tool left it, and the unheld Docker packages, alone, so the hold had nothing to hold back and is neither shown to work nor to fail"))
             if hold_ans == "OPEN" and hop_ran:
-                open_q("apt-mark hold on the engine: the tool did not remove osm-orphan (the unheld control), so the hold was not exercised")
-            answer("RemoveObsoletes=no in release-upgrades.d/*.cfg is honoured", "OPEN", "not tested in this run: run it again with ubuntu_variant keep")
-            open_q("RemoveObsoletes=no and release-upgrades.d/*.cfg: this run is the `hold` variant; run the workflow again with ubuntu_variant keep")
+                open_q("apt-mark hold on the engine: moot in this setup. The tool removed none of what it names Obsolete (osm-orphan, the unheld control that no repository carries, and the unheld Docker packages stayed), so the hold had "
+                       "nothing to hold back; it is decided only by a control that is in a repository of the old release and gone from the next one, which this harness does not install")
+            answer("RemoveObsoletes=no in release-upgrades.d/*.cfg is honoured", "OPEN", "not tested in this run (the hold variant): a keep run could only show the drop-in ignored (the control removed with it in place), and it cannot show it read while the tool leaves a package that no repository carries alone anyway")
+            open_q("RemoveObsoletes=no and release-upgrades.d/*.cfg: not tested in this run (the `hold` variant). A run with ubuntu_variant keep could only show the drop-in ignored (the control removed with it in place); it cannot show it "
+               "read while the tool leaves a package that no repository carries alone, and is not worth a leg until the harness has a control that is in a repository of the old release and gone from the next one")
         elif variant == "keep":
-            honoured = not orphan_gone
-            hop_answer("RemoveObsoletes=no in release-upgrades.d/*.cfg is honoured", "GO" if honoured else "NO-GO",
-                       "osm-orphan (held by nothing) is %s; Docker's packages removed: %s" % ("still installed" if honoured else "REMOVED anyway", ", ".join(unheld_removed) or "none"))
-            open_q("RemoveObsoletes=no: this run alone cannot tell 'the drop-in is honoured' from 'the tool removes nothing'; the control that the tool removes osm-orphan is the hold run's")
+            # GO is not an answer this run can give: a control that stays installed is the drop-in being read only when the tool would have removed it without the drop-in, and the tool leaves a
+            # package that no repository carries alone (the hold runs of the first real dispatch: osm-orphan stayed, the tool's own log names it Obsolete and does not take it for removal). Removed
+            # anyway is still a NO-GO: the drop-in was not honoured
+            hop_answer("RemoveObsoletes=no in release-upgrades.d/*.cfg is honoured", "NO-GO" if orphan_gone else "OPEN",
+                       "osm-orphan (held by nothing) is %s; Docker's packages removed: %s%s" % ("REMOVED anyway" if orphan_gone else "still installed", ", ".join(unheld_removed) or "none",
+                                                                                              "" if orphan_gone else "; but the tool leaves a package that no repository carries alone with or without the drop-in, so its staying does not show that the drop-in was read"))
+            if not orphan_gone and hop_ran:
+                open_q("RemoveObsoletes=no and release-upgrades.d/*.cfg: moot in this setup. osm-orphan stayed, and the tool leaves such a package alone anyway (see the hold run, and the tool's log: Obsolete, not a removal "
+                       "candidate), so the drop-in is neither shown to be read nor to be ignored; only a control that is in a repository of the old release and gone from the next one could show it")
             answer("apt-mark hold keeps Docker's engine through the tool", "OPEN", "not tested in this run: run it again with ubuntu_variant hold")
             open_q("apt-mark hold on the engine: this run is the `keep` variant; run the workflow again with ubuntu_variant hold")
         hop_answer("What the tool does to Docker: the engine survives (docker-ce installed, the daemon answering after the reboot)", "GO" if survive else "NO-GO",
-               "docker-ce %s -> %s; the daemon %s; removed: %s%s" % (d_before.get("docker-ce"), d_ce or "REMOVED", ("answers " + dsv["after"]) if answers_after else "does NOT answer", ", ".join(sorted(n for n in engine_before if n not in d_after)) or "no engine package",
-                                                                      "; the unheld ones among them: " + ", ".join(unheld_removed) if unheld_removed else ""))
+               "docker-ce %s -> %s; the daemon %s; removed: %s%s%s" % (d_before.get("docker-ce"), d_ce or "REMOVED", ("answers " + dsv["after"]) if answers_after else "does NOT answer", ", ".join(sorted(n for n in engine_before if n not in d_after)) or "no engine package",
+                                                                      "; the unheld ones among them: " + ", ".join(unheld_removed) if unheld_removed else "",
+                                                                      "; the tool removed none of what it names Obsolete, osm-orphan and the unheld Docker packages included, so this survival is what the tool does with a package no repository carries (Docker's source is paused here), "
+                                                                      "and not the effect of the hold or of the drop-in" if not removed_any else ""))
         if not survive:
             open_q("Ubuntu hop: Docker did not survive in this variant; the design's stop criterion ('Docker cannot be protected') is not decided until the other variant has been run")
 

@@ -154,8 +154,8 @@ def package_set(s, when, spec):
         pk["libnftables1"] = "1.0"
         pk["nftables"] = "1.0"
         pk.pop("libfoo1")
-    if s["family"] == "ubuntu" and when != "before":
-        pk.pop("osm-orphan", None)                  # the tool removes what no repository has
+    if s["family"] == "ubuntu" and when != "before" and spec.get("removes", True):
+        pk.pop("osm-orphan", None)                  # the tool removes what no repository has (removes False: it leaves it alone, as the first real run saw)
         if spec.get("variant", "hold") == "hold":
             pk.pop("docker-buildx-plugin", None)    # the unheld ones go, the held ones stay
             pk.pop("docker-compose-plugin", None)
@@ -371,6 +371,7 @@ def build(d, s, spec=None):
         put(d, "deps-%s.txt" % tag, "".join("%s %s\n" % (n, "none" if n == "wsdd" else "ii ") for n in CASA_DEPS))
     put(d, "settle-baseline", "2\n")
     put(d, "baseline-started", "p-no\np-on-failure\n")
+    put(d, "baseline-wait", "result ok\nwaited 6\nlimit 180\ngateway 200\ncore 200\nam 200\n")
     put(d, "settle-after", "9\n")
     put(d, "jwt-claims-jwt-before.json", json.dumps({"issued": T0 + S["baseline_start"] + 20, "claims": {"id": 1, "exp": int(T0 + S["baseline_start"] + 20 + 10800), "iss": "casaos"}}) + "\n")
     for n in ("gateway", "core", "am", "jwt", "internal"):
@@ -426,7 +427,8 @@ def build(d, s, spec=None):
     tcur = S["hop_start"] + 10
     for n in names_:
         ul.append((tcur, "STEP_START %s" % n))
-        put(d, "step-%s.log" % n, step_log(s, n) if deb else ("Checking for a new Ubuntu release\nrunning...\n" if n == "upgrader" else "Reading package lists...\n"))
+        put(d, "step-%s.log" % n, step_log(s, n) if deb else (("Checking for a new Ubuntu release\nrunning...\nSetting up libc6:amd64 (%s) ...\n" % s["libc"][1] + spec.get("libc_restarts", "Checking for services that may need to be restarted...\nChecking init scripts...\nNothing to restart.\n")
+                                                                                          + "Preparing to unpack .../libc-bin.deb ...\n") if n == "upgrader" else "Reading package lists...\n"))
         put(d, "step-%s.rc" % n, "0\n")
         tcur += 120 if n in ("minimal", "full") else 20
         ul.append((tcur, "STEP_END %s 0" % n))
@@ -438,6 +440,8 @@ def build(d, s, spec=None):
         put(d, "unit-%s.txt" % tag, "pid 4242\ninvocation %s\nmanager %s\nsystemd %s\ndbus %s\nlibc6 %s\ntty not a tty\n" % (hex32("inv"), "247" if tag == "start" else "252", s["systemd"][0 if tag == "start" else 1], s["dbus"][0 if tag == "start" else 1], s["libc"][0 if tag == "start" else 1]))
     put(d, "os-hop", new_os)
     put(d, "os-after", new_os)
+    # what the wait after the reboot saw: the three answered 200 within it (the poller's own samples above have AppManagement answering 24 s after the box came back)
+    put(d, "after-wait", "result ok\nwaited 4\nlimit 180\ngateway 200\ncore 200\nam 200\n")
     sysos_files(d, "after", new_os, core_answer(s["family"], s["new"], s["new_code"], s["new_pretty"]))
     jd = datetime.fromtimestamp(T0 + S["hop_start"] + 700, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     put(d, "hop-journal.txt", "%s.123456+00:00 host systemd[1]: Stopping OpenBSD Secure Shell server...\n%s.223456+00:00 host systemd[1]: Started OpenBSD Secure Shell server.\n" % (jd, jd))
@@ -454,7 +458,11 @@ def build(d, s, spec=None):
         rec(d, "release-upgrades-after", "[DEFAULT]\nPrompt=lts\n")
         rec(d, "pro-status-after", '{"attached": false}\n')
         put(d, "hop-sample.log", "".join("%.6f screen=0 sshd1022=0\n" % (T0 + S["hop_start"] + 100 * i) for i in range(1, 8)))
-        put(d, "dist-upgrade-main.log", "2026-10-10 12:00:00,000 INFO Using ubuntu-release-upgrader 1:24.04.27\n2026-10-10 12:00:01,000 INFO release-upgrader: starting\n")
+        # the tool's own log: what it names Obsolete (Docker's engine and both controls, as in the first real run, since no source it reads carries them) and what it takes for removal
+        obsolete = "containerd.io docker-buildx-plugin docker-ce docker-ce-cli docker-ce-rootless-extras docker-compose-plugin osm-orphan osm-orphan-held libgone1"
+        cands = ["libgone1", "libgone2"] + (["osm-orphan"] + (["docker-buildx-plugin", "docker-compose-plugin", "docker-ce-rootless-extras"] if variant == "hold" else []) if spec.get("removes", True) else [])
+        put(d, "dist-upgrade-main.log", "2026-10-10 12:00:00,000 INFO Using ubuntu-release-upgrader 1:24.04.27\n2026-10-10 12:00:01,000 INFO release-upgrader: starting\n2026-10-10 12:00:02,000 DEBUG Obsolete: %s\n"
+            "2026-10-10 12:30:00,000 DEBUG Obsolete: %s\n2026-10-10 12:30:01,000 DEBUG remove_candidates: '{%s}'\n" % (obsolete, obsolete, ", ".join("'%s'" % c for c in cands)))
         listing = "total 8\n-rw-r--r-- 1 root root 200 Oct 10 12:00 docker.list.casaos-paused\n-rw-r--r-- 1 root root 190 Oct 10 12:30 docker.sources\n"
         rec(d, "sources-dir-after", listing)
         rec(d, "sources-dir-end", listing)
@@ -601,7 +609,7 @@ for leg in ("d11-12", "d12-13"):
 for leg, variant in (("u22-24", "hold"), ("u24-26", "hold"), ("u22-24", "keep")):
     case("a healthy %s leg, variant %s, is measured" % (leg, variant), leg, 0, spec={"variant": variant},
          must_have=["MEASURED", "## The go/no-go table", "Canonical's side", "Last-Modified", "Mon, 07 Sep 2026"], must_not_have=["INVALID", "NOT_OFFERED", "Traceback"],
-         rows=dict({Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_TOOL: "GO", Q_DOCKER: "GO"}, **({Q_HOLD: "GO", Q_CFG: "OPEN"} if variant == "hold" else {Q_HOLD: "OPEN", Q_CFG: "GO"})))
+         rows=dict({Q_CORE: "GO", Q_TOKEN: "GO", Q_UNIT: "GO", Q_HOP: "GO", Q_TOOL: "GO", Q_DOCKER: "GO"}, **({Q_HOLD: "GO", Q_CFG: "OPEN"} if variant == "hold" else {Q_HOLD: "OPEN", Q_CFG: "OPEN"})))
 for leg in ("u22-24", "u24-26"):
     case("%s: an upgrade Canonical has not opened is NOT_OFFERED, neutral and visible, and no row is a GO" % leg, leg, 0, spec={"offered": False},
          must_have=["NOT_OFFERED", "neither a pass nor a failure", "No new release found"], must_not_have=["INVALID", "**GO**"],
@@ -668,16 +676,142 @@ def restarted_gateway(d):
     unit_set(d, "units-after.tsv", lambda n, f: f[:4] + [hex32("again")] if n == "casaos-gateway.service" else f)
 
 
-flips("core: the gateway was restarted by systemd after the first look: it came back by itself, and the row says so instead of failing it", L, Q_CORE, "GO", restarted_gateway,
-      must_have=["restarted by systemd after the first look (its Restart= brought it back): casaos-gateway.service"])
-flips("core: restarted by systemd and not answering 200 once settled is still a NO-GO", L, Q_CORE, "NO-GO", seq(restarted_gateway, lambda d: put(d, "am-after.code", "502\n")),
-      must_have=["asked once settled: gateway 200, core 200, AppManagement 502", "casaos-gateway.service"])
-flips("core: the core never answers 200 after the reboot", L, Q_CORE, "NO-GO", lambda d: timeline_edit(d, lambda f: f[:5] + ["502"] + f[6:] if float(f[0]) > T0 + S["reboot_post"] and f[5] == "200" else f))
-flips("core: AppManagement never answers 200, with either credential, after the reboot", L, Q_CORE, "NO-GO",
-      lambda d: timeline_edit(d, lambda f: f[:6] + ["401", "401"] + f[8:] if float(f[0]) > T0 + S["reboot_post"] else f))
+def wait_after(**said):
+    """what the wait after the reboot wrote in after-wait: its result, how long it took, its limit and the last answers of the three"""
+    v = dict(result="ok", waited=4, limit=180, gateway=200, core=200, am=200)
+    v.update(said)
+    return lambda d: put(d, "after-wait", "".join("%s %s\n" % (k, v[k]) for k in ("result", "waited", "limit", "gateway", "core", "am")))
+
+
+def never_after(col, code):
+    """the poller saw the column (4 gateway, 5 core, 6 am, 7 ami) answer `code` after the request to reboot, never 200"""
+    return lambda d: timeline_edit(d, lambda f: f[:col] + [code] + f[col + 1:] if float(f[0]) > T0 + S["reboot_post"] and f[col] == "200" else f)
+
+
+flips("core: the gateway was restarted by systemd after the first look: that is not coming up by itself, and the row says which unit and why", L, Q_CORE, "NO-GO", restarted_gateway,
+      must_have=["restarted by systemd after the first look, so it did not come up by itself (its Restart= brought it back): casaos-gateway.service"])
+case("core: restarted by systemd is a NO-GO although all three answered 200 in the wait, and it says so", L, 0, rows={Q_CORE: "NO-GO"}, mutate=restarted_gateway,
+     must_have=["the gateway, the core and AppManagement all answered 200 within the wait", "casaos-gateway.service"], must_not_have=["asked once settled", "INVALID"])
+case("core: the core never answers 200 within the wait: NO-GO, and it says which and for how long it was waited for", L, 0, rows={Q_CORE: "NO-GO"},
+     mutate=seq(wait_after(result="gave_up", waited=180, core=502), never_after(5, "502"), lambda d: put(d, "core-after.code", "502\n")),
+     must_have=["the core never answered 200 within 180 s of the wait (the last answers: gateway 200, core 502, AppManagement 200)", "core n/a"], must_not_have=["asked once settled", "INVALID"])
+flips("core: AppManagement never answers 200 within the wait, with either credential: NO-GO", L, Q_CORE, "NO-GO",
+      seq(wait_after(result="gave_up", waited=180, am="000"), never_after(6, "401"), never_after(7, "401"), lambda d: put(d, "am-after.code", "000\n")),
+      must_have=["AppManagement never answered 200 within 180 s of the wait (the last answers: gateway 200, core 200, AppManagement 000)", "AppManagement n/a"])
+flips("core: AppManagement did not answer within the wait but the poller saw it answer later: NO-GO, and the seconds it took are said", L, Q_CORE, "NO-GO",
+      seq(wait_after(result="gave_up", waited=180, am="000"), lambda d: put(d, "am-after.code", "000\n")),
+      must_have=["AppManagement never answered 200 within 180 s of the wait", "AppManagement 24 s"])
+flips("core: gateway and core never answered within the wait: both are named", L, Q_CORE, "NO-GO",
+      seq(wait_after(result="gave_up", waited=180, gateway="000", core="000"), never_after(4, "000"), never_after(5, "000")),
+      must_have=["the gateway and the core never answered 200 within 180 s of the wait"])
 case("core: AppManagement answering only with the loopback secret is answering", L, 0, rows={Q_CORE: "GO"},
      mutate=lambda d: timeline_edit(d, lambda f: f[:6] + ["401", "200"] + f[8:] if float(f[0]) > T0 + S["reboot_post"] else f))
 flips("core: no casaos service was active before: nothing to say", L, Q_CORE, "OPEN", lambda d: unit_set(d, "units-before.tsv", lambda n, f: [f[0], "inactive"] + f[2:] if n.startswith("casaos") else f))
+# the second real dispatch: the guest declared the box settled 2.4 s after it came back and asked AppManagement once, which needs 11 to 13 s on Debian: NO-GO for the impatience of the harness
+case("core: a healthy leg says what the wait took and what each service took, and does not blame the moment it was asked", L, 0, rows={Q_CORE: "GO"},
+     must_have=["the gateway, the core and AppManagement all answered 200 within the wait (it took 4 s of the 180 s it allows)", "gateway 18 s, core 20 s, AppManagement 24 s", "asked again once the wait ended: gateway 200, core 200, AppManagement 200",
+                "| after the reboot: waiting for the gateway, the core and AppManagement to answer 200 (the longest it will wait: 180 s) | 4 s (ok) |", "Asked again once the wait ended"],
+     must_not_have=["asked once settled", "Asked once settled", "INVALID"])
+case("core: a wait of 11 s for the services is shown, and is a GO and not a NO-GO", L, 0, rows={Q_CORE: "GO"}, mutate=wait_after(waited=11),
+     must_have=["(it took 11 s of the 180 s it allows)", "| 11 s (ok) |"], must_not_have=["INVALID"])
+invalid("core: no record of the wait after the reboot: nothing says that the services were given the time to come up", L, "after-wait is missing or empty", lambda d: remove(d, "after-wait"))
+invalid("core: an empty record of the wait after the reboot", L, "after-wait is missing or empty", lambda d: put(d, "after-wait", ""))
+invalid("core: the wait after the reboot says something that is not ok or gave_up", L, "after-wait says 'maybe', not ok or gave_up", lambda d: put(d, "after-wait", "result maybe\nwaited 3\nlimit 180\n"))
+invalid("core: a wait that says ok while AppManagement's last answer is not 200 contradicts itself", L, "after-wait says ok while AppManagement's last answer was 000", wait_after(am="000"))
+invalid("core: a wait that says all three answered 200 while the poller never saw the core answer after the reboot: the evidence contradicts itself", L,
+        "after-wait says the core answered 200 and the poller never saw it answer after the reboot", never_after(5, "502"))
+invalid("core: the same for AppManagement with either credential", L, "after-wait says AppManagement answered 200 and the poller never saw it answer after the reboot",
+        seq(never_after(6, "401"), never_after(7, "401")))
+for leg_ in ("u22-24", "u24-26"):
+    invalid("%s: no record of the wait after the reboot is an invalid run on an Ubuntu leg too" % leg_, leg_, "after-wait is missing or empty", lambda d: remove(d, "after-wait"))
+    case("%s: a hop that was not offered never reaches the after phase: no wait is asked of it" % leg_, leg_, 0, spec={"offered": False}, must_not_have=["INVALID", "after-wait"])
+
+
+def replay_real(leg):
+    """the reboot of a real run of the second dispatch put in a healthy fixture: the poller's own samples from the request to reboot after the hop to the end of the after phase (REAL_TAILS), and
+    what the fixed guest would have written of its own: the wait began where the guest of that run declared the box settled (it did not wait) and ended at the first sample on which all three answered 200,
+    and after_settled is that moment. The files of the old guest that asked once (am-after.code 000) are those of the fixed guest after the wait (200)."""
+    def m(d):
+        t_req = T0 + S["reboot_post"]
+        names = {"ALL": ",".join(sorted(CONTAINERS)), "BACK": ",".join(n for n in sorted(CONTAINERS) if n not in STAYS), "-": "-"}
+        names["STRAY"] = "musing_lamarr," + names["BACK"]
+        tail = REAL_TAILS[leg]
+        old_settled = next(t_ for t_, *rest in tail if rest[0] == "#" and rest[1] == "after_settled")
+        ok_at = min(t_ for t_, *rest in tail if rest[0] != "#" and t_ > old_settled and rest[0].split("\t")[3:7] == ["200"] * 4)
+        ledit(d, "timeline.tsv", lambda ls: [ln for ln in ls if float(ln.split("\t")[1] if ln.startswith("#") else ln.split("\t")[0]) < t_req])
+        out = []
+        for t_, *rest in tail:
+            if rest[0] == "#":
+                name = rest[1]
+                if name == "after_settled":
+                    t_ = ok_at
+                out.append("#\t%.6f\t%s" % (t_req + t_, "boot_changed aaa bbb" if name == "boot_changed" else name))
+            else:
+                f = rest[0].split("\t")
+                out.append("%.6f\t%s\t%s" % (t_req + t_, "\t".join(f[:9]), names[f[9]]))
+        ledit(d, "timeline.tsv", lambda ls: ls + out)
+        wait_after(waited=int(round(ok_at - old_settled)))(d)
+        put(d, "am-after.code", "200\n")
+    return m
+
+
+# the tails of the two real runs of the second dispatch (2026-10-11): what the poller wrote from the request to reboot after the hop to the end of the after phase, in seconds from that request
+# (d11-12 is Debian 11 to 12, d12-13 Debian 12 to 13). Each row is docker, ssh, samba, gateway, core, AppManagement with the token, AppManagement with the secret, the published port, the host-network port
+# and the running containers (ALL: the seven witnesses, BACK: without the two that do not start by themselves, STRAY: BACK with the container named musing_lamarr that a docker run without a name made, "-": none).
+# The guest of that run said `after_settled` 2.4 s after the box came back, asked once and found AppManagement at 000: it came up 11 s (Debian 11) and 13 s (Debian 12) after the first sample of the box.
+REAL_TAILS = {
+    "d11-12": [
+        (0.000, "#", "reboot_post_start"),
+        (0.684, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (1.686, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (2.687, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (3.689, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (4.691, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (5.692, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (6.694, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (7.695, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (8.697, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (9.698, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (23.013, "#", "boot_changed"),
+        (23.014, "#", "after_start"),
+        (21.171, "28.0.4\tdown\tdown\t000\t000\t404\t000\t000\t000\tBACK"),
+        (23.830, "28.0.4\tup\tup\t200\t200\t404\t404\t200\t200\tBACK"),
+        (25.398, "#", "after_settled"),
+        (24.833, "28.0.4\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (26.265, "28.0.4\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (29.289, "28.0.4\tup\tup\t200\t200\t000\t000\t200\t200\tSTRAY"),
+        (32.324, "#", "after_done"),
+        (32.322, "28.0.4\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+    ],
+    "d12-13": [
+        (0.000, "#", "reboot_post_start"),
+        (-0.175, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (0.827, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (1.829, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (2.831, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (3.833, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (4.834, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (5.837, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tALL"),
+        (19.879, "-\tdown\tdown\t000\t000\t000\t000\t000\t000\t-"),
+        (22.955, "29.9.0\tup\tup\t200\t200\t404\t404\t200\t200\tBACK"),
+        (26.017, "#", "boot_changed"),
+        (26.017, "#", "after_start"),
+        (23.957, "29.9.0\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (27.664, "#", "after_settled"),
+        (26.981, "29.9.0\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (30.006, "29.9.0\tup\tup\t200\t200\t000\t000\t200\t200\tBACK"),
+        (33.042, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+        (34.047, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+        (35.241, "#", "after_done"),
+        (35.049, "29.9.0\tup\tup\t200\t200\t200\t200\t200\t200\tBACK"),
+    ],
+}
+for leg_, took_ in (("d11-12", "gateway 3 s, core 3 s, AppManagement 11 s"), ("d12-13", "gateway 3 s, core 3 s, AppManagement 13 s")):
+    case("%s: the real reboot of the second dispatch, whose AppManagement needed 11 to 13 s: with the wait, the row is a GO and says what each service took" % leg_, leg_, 0, mutate=replay_real(leg_), rows={Q_CORE: "GO"},
+         must_have=["the gateway, the core and AppManagement all answered 200 within the wait", took_, "MEASURED"], must_not_have=["INVALID", "asked once settled", "Asked once settled"])
+    case("%s: ... and the same reboot with a wait that gave up before AppManagement came up is a NO-GO that says it" % leg_, leg_, 0,
+         mutate=seq(replay_real(leg_), wait_after(result="gave_up", waited=5, limit=5, am="000"), lambda d: put(d, "am-after.code", "000\n")), rows={Q_CORE: "NO-GO"},
+         must_have=["AppManagement never answered 200 within 5 s of the wait (the last answers: gateway 200, core 200, AppManagement 000)", took_], must_not_have=["INVALID"])
 flips("token: refused after the reboot, and not expired", L, Q_TOKEN, "NO-GO", lambda d: put(d, "jwt-after.code", "401\n"), must_have=["the token of the baseline: rejected"])
 flips("token: refused after the reboot because it expired: not decidable", L, Q_TOKEN, "OPEN",
       seq(lambda d: put(d, "jwt-after.code", "401\n"), lambda d: put(d, "jwt-claims-jwt-before.json", json.dumps({"issued": T0 + 100, "claims": {"exp": int(T0 + 200)}}))), must_have=["the token of the baseline: expired"])
@@ -783,6 +917,22 @@ case("a unit that ended itself with a status (ENDED 3) is an invalid run too", L
      must_have=["INVALID RUN", "the unit of the hop ended on its own account (ENDED 3)"], must_not_have=["**GO**"])
 
 
+def unit_cannot_read(d):
+    """the unit's sources tool could not read a file (what it says is the tool's own words): START, the sources, ABORTED with the file, ENDED 1; apt never ran, so dpkg has nothing in its log of the hop"""
+    ul = [ln for ln in get(d, "hop-unit.log").splitlines() if ln.split(" ", 1)[1] in ("START", "SRC_START", "SRC_END")]
+    put(d, "hop-unit.log", "\n".join(ul) + "\n%.6f ABORTED the sources tool cannot read /etc/apt/sources.list.d/debian.sources: stanza 1 (URIs: mirror+file:///etc/apt/mirrors/x.list): an address is in a form this tool does not read\n%.6f ENDED 1\n" % (
+        T0 + S["hop_start"] + 6, T0 + S["hop_start"] + 7))
+    put(d, "dpkg-hop.log", "")
+    for n in ("update", "minimal_dl", "minimal", "full_dl", "full", "converge1"):
+        remove(d, "step-%s.log" % n, "step-%s.rc" % n)
+
+
+case("a unit whose sources tool could not read a file (the real d12-13 run ended on the form of its sources) is an invalid run that says which file and why, once: the empty log of dpkg that follows from it is not a reason of its own", L, 1, mutate=unit_cannot_read,
+     must_have=["INVALID RUN", "the unit of the hop ended on its own account (ABORTED the sources tool cannot read /etc/apt/sources.list.d/debian.sources: stanza 1 (URIs: mirror+file:///etc/apt/mirrors/x.list)", "; ENDED 1)"],
+     must_not_have=["dpkg-hop.log is missing", "never wrote DONE", "**GO**", "## The go/no-go table"])
+invalid("a unit that did not end itself and left dpkg's log of the hop empty is still an invalid run (apt ran and dpkg said nothing)", L, "dpkg-hop.log is missing or empty", lambda d: put(d, "dpkg-hop.log", ""))
+
+
 def box_unmoved(d):
     """the hop changed nothing: the release and the packages are the ones of before"""
     for n in ("os-after", "os-hop"):
@@ -840,8 +990,41 @@ case("debian: a hop that failed halfway with docker-ce gone is OPEN on the Docke
      mutate=seq(lambda d: put(d, "os-after", get(d, "os-before")), lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")])), must_have=["what was seen all the same", "NOT all the same installed versions"])
 case("ubuntu hold: a tool that removed nothing at all, not even the control, did not exercise the hold: OPEN, and it says why", U, 0, rows={Q_HOLD: "OPEN", Q_DOCKER: "GO"},
      mutate=seq(*[(lambda t: lambda d: put(d, "dpkg-%s.tsv" % t, get(d, "dpkg-%s.tsv" % t) + "osm-orphan\t1.0\tii \n" + "".join("%s\t5:29.8.0-1~ubuntu.22.04~jammy\tii \n" % n for n in ("docker-buildx-plugin", "docker-compose-plugin", "docker-ce-rootless-extras"))))(t) for t in ("hop", "after")]),
-     must_have=["NOT removed: the tool removed nothing, so the hold was not exercised"])
-case("ubuntu keep: the drop-in row says what a keep run alone cannot", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "GO"}, must_have=["cannot tell 'the drop-in is honoured' from 'the tool removes nothing'"])
+     must_have=["NOT removed: the tool left it, and the unheld Docker packages, alone, so the hold had nothing to hold back and is neither shown to work nor to fail"], must_not_have=["the same rule that removes osm-orphan"])
+case("ubuntu keep: a control that stayed is not the drop-in being read (the tool leaves such a package alone anyway): the row is OPEN and says so, and a keep run cannot be a GO", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "OPEN"},
+     must_have=["but the tool leaves a package that no repository carries alone with or without the drop-in, so its staying does not show that the drop-in was read"], must_not_have=["**GO** | osm-orphan (held by nothing)"])
+
+# what the first real runs saw: the tool removed nothing it names Obsolete, not the control that no repository carries and not Docker's engine, whose source was paused
+for leg in ("u22-24", "u24-26"):
+    case("%s: a tool that left everything alone (what the first real run saw): the engine survived, and the report says that this is the tool's behaviour and not the hold's" % leg, leg, 0, spec={"removes": False},
+         rows={Q_DOCKER: "GO", Q_HOLD: "OPEN", Q_CFG: "OPEN", Q_TOOL: "GO", Q_HOP: "GO"},
+         must_have=["**What this means.** The tool removed none of the packages that it names Obsolete in its own log (containerd.io, docker-buildx-plugin, docker-ce, docker-ce-cli, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan, osm-orphan-held)",
+                    "in this run the tool left alone a package that no repository carries", "the questions of the hold and of `RemoveObsoletes=no` are moot here", "a control that IS in a repository of the old release and gone from the next one",
+                    "so this survival is what the tool does with a package no repository carries (Docker's source is paused here), and not the effect of the hold or of the drop-in",
+                    "neither shown to work nor to fail", "named Obsolete: containerd.io, docker-buildx-plugin, docker-ce, docker-ce-cli, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan, osm-orphan-held; taken for removal: none of them",
+                    "apt-mark hold on the engine: moot in this setup", "no: osm-orphan is still installed after the unit"],
+         must_not_have=["INVALID", "the same rule that removes osm-orphan", "the tool removed nothing, so the hold was not exercised"])
+case("u22-24: ... and in the keep variant the drop-in is neither shown to be read nor ignored, and the report says it is moot", "u22-24", 0, spec={"removes": False, "variant": "keep"}, rows={Q_CFG: "OPEN", Q_HOLD: "OPEN", Q_DOCKER: "GO"},
+     must_have=["RemoveObsoletes=no and release-upgrades.d/*.cfg: moot in this setup", "osm-orphan stayed, and the tool leaves such a package alone anyway", "the tool removed none of what it names Obsolete"], must_not_have=["INVALID"])
+case("ubuntu: a tool that removed what it named obsolete (the model of the GO rows) has no 'what this means' and says what it took for removal", U, 0,
+     must_have=["named Obsolete: containerd.io, docker-buildx-plugin, docker-ce, docker-ce-cli, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan, osm-orphan-held; taken for removal: docker-buildx-plugin, docker-ce-rootless-extras, docker-compose-plugin, osm-orphan"],
+     must_not_have=["**What this means.**", "so this survival is what the tool does"])
+case("ubuntu keep: the control removed anyway (the drop-in ignored) is something the tool did: NO-GO, and no 'what this means' that says it did nothing", U, 0, spec={"variant": "keep"}, rows={Q_CFG: "NO-GO"},
+     mutate=lambda d: ledit(d, "dpkg-hop.tsv", lambda ls: [ln for ln in ls if not ln.startswith("osm-orphan	")]), must_not_have=["**What this means.**", "so this survival is what the tool does"])
+case("ubuntu: a main.log with no Obsolete or remove_candidates line is said, and nothing is made up of it", U, 0, mutate=lambda d: put(d, "dist-upgrade-main.log", "2026-10-10 12:00:00,000 INFO Using ubuntu-release-upgrader 1:24.04.27\n"),
+     must_have=["no Obsolete or remove_candidates line found in main.log"], must_not_have=["taken for removal"])
+case("ubuntu: Docker's source is shown by the names in the listing, as renamed by the harness, and the report says that the tool's own treatment of such a source is not measured (not the lines of the file)", U, 0,
+     must_have=["- sources-dir-after.txt: docker.list.casaos-paused, docker.sources", "Docker's source was renamed (`*.casaos-paused`) by this harness before the tool ran", "is NOT measured here"],
+     must_not_have=["https://download.docker.com", "signed-by"],
+     mutate=lambda d: rec(d, "sources-dir-after", "total 12\n-rw-r--r-- 1 root root 110 Oct 11 03:27 docker.list.casaos-paused\n-rw-r--r-- 1 root root 190 Oct 11 03:41 docker.sources\n"
+                          "==> /etc/apt/sources.list.d/docker.list.casaos-paused <==\ndeb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu jammy stable\n"))
+case("ubuntu: a Docker source that is only the paused one is said to be still under the harness's name", U, 0, spec={"removes": False},
+     mutate=lambda d: rec(d, "sources-dir-after", "total 8\n-rw-r--r-- 1 root root 110 Oct 11 03:27 docker.list.casaos-paused\n-rw-r--r-- 1 root root 381 Oct 11 03:41 ubuntu.sources\n"),
+     must_have=["- sources-dir-after.txt: docker.list.casaos-paused (still under the name this harness gave it)", "| Docker's apt source after the unit | docker.list.casaos-paused (still under the name this harness gave it) |"])
+case("ubuntu: libc6's postinst in the tool's own output: the report reads it there (it used to say 'none' because it only looked at the steps of the Debian unit) and says what the postinst said", U, 0,
+     must_have=["Services named by libc6's postinst in the output of the Ubuntu tool (step-upgrader.log): none (its postinst said 'Nothing to restart.')", "none: its postinst said 'Nothing to restart.'"], must_not_have=["(the output of the step has no such line)"])
+case("ubuntu: libc6's postinst that restarts services in the tool's output has them named", U, 0, spec={"libc_restarts": "Restarting services possibly affected by the upgrade:\n  cron: restarting...done.\n  ssh: restarting...done.\nServices restarted successfully.\n"},
+     must_have=["Services named by libc6's postinst in the output of the Ubuntu tool (step-upgrader.log): cron, ssh."], must_not_have=["Nothing to restart"])
 
 # ---- NOT_OFFERED is the tool's own answer ----
 NOT_ON_OFFER = {"offered": False}
@@ -880,7 +1063,7 @@ case("ubuntu keep: nothing is removed when the drop-in is read", U, 0, spec={"va
 case("ubuntu: the hop that was offered and run is not a NOT_OFFERED", U, 0, must_not_have=["NOT_OFFERED"])
 case("ubuntu: the unit asked Canonical's tool again and the answer is in the facts", U, 0, must_have=["do-release-upgrade -c asked again inside the unit"])
 case("ubuntu: Pro is said not attached, and that the attached case was not measured", U, 0, must_have=["not attached (a cloud image, no token): the behaviour with Pro attached was NOT measured", "Ubuntu Pro/ESM attached: not measured"])
-case("ubuntu: what could not be decided names the other variant", U, 0, must_have=["run the workflow again with ubuntu_variant keep"])
+case("ubuntu: what could not be decided names the other variant", U, 0, must_have=["A run with ubuntu_variant keep could only show the drop-in ignored (the control removed with it in place); it cannot show it read while the tool leaves a package that no repository carries alone"])
 
 # ---- an invalid run is never a GO ------------------------------------------------------------------------------------------------------
 
@@ -948,6 +1131,23 @@ for name in ("gateway-before", "core-before", "am-before", "jwt-before"):
 invalid("Docker did not answer before the hop", L, "Docker did not answer before the hop", lambda d: replace(d, "docker-before.txt", "server 28.0.4", "server unavailable"))
 case("the containers that the reboots before the baseline left stopped are started again at the baseline, and the report says so", L, 0, must_have=["witnesses started again at the baseline (their policy does not start them after a reboot) | p-no, p-on-failure"])
 invalid("the baseline did not ask the core with the secret", L, "internal-before.code is missing", lambda d: remove(d, "internal-before.code"))
+# the first real run of the d11-12 leg: AppManagement answered 000 at the baseline, taken seconds after the rehearsal's reboot, while the poller saw it answer 200 a few seconds later
+WAIT_GAVE_UP = "result gave_up\nwaited 180\nlimit 180\ngateway 200\ncore 200\nam 000\n"
+WAIT_SAID = "the gateway, the core and AppManagement did not all answer 200 within 180 s of the baseline's start (the last answers: gateway 200, core 200, AppManagement 000)"
+case("the baseline waited for the gateway, the core and AppManagement to answer 200 and says how long: a row of the durations", L, 0,
+     must_have=["| baseline: waiting for the gateway, the core and AppManagement to answer 200 after the last reboot (the longest it will wait: 180 s) | 6 s (ok) |"], must_not_have=["INVALID"])
+case("the baseline waited 11 s for AppManagement: the wait is shown, and the run is a measured one", L, 0, mutate=lambda d: put(d, "baseline-wait", "result ok\nwaited 11\nlimit 180\ngateway 200\ncore 200\nam 200\n"),
+     must_have=["| 11 s (ok) |"], must_not_have=["INVALID"])
+invalid("the baseline left no record of how long it waited: nothing says that the services were up when it asked", L, "baseline-wait is missing or empty", lambda d: remove(d, "baseline-wait"))
+invalid("the baseline of the first real run (no record of a wait, AppManagement at 000): the codes are said and so is the missing wait", L, "am answered 000 before the hop (it has to answer 200 for the hop to be measured, and the baseline had waited for it: no record of the wait)",
+        seq(lambda d: remove(d, "baseline-wait"), lambda d: put(d, "am-before.code", "000\n")), has=["baseline-wait is missing or empty"])
+invalid("the baseline says something that is not ok or gave_up", L, "baseline-wait says 'maybe', not ok or gave_up", lambda d: put(d, "baseline-wait", "result maybe\nwaited 3\nlimit 180\n"))
+invalid("the baseline waited 180 s and AppManagement never answered 200: the real reason, with the last answers", L, WAIT_SAID, seq(lambda d: put(d, "baseline-wait", WAIT_GAVE_UP), lambda d: put(d, "am-before.code", "000\n")))
+case("a baseline that gave up is not three codes at 000: the generic 'answered 000 before the hop' is not said", L, 1, must_have=["INVALID RUN", WAIT_SAID], must_not_have=["answered 000 before the hop", "**GO**"],
+     mutate=seq(lambda d: put(d, "baseline-wait", WAIT_GAVE_UP), lambda d: put(d, "am-before.code", "000\n"), lambda d: put(d, "gateway-before.code", "000\n")))
+case("a baseline that gave up and aborted the phase says its reason once (the guest's own sentence), not twice", L, 1, must_have=["the guest stopped on its own account: " + WAIT_SAID],
+     mutate=seq(lambda d: put(d, "baseline-wait", WAIT_GAVE_UP), lambda d: put(d, "aborted", WAIT_SAID + "\n")), must_not_have=["- INVALID: " + WAIT_SAID])
+invalid("a wait that said ok while a code is not 200 is a contradiction in the evidence, and says what the wait saw", L, "it waited 6 s and saw 200 from all three", lambda d: put(d, "am-before.code", "000\n"))
 invalid("the containers were not running by themselves at the baseline", L, "the witnesses that start by themselves were not running at the baseline", lambda d: put(d, "settle-baseline", "never\n"))
 invalid("no docker-ce before", L, "docker-ce was not installed before the hop", lambda d: ledit(d, "dpkg-before.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce\t")]))
 invalid("the control package is not there", L, "the control package osm-orphan was not installed before the hop", lambda d: ledit(d, "dpkg-before.tsv", lambda ls: [ln for ln in ls if not ln.startswith("osm-orphan\t")]))
@@ -1350,6 +1550,94 @@ else:
     check("a repository whose address the tool cannot read (a mirror+file: list, as some cloud images have) is not called foreign: it is not paused", foreign("debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bookworm\nComponents: main\n", "debian") == 1)
     check("the tool refuses what it does not know", subprocess.run([sys.executable, tool, "nonsense"], capture_output=True).returncode == 2)
 
+    # The sources of the four legs, as the first real run found them (scripts/os-upgrade-measure-sources/<leg>.txt: the guest's own sources-before.txt, from its first line to the first
+    # file of apt.conf.d), and what Debian 13's genericcloud image ships (d13-assumed.txt, which is NOT a leg's evidence: the debian-cloud-images repository's template for it,
+    # config_space/13/files/etc/apt/sources.list.d/debian.sources/DEBIAN, read on 2026-10-11, is the two stanzas of Debian 12's with the suite of the release, and its mirror lists hold
+    # https://deb.debian.org/debian and https://deb.debian.org/debian-security; the file is Debian 12's with trixie for bookworm, which is what that template says, and it is assumed
+    # that the published image is built from it).
+    SRC_DIR = os.path.join(HERE, "os-upgrade-measure-sources")
+
+    def real_sources(name):
+        """{path: text} of one fixture, split at its '==> path <==' lines (the form of the guest's apt_config_dump)"""
+        with open(os.path.join(SRC_DIR, name + ".txt"), newline="") as f:
+            parts = re.split(r"^==> (.*) <==\n", f.read().replace("\r\n", "\n"), flags=re.M)
+        return {parts[i]: parts[i + 1] for i in range(1, len(parts), 2)}
+
+    def tool_do(path_name, text, *args, raw=None):
+        """the tool run on a file of that name with that text: (status, stdout, stderr)"""
+        if raw is None:
+            put(tool_dir, path_name, text)
+        else:
+            with open(os.path.join(tool_dir, path_name), "wb") as fh:
+                fh.write(raw)
+        p_ = subprocess.run([sys.executable, tool] + [a.replace("{f}", os.path.join(tool_dir, path_name)) for a in args], capture_output=True, env=ENV)
+        return p_.returncode, p_.stdout.decode("utf-8", "surrogateescape").replace("\r\n", "\n"), p_.stderr.decode("utf-8", "replace")
+
+    def tool_rw(path, text, src, dst):
+        return tool_do(path.rsplit("/", 1)[-1], text, "rewrite", src, dst, "{f}")
+
+    def tool_foreign(path, text, family):
+        return tool_do(path.rsplit("/", 1)[-1], text, "foreign", family, "{f}")[0]
+
+    D11, D12, D13, U22, U24 = (real_sources(n) for n in ("d11-12", "d12-13", "d13-assumed", "u22-24", "u24-26"))
+    D11_WANT = ("deb http://deb.debian.org/debian bookworm main\ndeb-src http://deb.debian.org/debian bookworm main\ndeb http://deb.debian.org/debian-security bookworm-security main\n"
+                "deb-src http://deb.debian.org/debian-security bookworm-security main\ndeb http://deb.debian.org/debian bookworm-updates main\ndeb-src http://deb.debian.org/debian bookworm-updates main\n")
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list", D11["/etc/apt/sources.list"], "bullseye", "bookworm")
+    check("real d11-12: Debian 11's one-line sources.list, with the archive's security line, is Debian 12's: the suites, the security line renamed and moved back to the mirror, deb-src kept (what the real run's hop left)",
+          rc_ == 0 and out_ == D11_WANT, (rc_, out_, err_))
+    check("real d11-12: Docker's source is the only one that is not Debian's (the one that is paused), and the sources.list is not",
+          tool_foreign("/etc/apt/sources.list.d/docker.list", D11["/etc/apt/sources.list.d/docker.list"], "debian") == 0 and tool_foreign("/etc/apt/sources.list", D11["/etc/apt/sources.list"], "debian") == 1)
+    D12_WANT = ("Types: deb deb-src\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
+                "Types: deb deb-src\nURIs: mirror+file:///etc/apt/mirrors/debian-security.list\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n")
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list.d/debian.sources", D12["/etc/apt/sources.list.d/debian.sources"], "bookworm", "trixie")
+    check("real d12-13: Debian 12's cloud image (deb822, mirror+file: lists, three suites on one Suites line, a second stanza for bookworm-security) is Debian 13's: trixie and trixie-updates, backports dropped, "
+          "trixie-security, the mirror+file: addresses kept as they are", rc_ == 0 and out_ == D12_WANT, (rc_, out_, err_))
+    check("real d12-13: what the rewrite makes of Debian 12's cloud sources is what Debian 13's cloud image ships (assumed, d13-assumed.txt), the backports suite apart",
+          out_ == D13["/etc/apt/sources.list.d/debian.sources"].replace(" trixie-backports", ""), (out_, D13["/etc/apt/sources.list.d/debian.sources"]))
+    check("real d12-13: Debian's own debian.sources is not foreign (it is not paused, it is rewritten), the comment-only sources.list has nothing to say, and Docker's docker.list is foreign",
+          tool_foreign("/etc/apt/sources.list.d/debian.sources", D12["/etc/apt/sources.list.d/debian.sources"], "debian") == 1 and tool_foreign("/etc/apt/sources.list", D12["/etc/apt/sources.list"], "debian") == 1
+          and tool_foreign("/etc/apt/sources.list.d/docker.list", D12["/etc/apt/sources.list.d/docker.list"], "debian") == 0)
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list", D12["/etc/apt/sources.list"], "bookworm", "trixie")
+    check("real d12-13: a sources.list that is only a comment is passed on as it is", rc_ == 0 and out_ == D12["/etc/apt/sources.list"], (rc_, out_))
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list.d/debian.sources", D13["/etc/apt/sources.list.d/debian.sources"], "trixie", "forky")
+    check("assumed Debian 13 cloud image: the same shape goes on to the next release, and its suites are the ones of the shape of Debian 12's", rc_ == 0 and "Suites: forky forky-updates\n" in out_ and "Suites: forky-security\n" in out_
+          and "backports" not in out_ and out_.count("URIs: mirror+file:///etc/apt/mirrors/debian") == 2, (rc_, out_))
+    for leg_, files_, docker_ in (("u22-24", U22, "ubuntu"), ("u24-26", U24, "ubuntu")):
+        for path_, text_ in files_.items():
+            is_docker = path_.endswith("docker.list")
+            check("real %s: %s is %s to Ubuntu (Docker's is paused, Ubuntu's own sources and a comment-only file are not)" % (leg_, path_.rsplit("/", 1)[-1], "foreign" if is_docker else "not foreign"),
+                  tool_foreign(path_, text_, "ubuntu") == (0 if is_docker else 1), (path_, tool_foreign(path_, text_, "ubuntu")))
+            if not is_docker:
+                rc_, out_, err_ = tool_rw(path_, text_, "jammy" if leg_ == "u22-24" else "noble", "noble" if leg_ == "u22-24" else "resolute")
+                check("real %s: the Debian rewriter does not touch %s (Canonical's tool rewrites Ubuntu's sources)" % (leg_, path_.rsplit("/", 1)[-1]), rc_ == 0 and out_ == text_, (rc_, out_[:200], err_))
+    # forms the legs do not start from but the tool is asked to read
+    rc_, out_, err_ = tool_rw("one.list", "deb mirror+file:/etc/apt/mirrors/debian.list bookworm main\ndeb mirror+file:///etc/apt/mirrors/debian-security.list bookworm-security main\n", "bookworm", "trixie")
+    check("a one-line source on a mirror+file: list (one slash or three) is Debian's: the suite changes, the address stays", rc_ == 0 and out_ == "deb mirror+file:/etc/apt/mirrors/debian.list trixie main\ndeb mirror+file:///etc/apt/mirrors/debian-security.list trixie-security main\n", (rc_, out_, err_))
+    rc_, out_, err_ = tool_rw("debian.sources", "Types: deb deb-src\nURIs: http://deb.debian.org/debian/\nSuites: bookworm bookworm-updates\nComponents: main contrib non-free-firmware\nSigned-By: /x.gpg\n\n"
+                              "Types: deb\nURIs: http://security.debian.org/debian-security/\nSuites: bookworm-security\nComponents: main contrib non-free non-free-firmware\n", "bookworm", "trixie")
+    check("the installer's deb822 form (a slash at the end of the address, non-free-firmware already there) is rewritten and gets no second non-free-firmware",
+          rc_ == 0 and "Suites: trixie trixie-updates\nComponents: main contrib non-free-firmware\n" in out_ and "URIs: http://security.debian.org/debian-security/\nSuites: trixie-security\nComponents: main contrib non-free non-free-firmware\n" in out_, (rc_, out_))
+    rc_, out_, err_ = tool_rw("debian.sources", "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bullseye\n bullseye-updates\n bullseye-backports\nComponents: main non-free\n", "bullseye", "bookworm")
+    check("a Suites field folded over several lines is read whole, and non-free-firmware comes beside non-free only", rc_ == 0 and out_ == "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bookworm bookworm-updates\nComponents: main non-free non-free-firmware\n", (rc_, out_))
+    rc_, out_, err_ = tool_rw("debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bookworm\nComponents: main\n", "bookworm", "trixie")
+    check("no non-free in the stanza, no non-free-firmware added (the cloud image's main only)", rc_ == 0 and "non-free" not in out_ and "Suites: trixie\n" in out_, (rc_, out_))
+    rc_, out_, err_ = tool_rw("local.list", "deb [trusted=yes] file:///var/local/repo ./\ndeb http://deb.debian.org/debian bookworm main\n", "bookworm", "trixie")
+    check("a local repository (file:/) is read, is not Debian's and is left as it is; the Debian line next to it is rewritten", rc_ == 0 and out_ == "deb [trusted=yes] file:///var/local/repo ./\ndeb http://deb.debian.org/debian trixie main\n", (rc_, out_, err_))
+    check("a local repository is foreign to Debian (it is paused, like any source that is not the distribution's)", tool_foreign("local.list", "deb [trusted=yes] file:///var/local/repo ./\n", "debian") == 0)
+    check("Ubuntu's own list of mirrors (mirror+file:/etc/apt/apt-mirrors.txt) is not read, and so is not foreign to Ubuntu (it is not paused)", tool_foreign("u.sources", "Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble\nComponents: main\n", "ubuntu") == 1)
+    # what it cannot read it says so, with the file, and writes no output
+    for label, name_, text_, want in (("a cdrom line", "sources.list", "# a comment\ndeb cdrom:[Debian GNU/Linux 11]/ bullseye main\n", "line 2"),
+                                      ("a mirror+file: list that is not Debian's", "debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/other.list\nSuites: bookworm\nComponents: main\n", "stanza 1"),
+                                      ("an address with no scheme", "debian.sources", "Types: deb\nURIs: deb.debian.org/debian\nSuites: bookworm\nComponents: main\n", "stanza 1"),
+                                      ("a stanza that mixes Debian's address and another's", "debian.sources", "Types: deb\nURIs: https://deb.debian.org/debian https://example.org/x\nSuites: bookworm\nComponents: main\n", "mixes")):
+        rc_, out_, err_ = tool_rw(name_, text_, "bookworm", "trixie")
+        check("fails loudly, naming the file: %s (status 3, the path and where in it on stderr, nothing on stdout)" % label, rc_ == 3 and out_ == "" and os.path.join(tool_dir, name_) in err_ and want in err_ and "cannot read" in err_, (rc_, out_, err_))
+    rc_, out_, err_ = tool_do("nothing-here.list", "x", "rewrite", "bookworm", "trixie", os.path.join(tool_dir, "no-such-dir", "x.list"))
+    check("fails loudly when the file cannot be opened at all", rc_ == 3 and "no-such-dir" in err_ and "cannot read" in err_, (rc_, err_))
+    check("a file that cannot be opened is not foreign (the rewrite names it)", tool_do("x.list", "x", "foreign", "debian", os.path.join(tool_dir, "no-such-dir", "x.list"))[0] == 1)
+    rc_, out_, err_ = tool_do("latin.list", "", "rewrite", "bookworm", "trixie", "{f}", raw=b"# caf\xe9 bookworm\ndeb http://deb.debian.org/debian bookworm main\n")
+    check("a byte that is not UTF-8 in a comment goes through as it was (the file is read and written byte for byte), and the line next to it is rewritten", rc_ == 0 and out_ == "# caf\udce9 bookworm\ndeb http://deb.debian.org/debian trixie main\n", (rc_, repr(out_), err_))
+
     # the probes made of bash alone, against a server of our own
     port = free_port()
     srv = os.path.join(tool_dir, "srv.py")
@@ -1526,14 +1814,71 @@ esac
     check("a simulation that still has things to do gets a catch-up pass and a second look, and the unit says it was needed", os.path.exists(os.path.join(w, "out/step-catchup1.log")) and os.path.exists(os.path.join(w, "out/step-converge2.log")), os.listdir(os.path.join(w, "out")))
     shutil.rmtree(w, ignore_errors=True)
 
+    def load_sources(w_, files_, extra=None):
+        """the apt directory of a world holds exactly these files ({'/etc/apt/...': text}, as real_sources gives them) and what extra adds ({'apt/...': text})"""
+        for old_ in [os.path.join(w_, "apt", "sources.list")] + [os.path.join(w_, "apt", "sources.list.d", n_) for n_ in os.listdir(os.path.join(w_, "apt", "sources.list.d"))]:
+            if os.path.exists(old_):
+                os.remove(old_)
+        for path_, text_ in files_.items():
+            put(w_, "apt/" + path_[len("/etc/apt/"):], text_)
+        for path_, text_ in (extra or {}).items():
+            put(w_, path_, text_)
+
     w, env = world("debian")
-    put(w, "apt/sources.list", "# nothing\n")
-    put(w, "apt/sources.list.d/debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bullseye\nComponents: main\n")
+    load_sources(w, {"/etc/apt/sources.list": "deb http://deb.debian.org/debian stable main\n# bookworm is the next one\n"})
     p = in_world(w, env, "hop_unit")
     ul = get(w, "out/hop-unit.log")
-    check("a rewrite that leaves no line of the target release stops the unit before apt is run, and says why (ENDED, not DONE)", "ABORTED no source names bookworm" in ul and ul.rstrip().endswith("ENDED 1") and "DONE" not in ul
-          and not [x for x in calls(w) if x.startswith("apt-get")], (ul, calls(w)))
+    check("every source in a suite that is not rewritten (an alias) leaves no line of the target release: the unit stops before apt is run, a comment that names the release does not count, and the files it looked at are said (ENDED, not DONE)",
+          "ABORTED no source names bookworm after the rewrite (the files apt reads: sources.list )" in ul and ul.rstrip().endswith("ENDED 1") and "DONE" not in ul and not [x for x in calls(w) if x.startswith("apt-get")], (ul, calls(w)))
     shutil.rmtree(w, ignore_errors=True)
+
+    # the real sources of Debian 12's cloud image: the unit rewrites them to Debian 13 and goes on to its steps (the first real run of d12-13 ended here: "no source names trixie after the rewrite")
+    w, env = world("debian")
+    load_sources(w, D12)
+    p = in_world(w, env | {"HOP_FROM": "bookworm", "TARGET_CODENAME": "trixie", "TARGET_VERSION_ID": "13"}, "hop_unit")
+    ul = get(w, "out/hop-unit.log")
+    check("the Debian unit on the real sources of Debian 12's cloud image: debian.sources is Debian 13's (trixie, backports dropped, the mirror+file: lists kept), Docker's is paused, the unit goes on to its steps and ends with DONE",
+          get(w, "apt/sources.list.d/debian.sources") == D12_WANT and get(w, "apt/sources.list") == D12["/etc/apt/sources.list"] and os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused"))
+          and "ABORTED" not in ul and ul.rstrip().endswith("DONE") and any(x.startswith("apt-get ") and x.endswith(" dist-upgrade") for x in calls(w)), (ul, get(w, "apt/sources.list.d/debian.sources"), calls(w)[:4]))
+    check("... and its sources-before.txt and sources-after.txt are the evidence of it", "Suites: trixie trixie-updates" in get(w, "out/sources-after.txt") and "Suites: bookworm bookworm-updates bookworm-backports" in get(w, "out/sources-before.txt"))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    load_sources(w, D11)
+    p = in_world(w, env, "hop_unit")
+    check("the Debian unit on the real sources of the d11-12 leg (the archive's security line, deb-src): Debian 12's, Docker's paused, DONE", get(w, "apt/sources.list") == D11_WANT and get(w, "out/hop-unit.log").rstrip().endswith("DONE")
+          and os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused")), (get(w, "apt/sources.list"), get(w, "out/hop-unit.log")))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # a file the tool cannot read ends the unit, names the file, leaves /etc/apt as it was and gives Docker's source back
+    w, env = world("debian")
+    load_sources(w, {"/etc/apt/sources.list": NODOCKER, "/etc/apt/sources.list.d/docker.list": DOCKER_L}, {"apt/sources.list.d/extra.list": "deb cdrom:[Debian GNU/Linux 11]/ bullseye main\n"})
+    p = in_world(w, env, "hop_unit")
+    ul = get(w, "out/hop-unit.log")
+    left = os.listdir(os.path.join(w, "apt/sources.list.d"))
+    check("a source the tool cannot read ends the unit before apt: ABORTED names the file and says where in it, then ENDED, never DONE, and no apt-get ran",
+          "ABORTED the sources tool cannot read %s/apt/sources.list.d/extra.list: line 1" % w.replace("\\", "/") in ul and ul.rstrip().endswith("ENDED 1") and "DONE" not in ul and not [x for x in calls(w) if x.startswith("apt-get")], (ul, calls(w)))
+    check("... /etc/apt is as it was (the sources.list that was read first is not rewritten, no half-written file is left) and Docker's source is back under its name",
+          get(w, "apt/sources.list") == NODOCKER and sorted(left) == ["docker.list", "extra.list"] and get(w, "apt/sources.list.d/docker.list") == DOCKER_L, (left, get(w, "apt/sources.list")))
+    check("... and the evidence is complete all the same: sources-before.txt, sources-after.txt, and SRC_END in the unit's log", os.path.exists(os.path.join(w, "out/sources-before.txt")) and os.path.exists(os.path.join(w, "out/sources-after.txt")) and " SRC_END" in ul)
+    shutil.rmtree(w, ignore_errors=True)
+
+    # a file that apt does not read is not read by the tool either
+    w, env = world("debian")
+    load_sources(w, {"/etc/apt/sources.list": NODOCKER, "/etc/apt/sources.list.d/docker.list": DOCKER_L}, {"apt/sources.list.d/debian.sources.save": "Types: deb\nURIs: cdrom:x\nSuites: bullseye\n", "apt/sources.list.d/old.list.dpkg-old": "deb cdrom:[x]/ bullseye main\n"})
+    p = in_world(w, env, "hop_unit")
+    check("a .save and a .dpkg-old in sources.list.d are not sources: the unit does not read them (it would stop on their garbage) and does not touch them", get(w, "out/hop-unit.log").rstrip().endswith("DONE")
+          and get(w, "apt/sources.list.d/debian.sources.save").startswith("Types: deb\nURIs: cdrom:x") and get(w, "apt/sources.list.d/old.list.dpkg-old").startswith("deb cdrom:"), (get(w, "out/hop-unit.log"), os.listdir(os.path.join(w, "apt/sources.list.d"))))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # what is paused is Docker's source and nothing of the distribution's, on the real sources of every leg (and Debian 13's assumed)
+    for leg_, files_, fam_ in (("d11-12", D11, "debian"), ("d12-13", D12, "debian"), ("d13 (assumed)", D13, "debian"), ("u22-24", U22, "ubuntu"), ("u24-26", U24, "ubuntu")):
+        w, env = world(fam_)
+        load_sources(w, files_)
+        p = in_world(w, env, "pause_sources")
+        paused = sorted(n_ for n_ in os.listdir(os.path.join(w, "apt/sources.list.d")) if n_.endswith(".casaos-paused"))
+        check("real %s: the sources that are paused are Docker's and only Docker's (docker.list), and Debian's or Ubuntu's own are not" % leg_, paused == ["docker.list.casaos-paused"] and get(w, "out/sources-paused.txt").split() == [posix(w) + "/apt/sources.list.d/docker.list"]
+              and get(w, "apt/sources.list") == files_["/etc/apt/sources.list"], (paused, get(w, "out/sources-paused.txt")))
+        shutil.rmtree(w, ignore_errors=True)
 
     # the unit, Ubuntu
     for variant in ("hold", "keep"):
@@ -1596,6 +1941,20 @@ esac
           and "download.docker.com/linux/debian bullseye" in get(w, "out/sandbox-kept-sources.txt"), get(w, "out/sandbox-paused-sources.txt"))
     after = subprocess.run([BASH, "-c", 'cd "%s/apt" && find . -type f | sort | xargs cat | sha256sum' % posix(w)], capture_output=True, text=True).stdout
     check("the sandbox leaves the apt directory as it was", before == after and before != "", (before, after))
+    shutil.rmtree(w, ignore_errors=True)
+    # ... on the real sources of Debian 12's cloud image, which the sandbox of the first real d12-13 run read as Debian 12's (it never saw trixie, and its update said so only in a file nobody read)
+    w, env = world("debian")
+    load_sources(w, D12)
+    p = in_world(w, env | {"HOP_FROM": "bookworm", "TARGET_CODENAME": "trixie"}, 'sandbox paused "%s/sb"; sandbox kept "%s/sb2"' % (posix(w), posix(w)))
+    sbs, sbk = get(w, "out/sandbox-paused-sources.txt"), get(w, "out/sandbox-kept-sources.txt")
+    check("the sandbox on the real sources of Debian 12's cloud image names trixie and no bookworm, keeps the mirror+file: lists, and the paused one has no Docker line while the kept one has it",
+          "Suites: trixie trixie-updates" in sbs and "Suites: trixie-security" in sbs and "bookworm" not in sbs and "mirror+file:///etc/apt/mirrors/debian-security.list" in sbs and "docker" not in sbs and "download.docker.com" in sbk and not os.path.exists(os.path.join(w, "out/aborted")), (sbs, sbk, p.stderr[-200:]))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    load_sources(w, D12, {"apt/sources.list.d/extra.list": "deb cdrom:[Debian GNU/Linux 12]/ bookworm main\n"})
+    p = in_world(w, env | {"HOP_FROM": "bookworm", "TARGET_CODENAME": "trixie"}, 'sandbox paused "%s/sb"; echo "went on"' % posix(w))
+    check("a file the tool cannot read ends the sandbox's phase and says which one (an aborted run, INVALID in the report), and apt is not run on a sandbox that never had the target",
+          "the sandbox's sources: the sources tool cannot read %s/apt/sources.list.d/extra.list: line 1" % w.replace("\\", "/") in get(w, "out/aborted") and "went on" not in p.stdout and not [x for x in calls(w) if x.startswith("apt-get")], (get(w, "out/aborted"), p.stdout, calls(w)))
     shutil.rmtree(w, ignore_errors=True)
 
     w, env = world("debian")
@@ -1744,6 +2103,135 @@ exit 0
     check("hop-wait: a unit that failed is an ended unit (twice in a row), and what it left is collected", "status 0" in p.stdout and "hop_unit_end" in get(w, "out/timeline.tsv") and "hop_done" in get(w, "out/timeline.tsv"), (p.stdout, get(w, "out/timeline.tsv")))
     shutil.rmtree(w, ignore_errors=True)
 
+    # wait_services: the baseline waits for the gateway, the core and AppManagement to answer 200 after the reboot that came before it (180 s at the most), says how long it took and what it saw last
+    put(tool_dir, "svc.py", """import http.server, sys
+am_wait, counter = int(sys.argv[2]), sys.argv[3]
+n = [0]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code = 200
+        if self.path.startswith("/v2/app_management"):
+            n[0] += 1
+            open(counter, "w").write(str(n[0]))
+            if self.headers.get("Authorization") != "tok":
+                code = 401
+            elif n[0] <= am_wait:
+                code = 503
+        self.send_response(code); self.end_headers(); self.wfile.write(b"x")
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+""")
+
+    def services_run(am_wait, limit, up=True, tag=""):
+        """wait_services against a server whose AppManagement path refuses its first am_wait calls (503) and answers 401 to a call with no token; up=False: nothing listens at all; tag: the
+        record it writes (baseline, the default, or after)"""
+        port_ = free_port()
+        counter = os.path.join(tool_dir, "svc-count-%d" % port_)
+        srv_ = subprocess.Popen([sys.executable, os.path.join(tool_dir, "svc.py"), str(port_), str(am_wait), counter]) if up else None
+        time.sleep(1.2)
+        w_, env_ = world("debian")
+        put(w_, "auth/jwt", "Authorization: tok\n")
+        try:
+            p_ = in_world(w_, env_, 'AUTH_DIR="%s/auth"; CASA_PORT=%d; wait_services %d %s; echo "status $?"; echo "said: $WAIT_SAID"' % (posix(w_), port_, limit, tag), timeout=90)
+        finally:
+            if srv_:
+                srv_.kill()
+        try:
+            asked = int(open(counter).read())
+        except (OSError, ValueError):
+            asked = 0
+        return w_, p_, kv_of(get(w_, "out/%s-wait" % (tag or "baseline"))), asked
+
+    def kv_of(text):
+        return dict(ln.split(" ", 1) for ln in text.splitlines() if " " in ln)
+
+    w, p, bw, asked = services_run(0, 60)
+    check("wait_services: services that already answer 200 are no wait: status 0, result ok, the three answers, one look at AppManagement, and the token of the dashboard is what it asks with",
+          "status 0" in p.stdout and bw == {"result": "ok", "waited": bw.get("waited"), "limit": "60", "gateway": "200", "core": "200", "am": "200"} and int(bw.get("waited", 99)) <= 1 and asked == 1, (p.stdout, p.stderr[-200:], bw, asked))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(3, 60)
+    check("wait_services: AppManagement that refuses its first three calls is waited for: it was asked four times, the answer is ok, and the file says 200 for all three", "status 0" in p.stdout and asked == 4 and bw.get("result") == "ok" and bw.get("am") == "200" and bw.get("gateway") == "200", (p.stdout, p.stderr[-200:], bw, asked))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(10 ** 9, 1)
+    check("wait_services: AppManagement that never answers 200 is waited for to the limit, and then status 1, result gave_up, the last answers and the real reason in WAIT_SAID",
+          "status 1" in p.stdout and bw.get("result") == "gave_up" and bw.get("limit") == "1" and int(bw.get("waited", 0)) >= 1 and bw.get("am") == "503" and bw.get("gateway") == "200" and bw.get("core") == "200" and asked >= 2
+          and "said: the gateway, the core and AppManagement did not all answer 200 within 1 s of the baseline's start (the last answers: gateway 200, core 200, AppManagement 503)" in p.stdout, (p.stdout, p.stderr[-200:], bw, asked))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(0, 1, up=False)
+    check("wait_services: nothing listening at all (000 three times) gives up the same way", "status 1" in p.stdout and bw.get("result") == "gave_up" and (bw.get("gateway"), bw.get("core"), bw.get("am")) == ("000", "000", "000"), (p.stdout, bw))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(3, 60, tag="after")
+    check("wait_services after: the wait of the after phase is the same wait with a record of its own (after-wait), and the baseline's record is not written over",
+          "status 0" in p.stdout and asked == 4 and bw.get("result") == "ok" and bw.get("am") == "200" and not os.path.exists(os.path.join(w, "out/baseline-wait")), (p.stdout, p.stderr[-200:], bw, asked, os.listdir(os.path.join(w, "out"))))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, bw, asked = services_run(10 ** 9, 1, tag="after")
+    check("wait_services after: AppManagement that never answers gives up the same way in after-wait", "status 1" in p.stdout and bw.get("result") == "gave_up" and bw.get("am") == "503" and not os.path.exists(os.path.join(w, "out/baseline-wait")), (p.stdout, bw))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the after phase against stand-ins: the services are waited for before anything asks them, and a service that never answers is a finding and not the end of the phase
+    def after_run(am_wait, limit, **extra):
+        """phase_after against the server of the wait_services cases (AppManagement refuses its first am_wait calls with 503) and a docker that lists the witnesses; the wait is `limit` s at the most"""
+        port_ = free_port()
+        counter = os.path.join(tool_dir, "svc-count-%d" % port_)
+        srv_ = subprocess.Popen([sys.executable, os.path.join(tool_dir, "svc.py"), str(port_), str(am_wait), counter])
+        time.sleep(1.2)
+        w_, env_ = world("debian")
+        put(w_, "auth/jwt", "Authorization: tok\n")
+        put(w_, "auth/pw", "not-a-secret\n")
+        fake(os.path.join(w_, "bin"), "docker", r"""echo "docker $*" >>"$FAKE_LOG"
+case "$1" in
+ps) case "$2" in -aq) echo abc ;; *) printf 'p-always\np-unless-stopped\np-db\np-web\np-host\n' ;; esac ;;
+inspect) echo "/p-always policy=always state=running started=x restarts=0" ;;
+version) echo 29.9.0 ;;
+info) echo overlay2 ;;
+logs) echo "2026-10-11T00:00:00Z ack 1-1" ;;
+run) echo 1-1 ;;
+esac
+exit 0
+""")
+        fake(os.path.join(w_, "bin"), "curl", "exit 7\n")
+        env_.update(CASA_PORT=str(port_), SERVICES_WAIT=str(limit), **extra)
+        try:
+            p_ = in_world(w_, env_, 'AUTH_DIR="%s/auth"; (phase_after); echo "status $?"' % posix(w_), timeout=240)
+        finally:
+            srv_.kill()
+        try:
+            asked_ = int(open(counter).read())
+        except (OSError, ValueError):
+            asked_ = 0
+        return w_, p_, kv_of(get(w_, "out/after-wait")), asked_
+
+    w, p, aw, asked = after_run(3, 60)
+    out_ = os.path.join(w, "out")
+    check("after: AppManagement that refuses its first three calls is waited for before anything is asked of it: the wait is recorded (ok), and the answer asked once it ended is 200, not the 503 of the first look",
+          "status 0" in p.stdout and aw.get("result") == "ok" and aw.get("am") == "200" and asked == 5 and get(w, "out/am-after.code").strip() == "200" and get(w, "out/gateway-after.code").strip() == "200"
+          and get(w, "out/core-after.code").strip() == "200" and not os.path.exists(os.path.join(out_, "aborted")), (p.stdout[-400:], p.stderr[-300:], aw, asked, os.listdir(out_)))
+    tl = get(w, "out/timeline.tsv")
+    check("after: the markers come in order and every file of the phase is written", all(m_ in tl for m_ in ("after_start", "after_settled", "after_done")) and tl.index("after_start") < tl.index("after_settled") < tl.index("after_done")
+          and all(os.path.exists(os.path.join(out_, n)) for n in ("units-boot.tsv", "units-after.tsv", "containers-boot.txt", "sysos-after.rc", "jwt-fresh.code", "db-after-file.exit", "settle-after", "os-after")), (tl, os.listdir(out_)))
+    check("after: nothing is started, restarted or stopped by the phase (no systemctl but the reads, no docker but the reads and the database's own dump)",
+          not [x for x in calls(w) if re.match(r"^systemctl (start|restart|reload|enable|stop|kill|reset-failed|try-restart|isolate)", x) or x.startswith(("docker start", "docker restart", "docker stop", "docker kill"))], calls(w))
+    shutil.rmtree(w, ignore_errors=True)
+    w, p, aw, asked = after_run(10 ** 9, 1)
+    out_ = os.path.join(w, "out")
+    tl = get(w, "out/timeline.tsv")
+    check("after: AppManagement that never answers within the wait is a finding and not the end of the phase: the wait says gave_up, nothing aborts, the rest is collected, and what was asked once it ended is what AppManagement said",
+          "status 0" in p.stdout and aw.get("result") == "gave_up" and aw.get("am") == "503" and aw.get("gateway") == "200" and aw.get("core") == "200" and not os.path.exists(os.path.join(out_, "aborted"))
+          and get(w, "out/am-after.code").strip() == "503" and "after_settled" in tl and "after_done" in tl and os.path.exists(os.path.join(out_, "units-after.tsv")) and os.path.exists(os.path.join(out_, "db-after-file.exit")),
+          (p.stdout[-400:], p.stderr[-300:], aw, asked, os.listdir(out_)))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # the helper container that dumps the database's file has a name, and a leftover of that name is removed before it starts (a docker run without a name made `musing_lamarr`, seen in a sample of the poller)
+    w, env = world("debian")
+    p = in_world(w, env, "db_dump before; echo \"status $?\"", timeout=60)
+    dk = [x for x in calls(w) if x.startswith("docker")]
+    run_i = next((i for i, x in enumerate(dk) if x.startswith("docker run")), None)
+    rm_i = next((i for i, x in enumerate(dk) if x.startswith("docker rm")), None)
+    check("db_dump: the container that reads the database's file is called osm-db-dump, is removed when it ends, and one left over by a killed call is removed before it starts",
+          "status 0" in p.stdout and run_i is not None and rm_i is not None and rm_i < run_i and dk[rm_i] == "docker rm -f osm-db-dump"
+          and dk[run_i] == "docker run --rm --name osm-db-dump -v pdb:/data busybox cat /data/log", (p.stdout, dk))
+    shutil.rmtree(w, ignore_errors=True)
+
     # GET /v1/sys/os, asked by the guest before the hop and after the reboot: through the gateway, with the loopback secret, and what is kept of the call
     SYSOS_BODY = '{"success":200,"message":"ok","data":{"id":"debian","version_id":"11","codename":"bullseye","known":true}}'
 
@@ -1846,6 +2334,9 @@ printf '%s' "${FAKE_CODE:-200}"
           bool(after_body) and not re.search(r"\bsystemctl\b[^\n]*\b(start|restart|reload|enable|stop|kill|reset-failed|try-restart|isolate)\b", after_body), re.findall(r"[^\n]*systemctl[^\n]*", after_body))
     baseline_body = function_body(guest_text, "phase_baseline") or ""
     check("the baseline starts again the two witnesses whose policy does not start them after the reboots that came before, and says which", "docker start" in baseline_body and "baseline-started" in baseline_body and "p-no p-on-failure" in baseline_body)
+    check("the baseline waits for the gateway, the core and AppManagement once the containers have settled and before it asks them for anything, and a wait that gave up ends the phase with the real reason",
+          0 < baseline_body.find("settle settle-baseline") < baseline_body.find("wait_services") < baseline_body.find("login jwt-before") and baseline_body.find("wait_services") < baseline_body.find("core-before.code")
+          and baseline_body.find("wait_services") < baseline_body.find("sys_os before") and 'wait_services "${SERVICES_WAIT:-180}" || abort "${WAIT_SAID}"' in baseline_body, baseline_body)
     sysos_body = function_body(guest_text, "sys_os") or ""
     check("sys_os asks the one route with the loopback secret (internal_header) and not with a token of the harness, and writes its files under the tag it is given",
           'internal_header' in sysos_body and "jwt_header" not in sysos_body and "/v1/sys/os" in sysos_body and "${OUT}/sysos-${tag}.json" in sysos_body and "-w '%{http_code}'" in sysos_body, sysos_body)
@@ -1863,6 +2354,14 @@ printf '%s' "${FAKE_CODE:-200}"
     prepare_body = function_body(guest_text, "phase_prepare") or ""
     check("prepare says at once that its bash has no clock of its own or no /dev/tcp, instead of measuring nothing", "EPOCHREALTIME" in prepare_body and "tcp_open 22" in prepare_body and prepare_body.find("tcp_open 22") < prepare_body.find("marker prepare_start"))
     check("the after phase reads the units before it asks anything", after_body.find("units_dump boot") != -1 and after_body.find("units_dump boot") < after_body.find("http_code") and after_body.find("units_dump boot") < after_body.find("wait_docker"))
+    after_code = "\n".join(ln for ln in after_body.split("\n") if not ln.lstrip().startswith("#"))
+    check("the after phase waits for the gateway, the core and AppManagement (the baseline's own wait, 180 s) once the containers have settled, before the marker that says it is settled and before anything asks them, the units "
+          "are looked at again or a token is tried; a wait that gave up is told and does not end the phase",
+          0 < after_code.find("units_dump boot") < after_code.find("settle settle-after") < after_code.find('wait_services "${SERVICES_WAIT:-180}" after || log ') < after_code.find("marker after_settled")
+          < after_code.find("http_code") < after_code.find("sys_os after") < after_code.find("jwt-before") < after_code.find("login jwt-after") < after_code.find("units_dump after") and not re.search(r"\babort\b", after_code), after_code)
+    guest_code = "\n".join(ln for ln in guest_text.split("\n") if not ln.lstrip().startswith("#"))
+    docker_runs = re.findall(r"\bdocker run\b[^\n]*", guest_code)
+    check("every container the guest script starts has a name (one that Docker names at random, like the musing_lamarr of a poller's sample, cannot be told from the box's own)", len(docker_runs) >= 5 and all(" --name " in r_ for r_ in docker_runs), docker_runs)
     unit_bodies = "\n".join(function_body(guest_text, n) or "" for n in ("hop_unit_debian", "hop_unit_ubuntu", "hop_unit"))
     check("the unit never reboots the box (the harness does)", unit_bodies != "" and not re.search(r"\b(reboot|shutdown|poweroff|halt)\b", re.sub(r"#[^\n]*", "", unit_bodies)), re.findall(r"[^\n]*reboot[^\n]*", unit_bodies))
     unit_code = re.sub(r"#[^\n]*", "", unit_bodies)
@@ -1985,12 +2484,15 @@ def workflow_runs(text):
     return runs
 
 
+LEGS_JSON = os.path.join(HERE, "os-upgrade-measure-legs.json")
+with open(LEGS_JSON, encoding="utf-8") as f:
+    wf_cells = [{k: str(v) for k, v in c.items()} for c in json.load(f)]       # the matrix of the vm job: the plan job hands it over, chosen by `legs`, from this file
 wf = workflow_text()
-wf_cells = workflow_matrix(wf)
 wf_runs = workflow_runs(wf)
+PLAN_STEP = "The legs this run measures"
 STEPS = ["The measurement can say no", "Fetch the published installer", "The distribution's cloud image", "Boot it", "Prepare the old release", "Root's reboot under an inhibitor", "Root's forced reboot under an inhibitor",
          "Reboot before the hop", "Refresh the old release", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot", "Report", "What the machine says when it is not well"]
-check("the workflow has the steps of a leg in the order of the work", list(wf_runs) == STEPS, list(wf_runs))
+check("the workflow has the plan step and then the steps of a leg in the order of the work", list(wf_runs) == [PLAN_STEP] + STEPS, list(wf_runs))
 check("the workflow asks for no permission but to read the repository", re.search(r"^permissions:\n  contents: read\n", wf, re.M) is not None and ": write" not in wf)
 check("the workflow is dispatched by hand only, never by a push", re.search(r"^on:\n  workflow_dispatch:", wf, re.M) is not None and "push:" not in wf and "schedule:" not in wf and "pull_request" not in wf)
 check("no run block has a ${{ }} in it: what the matrix and the inputs say reaches a script through env", all("${{" not in script for script in wf_runs.values()), [n for n, s_ in wf_runs.items() if "${{" in s_])
@@ -2004,6 +2506,11 @@ if have_bash():
         else:
             ok_line("the run block of %r parses as bash" % step)
 check("the matrix is four legs: Debian 11 to 12, Debian 12 to 13, Ubuntu 22.04 to 24.04, Ubuntu 24.04 to 26.04", [(c.get("leg"), c.get("id"), c.get("version")) for c in wf_cells] == [("d11-12", "debian", "11"), ("d12-13", "debian", "12"), ("u22-24", "ubuntu", "22.04"), ("u24-26", "ubuntu", "24.04")], wf_cells)
+check("the cells are in the legs file and not in the workflow: the vm job takes its matrix from the plan job's output (fromJSON), and waits for it", "include:" not in wf and "needs: plan" in wf
+      and "matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}" in wf and "matrix: ${{ steps.plan.outputs.matrix }}" in wf)
+check("the legs input is a choice of all, debian and ubuntu, all by default, and it reaches the plan's script through env and nowhere else", "      legs:\n        description:" in wf and "        default: all\n        type: choice\n        options:\n          - all\n          - debian\n          - ubuntu\n" in wf
+      and "LEGS: ${{ inputs.legs }}" in wf and wf.count("inputs.legs") == 1)
+check("the plan job has a few minutes of its own and needs nothing more than to read the repository", re.search(r"^  plan:\n(?:    .*\n)*?    timeout-minutes: 5\n", wf, re.M) is not None and ": write" not in wf)
 check("every leg has 120 minutes and the others of its job go on when one fails", re.search(r"^    timeout-minutes: 120$", wf, re.M) is not None and "fail-fast: false" in wf)
 by_id = {"debian": ("SHA512SUMS", "sha512sum"), "ubuntu": ("SHA256SUMS", "sha256sum")}
 for cell in wf_cells:
@@ -2039,6 +2546,31 @@ check("the refresh comes after the rehearsal reboot and right before the baselin
 check("NOT_OFFERED stays green and says so with a warning annotation, for the headline of the report only (an invalid run that mentions it is red and has none)", "::warning title=NOT_OFFERED" in wf_runs["Report"] and "grep -q '^# .*: NOT_OFFERED$' out/report.md" in wf_runs["Report"])
 
 if have_bash():
+    # the plan step: what it hands to the matrix for each choice of the input (python3 here is the interpreter of this harness: the runner has its own)
+    def plan_step(choice):
+        w_ = tempfile.mkdtemp()
+        os.makedirs(os.path.join(w_, "bin"))
+        fake(os.path.join(w_, "bin"), "python3", 'exec "%s" "$@"\n' % posix(sys.executable))
+        out_path = os.path.join(w_, "github-output")
+        summary = os.path.join(w_, "summary")
+        open(out_path, "w").close()
+        e = dict(ENV, LEGS=choice, GITHUB_OUTPUT=posix(out_path), GITHUB_STEP_SUMMARY=posix(summary))
+        p_ = subprocess.run([BASH, "-c", 'export PATH="%s/bin:$PATH"; cd "%s"; ' % (posix(w_), posix(os.path.join(HERE, ".."))) + wf_runs[PLAN_STEP]], capture_output=True, text=True, env=e, encoding="utf-8")
+        text = open(out_path, encoding="utf-8").read()
+        shutil.rmtree(w_, ignore_errors=True)
+        lines_ = [ln for ln in text.replace("\r\n", "\n").split("\n") if ln]
+        return p_, [ln for ln in lines_ if not ln.startswith("matrix=")], [json.loads(ln[len("matrix="):]) for ln in lines_ if ln.startswith("matrix=")]
+    for choice, want in (("all", ["d11-12", "d12-13", "u22-24", "u24-26"]), ("debian", ["d11-12", "d12-13"]), ("ubuntu", ["u22-24", "u24-26"])):
+        p, other, matrices = plan_step(choice)
+        check("the plan step with legs=%s hands the matrix %s, in the order of the legs file, with their cells whole (the matrix is {include: [...]}, one line of the job's output, nothing else in it)" % (choice, " ".join(want)),
+              p.returncode == 0 and other == [] and len(matrices) == 1 and list(matrices[0]) == ["include"] and [c["leg"] for c in matrices[0]["include"]] == want and matrices[0]["include"] == [c for c in wf_cells if c["leg"] in want]
+              and all(c["id"] == choice for c in matrices[0]["include"] if choice != "all"), (choice, p.returncode, p.stderr[-300:], other, matrices))
+    for choice in ("bogus", "", "Debian"):
+        p, other, matrices = plan_step(choice)
+        check("the plan step stops the run for a choice that matches no leg (%r): a status other than 0, and no matrix" % choice, p.returncode != 0 and matrices == [] and "no leg is %r" % choice in p.stderr, (choice, p.returncode, p.stderr[-300:], matrices))
+    p, other, matrices = plan_step("ubuntu")
+    check("the plan step says which legs the run has in the summary of the run", "legs of this run: ubuntu" in p.stdout, p.stdout)
+
     # the report step, against a stand-in for ssh that hands over the evidence of a leg
     def report_step(leg_, spec_, mutate_=None):
         w_ = tempfile.mkdtemp()
@@ -2075,11 +2607,14 @@ except ImportError:
 else:
     doc = yaml.safe_load(wf)
     steps = doc["jobs"]["vm"]["steps"]
-    check("PyYAML reads the workflow, with the matrix and the run blocks the plain parser found",
-          doc.get("permissions") == {"contents": "read"} and set(doc[True]) == {"workflow_dispatch"} and [{k: str(v) for k, v in c.items()} for c in doc["jobs"]["vm"]["strategy"]["matrix"]["include"]] == wf_cells
-          and {s_["name"]: s_["run"] for s_ in steps if "run" in s_} == wf_runs, "the two readings differ")
-    check("PyYAML: four legs, 120 minutes, the choice of the variant", len(doc["jobs"]["vm"]["strategy"]["matrix"]["include"]) == 4 and doc["jobs"]["vm"]["timeout-minutes"] == 120
-          and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["options"] == ["hold", "keep"] and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["default"] == "hold")
+    check("PyYAML reads the workflow, with the matrix coming from the plan job's output and the run blocks the plain parser found",
+          doc.get("permissions") == {"contents": "read"} and set(doc[True]) == {"workflow_dispatch"} and set(doc["jobs"]) == {"plan", "vm"} and doc["jobs"]["vm"].get("needs") == "plan"
+          and doc["jobs"]["vm"]["strategy"] == {"fail-fast": False, "matrix": "${{ fromJSON(needs.plan.outputs.matrix) }}"} and doc["jobs"]["plan"]["outputs"] == {"matrix": "${{ steps.plan.outputs.matrix }}"}
+          and {s_["name"]: s_["run"] for s_ in doc["jobs"]["plan"]["steps"] + steps if "run" in s_} == wf_runs, "the two readings differ")
+    check("PyYAML: four legs in the file the plan reads, 120 minutes, the choice of the variant, and the choice of the legs", len(wf_cells) == 4 and doc["jobs"]["vm"]["timeout-minutes"] == 120
+          and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["options"] == ["hold", "keep"] and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["default"] == "hold"
+          and doc[True]["workflow_dispatch"]["inputs"]["legs"] == {"description": doc[True]["workflow_dispatch"]["inputs"]["legs"]["description"], "required": False, "default": "all", "type": "choice", "options": ["all", "debian", "ubuntu"]})
+    check("PyYAML: the plan job runs on its own env (LEGS) and the vm job's env has no LEGS", doc["jobs"]["plan"]["env"] == {"LEGS": "${{ inputs.legs }}"} and "LEGS" not in doc["jobs"]["vm"]["env"])
     check("PyYAML: the report, the machine's complaints and the upload run when a step failed", all(s_.get("if") == "always()" for s_ in steps if s_.get("name") in ("Report", "What the machine says when it is not well") or "upload-artifact" in str(s_.get("uses", ""))))
 
 # ---- the end ----------------------------------------------------------------------------------------------------------------------------
