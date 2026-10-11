@@ -41,12 +41,25 @@ name: os-upgrade-measure
 # containerd.io (the rest of Docker's packages and a package that no repository has are the controls); keep leaves nothing held and writes
 # RemoveObsoletes=no in /etc/update-manager/release-upgrades.d: run it twice to have both answers.
 #
+# `legs` chooses the cells of the matrix: all four, only the two Debian ones, or only the two Ubuntu ones, so that a rerun of one family does not repeat the other. The cells
+# are in scripts/os-upgrade-measure-legs.json (one object a leg), and the `plan` job turns the choice into the matrix of the `vm` job (fromJSON of its output): the choice
+# reaches the plan's script through env, and a choice that matches no leg stops the run before any machine is booted.
+#
 # A hosted runner has about 14 GB of disk: df is printed first, the guest's disk is a sparse 30 GB on the larger of the two disks of the runner, and
 # the report says whether the guest's disk was short. By hand only; it installs and removes things on throwaway machines and changes nothing else.
 
 on:
   workflow_dispatch:
     inputs:
+      legs:
+        description: Which legs to run, all four, only the two Debian ones, or only the two Ubuntu ones (a rerun of one family does not repeat the other)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - debian
+          - ubuntu
       ubuntu_variant:
         description: Ubuntu legs, what protects Docker from the tool, hold (apt-mark hold on docker-ce, docker-ce-cli, containerd.io) or keep (RemoveObsoletes=no in release-upgrades.d)
         required: false
@@ -60,52 +73,42 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    name: The legs of this run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    env:
+      LEGS: ${{ inputs.legs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The legs this run measures
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >>"${GITHUB_OUTPUT}"
+          import json
+          import os
+          want = os.environ["LEGS"]
+          chosen = [c for c in json.load(open("scripts/os-upgrade-measure-legs.json")) if want == "all" or c["id"] == want]
+          if not chosen:
+              raise SystemExit("no leg is %r" % want)
+          print("matrix=" + json.dumps({"include": chosen}, separators=(",", ":")))
+          PY
+          echo "legs of this run: ${LEGS}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
   vm:
     name: ${{ matrix.name }}, ${{ matrix.label }}
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - leg: d11-12
-            name: Debian 11
-            label: to Debian 12, Docker 28.0.4
-            id: debian
-            version: '11'
-            base: https://cloud.debian.org/images/cloud/bullseye/latest
-            image: debian-11-genericcloud-amd64.qcow2
-            sums: SHA512SUMS
-            algo: sha512sum
-            args: --use-debian-archive
-            docker_from: 28.0.4
-          - leg: d12-13
-            name: Debian 12
-            label: to Debian 13
-            id: debian
-            version: '12'
-            base: https://cloud.debian.org/images/cloud/bookworm/latest
-            image: debian-12-genericcloud-amd64.qcow2
-            sums: SHA512SUMS
-            algo: sha512sum
-          - leg: u22-24
-            name: Ubuntu 22.04
-            label: to Ubuntu 24.04
-            id: ubuntu
-            version: '22.04'
-            base: https://cloud-images.ubuntu.com/releases/22.04/release
-            image: ubuntu-22.04-server-cloudimg-amd64.img
-            sums: SHA256SUMS
-            algo: sha256sum
-          - leg: u24-26
-            name: Ubuntu 24.04
-            label: to Ubuntu 26.04
-            id: ubuntu
-            version: '24.04'
-            base: https://cloud-images.ubuntu.com/releases/24.04/release
-            image: ubuntu-24.04-server-cloudimg-amd64.img
-            sums: SHA256SUMS
-            algo: sha256sum
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive

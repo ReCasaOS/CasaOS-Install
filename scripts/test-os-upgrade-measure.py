@@ -2238,12 +2238,15 @@ def workflow_runs(text):
     return runs
 
 
+LEGS_JSON = os.path.join(HERE, "os-upgrade-measure-legs.json")
+with open(LEGS_JSON, encoding="utf-8") as f:
+    wf_cells = [{k: str(v) for k, v in c.items()} for c in json.load(f)]       # the matrix of the vm job: the plan job hands it over, chosen by `legs`, from this file
 wf = workflow_text()
-wf_cells = workflow_matrix(wf)
 wf_runs = workflow_runs(wf)
+PLAN_STEP = "The legs this run measures"
 STEPS = ["The measurement can say no", "Fetch the published installer", "The distribution's cloud image", "Boot it", "Prepare the old release", "Root's reboot under an inhibitor", "Root's forced reboot under an inhibitor",
          "Reboot before the hop", "Refresh the old release", "Baseline and read-only probes", "The hop", "Reboot after the hop", "After the reboot", "Report", "What the machine says when it is not well"]
-check("the workflow has the steps of a leg in the order of the work", list(wf_runs) == STEPS, list(wf_runs))
+check("the workflow has the plan step and then the steps of a leg in the order of the work", list(wf_runs) == [PLAN_STEP] + STEPS, list(wf_runs))
 check("the workflow asks for no permission but to read the repository", re.search(r"^permissions:\n  contents: read\n", wf, re.M) is not None and ": write" not in wf)
 check("the workflow is dispatched by hand only, never by a push", re.search(r"^on:\n  workflow_dispatch:", wf, re.M) is not None and "push:" not in wf and "schedule:" not in wf and "pull_request" not in wf)
 check("no run block has a ${{ }} in it: what the matrix and the inputs say reaches a script through env", all("${{" not in script for script in wf_runs.values()), [n for n, s_ in wf_runs.items() if "${{" in s_])
@@ -2257,6 +2260,11 @@ if have_bash():
         else:
             ok_line("the run block of %r parses as bash" % step)
 check("the matrix is four legs: Debian 11 to 12, Debian 12 to 13, Ubuntu 22.04 to 24.04, Ubuntu 24.04 to 26.04", [(c.get("leg"), c.get("id"), c.get("version")) for c in wf_cells] == [("d11-12", "debian", "11"), ("d12-13", "debian", "12"), ("u22-24", "ubuntu", "22.04"), ("u24-26", "ubuntu", "24.04")], wf_cells)
+check("the cells are in the legs file and not in the workflow: the vm job takes its matrix from the plan job's output (fromJSON), and waits for it", "include:" not in wf and "needs: plan" in wf
+      and "matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}" in wf and "matrix: ${{ steps.plan.outputs.matrix }}" in wf)
+check("the legs input is a choice of all, debian and ubuntu, all by default, and it reaches the plan's script through env and nowhere else", "      legs:\n        description:" in wf and "        default: all\n        type: choice\n        options:\n          - all\n          - debian\n          - ubuntu\n" in wf
+      and "LEGS: ${{ inputs.legs }}" in wf and wf.count("inputs.legs") == 1)
+check("the plan job has a few minutes of its own and needs nothing more than to read the repository", re.search(r"^  plan:\n(?:    .*\n)*?    timeout-minutes: 5\n", wf, re.M) is not None and ": write" not in wf)
 check("every leg has 120 minutes and the others of its job go on when one fails", re.search(r"^    timeout-minutes: 120$", wf, re.M) is not None and "fail-fast: false" in wf)
 by_id = {"debian": ("SHA512SUMS", "sha512sum"), "ubuntu": ("SHA256SUMS", "sha256sum")}
 for cell in wf_cells:
@@ -2292,6 +2300,31 @@ check("the refresh comes after the rehearsal reboot and right before the baselin
 check("NOT_OFFERED stays green and says so with a warning annotation, for the headline of the report only (an invalid run that mentions it is red and has none)", "::warning title=NOT_OFFERED" in wf_runs["Report"] and "grep -q '^# .*: NOT_OFFERED$' out/report.md" in wf_runs["Report"])
 
 if have_bash():
+    # the plan step: what it hands to the matrix for each choice of the input (python3 here is the interpreter of this harness: the runner has its own)
+    def plan_step(choice):
+        w_ = tempfile.mkdtemp()
+        os.makedirs(os.path.join(w_, "bin"))
+        fake(os.path.join(w_, "bin"), "python3", 'exec "%s" "$@"\n' % posix(sys.executable))
+        out_path = os.path.join(w_, "github-output")
+        summary = os.path.join(w_, "summary")
+        open(out_path, "w").close()
+        e = dict(ENV, LEGS=choice, GITHUB_OUTPUT=posix(out_path), GITHUB_STEP_SUMMARY=posix(summary))
+        p_ = subprocess.run([BASH, "-c", 'export PATH="%s/bin:$PATH"; cd "%s"; ' % (posix(w_), posix(os.path.join(HERE, ".."))) + wf_runs[PLAN_STEP]], capture_output=True, text=True, env=e, encoding="utf-8")
+        text = open(out_path, encoding="utf-8").read()
+        shutil.rmtree(w_, ignore_errors=True)
+        lines_ = [ln for ln in text.replace("\r\n", "\n").split("\n") if ln]
+        return p_, [ln for ln in lines_ if not ln.startswith("matrix=")], [json.loads(ln[len("matrix="):]) for ln in lines_ if ln.startswith("matrix=")]
+    for choice, want in (("all", ["d11-12", "d12-13", "u22-24", "u24-26"]), ("debian", ["d11-12", "d12-13"]), ("ubuntu", ["u22-24", "u24-26"])):
+        p, other, matrices = plan_step(choice)
+        check("the plan step with legs=%s hands the matrix %s, in the order of the legs file, with their cells whole (the matrix is {include: [...]}, one line of the job's output, nothing else in it)" % (choice, " ".join(want)),
+              p.returncode == 0 and other == [] and len(matrices) == 1 and list(matrices[0]) == ["include"] and [c["leg"] for c in matrices[0]["include"]] == want and matrices[0]["include"] == [c for c in wf_cells if c["leg"] in want]
+              and all(c["id"] == choice for c in matrices[0]["include"] if choice != "all"), (choice, p.returncode, p.stderr[-300:], other, matrices))
+    for choice in ("bogus", "", "Debian"):
+        p, other, matrices = plan_step(choice)
+        check("the plan step stops the run for a choice that matches no leg (%r): a status other than 0, and no matrix" % choice, p.returncode != 0 and matrices == [] and "no leg is %r" % choice in p.stderr, (choice, p.returncode, p.stderr[-300:], matrices))
+    p, other, matrices = plan_step("ubuntu")
+    check("the plan step says which legs the run has in the summary of the run", "legs of this run: ubuntu" in p.stdout, p.stdout)
+
     # the report step, against a stand-in for ssh that hands over the evidence of a leg
     def report_step(leg_, spec_, mutate_=None):
         w_ = tempfile.mkdtemp()
@@ -2328,11 +2361,14 @@ except ImportError:
 else:
     doc = yaml.safe_load(wf)
     steps = doc["jobs"]["vm"]["steps"]
-    check("PyYAML reads the workflow, with the matrix and the run blocks the plain parser found",
-          doc.get("permissions") == {"contents": "read"} and set(doc[True]) == {"workflow_dispatch"} and [{k: str(v) for k, v in c.items()} for c in doc["jobs"]["vm"]["strategy"]["matrix"]["include"]] == wf_cells
-          and {s_["name"]: s_["run"] for s_ in steps if "run" in s_} == wf_runs, "the two readings differ")
-    check("PyYAML: four legs, 120 minutes, the choice of the variant", len(doc["jobs"]["vm"]["strategy"]["matrix"]["include"]) == 4 and doc["jobs"]["vm"]["timeout-minutes"] == 120
-          and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["options"] == ["hold", "keep"] and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["default"] == "hold")
+    check("PyYAML reads the workflow, with the matrix coming from the plan job's output and the run blocks the plain parser found",
+          doc.get("permissions") == {"contents": "read"} and set(doc[True]) == {"workflow_dispatch"} and set(doc["jobs"]) == {"plan", "vm"} and doc["jobs"]["vm"].get("needs") == "plan"
+          and doc["jobs"]["vm"]["strategy"] == {"fail-fast": False, "matrix": "${{ fromJSON(needs.plan.outputs.matrix) }}"} and doc["jobs"]["plan"]["outputs"] == {"matrix": "${{ steps.plan.outputs.matrix }}"}
+          and {s_["name"]: s_["run"] for s_ in doc["jobs"]["plan"]["steps"] + steps if "run" in s_} == wf_runs, "the two readings differ")
+    check("PyYAML: four legs in the file the plan reads, 120 minutes, the choice of the variant, and the choice of the legs", len(wf_cells) == 4 and doc["jobs"]["vm"]["timeout-minutes"] == 120
+          and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["options"] == ["hold", "keep"] and doc[True]["workflow_dispatch"]["inputs"]["ubuntu_variant"]["default"] == "hold"
+          and doc[True]["workflow_dispatch"]["inputs"]["legs"] == {"description": doc[True]["workflow_dispatch"]["inputs"]["legs"]["description"], "required": False, "default": "all", "type": "choice", "options": ["all", "debian", "ubuntu"]})
+    check("PyYAML: the plan job runs on its own env (LEGS) and the vm job's env has no LEGS", doc["jobs"]["plan"]["env"] == {"LEGS": "${{ inputs.legs }}"} and "LEGS" not in doc["jobs"]["vm"]["env"])
     check("PyYAML: the report, the machine's complaints and the upload run when a step failed", all(s_.get("if") == "always()" for s_ in steps if s_.get("name") in ("Report", "What the machine says when it is not well") or "upload-artifact" in str(s_.get("uses", ""))))
 
 # ---- the end ----------------------------------------------------------------------------------------------------------------------------
