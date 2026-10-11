@@ -1139,7 +1139,10 @@ def inhibit(variant):
     if changed:
         return "NOT REFUSED (the box went down and came back with another boot)", out_txt
     if rc is not None and rc.isdigit() and int(rc) != 0:
-        return "REFUSED", out_txt
+        # logind's refusal says "Operation inhibited by ...": a timeout (124), a command that is not there (127) or a bus that does not answer is not a refusal
+        if re.search(r"Operation inhibited|inhibited by", out_txt):
+            return "REFUSED", out_txt
+        return "UNCLEAR (exit %s, and no refusal of logind in it: %s)" % (rc, out_txt[:100] or "no output"), out_txt
     return "UNCLEAR (exit 0, and the box did not go down within 40 s)", out_txt
 
 
@@ -1148,12 +1151,13 @@ for v, (res, txt) in inh.items():
     fact("root's `systemctl reboot%s` under systemd-inhibit --what=shutdown --mode=block" % (" --force" if v == "force" else ""), "%s%s" % (res, (": " + txt[:200]) if txt and res == "REFUSED" else ""))
 if all(res for res, _ in inh.values()):
     r1, r2 = inh["reboot"][0], inh["force"][0]
-    answer("The product can rely on the block inhibitor to keep root's reboot out (the design does not count it as a guard)", "NO-GO" if r1.startswith("NOT") else "GO" if r1 == "REFUSED" else "OPEN",
+    # GO only when neither root's reboot nor its --force goes round the lock: a lock that --force passes keeps out an accident, not root, and that is a question left open
+    answer("The product can rely on the block inhibitor to keep root's reboot out (the design does not count it as a guard)", "NO-GO" if r1.startswith("NOT") else "GO" if r1 == "REFUSED" and r2 == "REFUSED" else "OPEN",
            "reboot: %s; --force: %s" % (r1, r2))
     if r1 == "REFUSED" and not r2.startswith("REFUSED"):
         open_q("--force goes round the lock, as documented: only a refusal of the plain reboot is a guard against an accident")
     if "UNCLEAR" in r1 + r2:
-        open_q("the inhibitor: a reboot that returned 0 and did not take the box down within 40 s cannot be classified")
+        open_q("the inhibitor: an attempt that is not logind's refusal and did not take the box down (exit 0, a timeout, a missing command, a bus error) cannot be classified")
 
 # ---- the unit's survival --------------------------------------------------------------------------------------------------------------------
 

@@ -660,7 +660,20 @@ def refused(variant):
 
 
 case("inhibitor: root's reboot refused, and --force refused too", L, 0, rows={Q_INH: "GO"}, mutate=seq(refused("reboot"), refused("force")), must_have=["reboot: REFUSED; --force: REFUSED"])
-case("inhibitor: refused for the plain reboot and not for --force: a GO that says what --force does", L, 0, rows={Q_INH: "GO"}, mutate=refused("reboot"), must_have=["--force goes round the lock", "reboot: REFUSED; --force: NOT REFUSED"])
+case("inhibitor: refused for the plain reboot and not for --force: --force goes round the lock, so it is not a GO, and the row says what is open", L, 0, rows={Q_INH: "OPEN"}, mutate=refused("reboot"),
+     must_have=["--force goes round the lock", "reboot: REFUSED; --force: NOT REFUSED"], must_not_have=["INVALID RUN"])
+case("inhibitor: not refused for the plain reboot: NO-GO", L, 0, rows={Q_INH: "NO-GO"})
+
+
+def inhibit_result(variant, rc, text):
+    """the attempt returned with this status and this output, and the box stayed up"""
+    return seq(refused(variant), lambda d: put(d, "inhibit-%s.txt" % variant, get(d, "inhibit-%s.txt" % variant).replace("rc 1\n", "rc %d\n" % rc)), lambda d: put(d, "inhibit-%s.out" % variant, text))
+
+
+for label, rc, text in (("a command that is not there (127)", 127, "systemd-inhibit: command not found\n"), ("a timeout (124)", 124, ""), ("a bus that does not answer", 1, "Failed to connect to bus: No such file or directory\n")):
+    case("inhibitor: %s is not a refusal: unclear, and the row is OPEN, not a GO" % label, L, 0, rows={Q_INH: "OPEN"}, mutate=seq(inhibit_result("reboot", rc, text), refused("force")),
+         must_have=["UNCLEAR (exit %d, and no refusal of logind in it" % rc], must_not_have=["INVALID RUN"])
+    case("inhibitor: %s for --force, after a real refusal of the plain reboot, is not a refusal either: OPEN" % label, L, 0, rows={Q_INH: "OPEN"}, mutate=seq(refused("reboot"), inhibit_result("force", rc, text)), must_not_have=["INVALID RUN"])
 case("inhibitor: exit 0 and the box did not go down: unclear", L, 0, rows={Q_INH: "OPEN"},
      mutate=seq(lambda d: put(d, "inhibit-reboot.txt", get(d, "inhibit-reboot.txt") + "rc 0\nsurvived yes\n"), refused("reboot"), lambda d: put(d, "inhibit-reboot.txt", get(d, "inhibit-reboot.txt").replace("rc 1", "rc 0"))), must_have=["UNCLEAR"])
 case("libc6 was not upgraded by the hop: the question is open and the report says so", L, 0, must_have=["libc6 was not upgraded by the unit"],
