@@ -1,0 +1,9 @@
+==> /etc/apt/sources.list <==
+deb http://deb.debian.org/debian bullseye main
+deb-src http://deb.debian.org/debian bullseye main
+deb http://archive.debian.org/debian-security bullseye-security main
+deb-src http://archive.debian.org/debian-security bullseye-security main
+deb http://deb.debian.org/debian bullseye-updates main
+deb-src http://deb.debian.org/debian bullseye-updates main
+==> /etc/apt/sources.list.d/docker.list <==
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable

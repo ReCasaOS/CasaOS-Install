@@ -784,6 +784,22 @@ case("a unit that ended itself with a status (ENDED 3) is an invalid run too", L
      must_have=["INVALID RUN", "the unit of the hop ended on its own account (ENDED 3)"], must_not_have=["**GO**"])
 
 
+def unit_cannot_read(d):
+    """the unit's sources tool could not read a file (what it says is the tool's own words): START, the sources, ABORTED with the file, ENDED 1; apt never ran, so dpkg has nothing in its log of the hop"""
+    ul = [ln for ln in get(d, "hop-unit.log").splitlines() if ln.split(" ", 1)[1] in ("START", "SRC_START", "SRC_END")]
+    put(d, "hop-unit.log", "\n".join(ul) + "\n%.6f ABORTED the sources tool cannot read /etc/apt/sources.list.d/debian.sources: stanza 1 (URIs: mirror+file:///etc/apt/mirrors/x.list): an address is in a form this tool does not read\n%.6f ENDED 1\n" % (
+        T0 + S["hop_start"] + 6, T0 + S["hop_start"] + 7))
+    put(d, "dpkg-hop.log", "")
+    for n in ("update", "minimal_dl", "minimal", "full_dl", "full", "converge1"):
+        remove(d, "step-%s.log" % n, "step-%s.rc" % n)
+
+
+case("a unit whose sources tool could not read a file (the real d12-13 run ended on the form of its sources) is an invalid run that says which file and why, once: the empty log of dpkg that follows from it is not a reason of its own", L, 1, mutate=unit_cannot_read,
+     must_have=["INVALID RUN", "the unit of the hop ended on its own account (ABORTED the sources tool cannot read /etc/apt/sources.list.d/debian.sources: stanza 1 (URIs: mirror+file:///etc/apt/mirrors/x.list)", "; ENDED 1)"],
+     must_not_have=["dpkg-hop.log is missing", "never wrote DONE", "**GO**", "## The go/no-go table"])
+invalid("a unit that did not end itself and left dpkg's log of the hop empty is still an invalid run (apt ran and dpkg said nothing)", L, "dpkg-hop.log is missing or empty", lambda d: put(d, "dpkg-hop.log", ""))
+
+
 def box_unmoved(d):
     """the hop changed nothing: the release and the packages are the ones of before"""
     for n in ("os-after", "os-hop"):
@@ -1368,6 +1384,94 @@ else:
     check("a repository whose address the tool cannot read (a mirror+file: list, as some cloud images have) is not called foreign: it is not paused", foreign("debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bookworm\nComponents: main\n", "debian") == 1)
     check("the tool refuses what it does not know", subprocess.run([sys.executable, tool, "nonsense"], capture_output=True).returncode == 2)
 
+    # The sources of the four legs, as the first real run found them (scripts/os-upgrade-measure-sources/<leg>.txt: the guest's own sources-before.txt, from its first line to the first
+    # file of apt.conf.d), and what Debian 13's genericcloud image ships (d13-assumed.txt, which is NOT a leg's evidence: the debian-cloud-images repository's template for it,
+    # config_space/13/files/etc/apt/sources.list.d/debian.sources/DEBIAN, read on 2026-10-11, is the two stanzas of Debian 12's with the suite of the release, and its mirror lists hold
+    # https://deb.debian.org/debian and https://deb.debian.org/debian-security; the file is Debian 12's with trixie for bookworm, which is what that template says, and it is assumed
+    # that the published image is built from it).
+    SRC_DIR = os.path.join(HERE, "os-upgrade-measure-sources")
+
+    def real_sources(name):
+        """{path: text} of one fixture, split at its '==> path <==' lines (the form of the guest's apt_config_dump)"""
+        with open(os.path.join(SRC_DIR, name + ".txt"), newline="") as f:
+            parts = re.split(r"^==> (.*) <==\n", f.read().replace("\r\n", "\n"), flags=re.M)
+        return {parts[i]: parts[i + 1] for i in range(1, len(parts), 2)}
+
+    def tool_do(path_name, text, *args, raw=None):
+        """the tool run on a file of that name with that text: (status, stdout, stderr)"""
+        if raw is None:
+            put(tool_dir, path_name, text)
+        else:
+            with open(os.path.join(tool_dir, path_name), "wb") as fh:
+                fh.write(raw)
+        p_ = subprocess.run([sys.executable, tool] + [a.replace("{f}", os.path.join(tool_dir, path_name)) for a in args], capture_output=True, env=ENV)
+        return p_.returncode, p_.stdout.decode("utf-8", "surrogateescape").replace("\r\n", "\n"), p_.stderr.decode("utf-8", "replace")
+
+    def tool_rw(path, text, src, dst):
+        return tool_do(path.rsplit("/", 1)[-1], text, "rewrite", src, dst, "{f}")
+
+    def tool_foreign(path, text, family):
+        return tool_do(path.rsplit("/", 1)[-1], text, "foreign", family, "{f}")[0]
+
+    D11, D12, D13, U22, U24 = (real_sources(n) for n in ("d11-12", "d12-13", "d13-assumed", "u22-24", "u24-26"))
+    D11_WANT = ("deb http://deb.debian.org/debian bookworm main\ndeb-src http://deb.debian.org/debian bookworm main\ndeb http://deb.debian.org/debian-security bookworm-security main\n"
+                "deb-src http://deb.debian.org/debian-security bookworm-security main\ndeb http://deb.debian.org/debian bookworm-updates main\ndeb-src http://deb.debian.org/debian bookworm-updates main\n")
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list", D11["/etc/apt/sources.list"], "bullseye", "bookworm")
+    check("real d11-12: Debian 11's one-line sources.list, with the archive's security line, is Debian 12's: the suites, the security line renamed and moved back to the mirror, deb-src kept (what the real run's hop left)",
+          rc_ == 0 and out_ == D11_WANT, (rc_, out_, err_))
+    check("real d11-12: Docker's source is the only one that is not Debian's (the one that is paused), and the sources.list is not",
+          tool_foreign("/etc/apt/sources.list.d/docker.list", D11["/etc/apt/sources.list.d/docker.list"], "debian") == 0 and tool_foreign("/etc/apt/sources.list", D11["/etc/apt/sources.list"], "debian") == 1)
+    D12_WANT = ("Types: deb deb-src\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: trixie trixie-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
+                "Types: deb deb-src\nURIs: mirror+file:///etc/apt/mirrors/debian-security.list\nSuites: trixie-security\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n")
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list.d/debian.sources", D12["/etc/apt/sources.list.d/debian.sources"], "bookworm", "trixie")
+    check("real d12-13: Debian 12's cloud image (deb822, mirror+file: lists, three suites on one Suites line, a second stanza for bookworm-security) is Debian 13's: trixie and trixie-updates, backports dropped, "
+          "trixie-security, the mirror+file: addresses kept as they are", rc_ == 0 and out_ == D12_WANT, (rc_, out_, err_))
+    check("real d12-13: what the rewrite makes of Debian 12's cloud sources is what Debian 13's cloud image ships (assumed, d13-assumed.txt), the backports suite apart",
+          out_ == D13["/etc/apt/sources.list.d/debian.sources"].replace(" trixie-backports", ""), (out_, D13["/etc/apt/sources.list.d/debian.sources"]))
+    check("real d12-13: Debian's own debian.sources is not foreign (it is not paused, it is rewritten), the comment-only sources.list has nothing to say, and Docker's docker.list is foreign",
+          tool_foreign("/etc/apt/sources.list.d/debian.sources", D12["/etc/apt/sources.list.d/debian.sources"], "debian") == 1 and tool_foreign("/etc/apt/sources.list", D12["/etc/apt/sources.list"], "debian") == 1
+          and tool_foreign("/etc/apt/sources.list.d/docker.list", D12["/etc/apt/sources.list.d/docker.list"], "debian") == 0)
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list", D12["/etc/apt/sources.list"], "bookworm", "trixie")
+    check("real d12-13: a sources.list that is only a comment is passed on as it is", rc_ == 0 and out_ == D12["/etc/apt/sources.list"], (rc_, out_))
+    rc_, out_, err_ = tool_rw("/etc/apt/sources.list.d/debian.sources", D13["/etc/apt/sources.list.d/debian.sources"], "trixie", "forky")
+    check("assumed Debian 13 cloud image: the same shape goes on to the next release, and its suites are the ones of the shape of Debian 12's", rc_ == 0 and "Suites: forky forky-updates\n" in out_ and "Suites: forky-security\n" in out_
+          and "backports" not in out_ and out_.count("URIs: mirror+file:///etc/apt/mirrors/debian") == 2, (rc_, out_))
+    for leg_, files_, docker_ in (("u22-24", U22, "ubuntu"), ("u24-26", U24, "ubuntu")):
+        for path_, text_ in files_.items():
+            is_docker = path_.endswith("docker.list")
+            check("real %s: %s is %s to Ubuntu (Docker's is paused, Ubuntu's own sources and a comment-only file are not)" % (leg_, path_.rsplit("/", 1)[-1], "foreign" if is_docker else "not foreign"),
+                  tool_foreign(path_, text_, "ubuntu") == (0 if is_docker else 1), (path_, tool_foreign(path_, text_, "ubuntu")))
+            if not is_docker:
+                rc_, out_, err_ = tool_rw(path_, text_, "jammy" if leg_ == "u22-24" else "noble", "noble" if leg_ == "u22-24" else "resolute")
+                check("real %s: the Debian rewriter does not touch %s (Canonical's tool rewrites Ubuntu's sources)" % (leg_, path_.rsplit("/", 1)[-1]), rc_ == 0 and out_ == text_, (rc_, out_[:200], err_))
+    # forms the legs do not start from but the tool is asked to read
+    rc_, out_, err_ = tool_rw("one.list", "deb mirror+file:/etc/apt/mirrors/debian.list bookworm main\ndeb mirror+file:///etc/apt/mirrors/debian-security.list bookworm-security main\n", "bookworm", "trixie")
+    check("a one-line source on a mirror+file: list (one slash or three) is Debian's: the suite changes, the address stays", rc_ == 0 and out_ == "deb mirror+file:/etc/apt/mirrors/debian.list trixie main\ndeb mirror+file:///etc/apt/mirrors/debian-security.list trixie-security main\n", (rc_, out_, err_))
+    rc_, out_, err_ = tool_rw("debian.sources", "Types: deb deb-src\nURIs: http://deb.debian.org/debian/\nSuites: bookworm bookworm-updates\nComponents: main contrib non-free-firmware\nSigned-By: /x.gpg\n\n"
+                              "Types: deb\nURIs: http://security.debian.org/debian-security/\nSuites: bookworm-security\nComponents: main contrib non-free non-free-firmware\n", "bookworm", "trixie")
+    check("the installer's deb822 form (a slash at the end of the address, non-free-firmware already there) is rewritten and gets no second non-free-firmware",
+          rc_ == 0 and "Suites: trixie trixie-updates\nComponents: main contrib non-free-firmware\n" in out_ and "URIs: http://security.debian.org/debian-security/\nSuites: trixie-security\nComponents: main contrib non-free non-free-firmware\n" in out_, (rc_, out_))
+    rc_, out_, err_ = tool_rw("debian.sources", "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bullseye\n bullseye-updates\n bullseye-backports\nComponents: main non-free\n", "bullseye", "bookworm")
+    check("a Suites field folded over several lines is read whole, and non-free-firmware comes beside non-free only", rc_ == 0 and out_ == "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bookworm bookworm-updates\nComponents: main non-free non-free-firmware\n", (rc_, out_))
+    rc_, out_, err_ = tool_rw("debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bookworm\nComponents: main\n", "bookworm", "trixie")
+    check("no non-free in the stanza, no non-free-firmware added (the cloud image's main only)", rc_ == 0 and "non-free" not in out_ and "Suites: trixie\n" in out_, (rc_, out_))
+    rc_, out_, err_ = tool_rw("local.list", "deb [trusted=yes] file:///var/local/repo ./\ndeb http://deb.debian.org/debian bookworm main\n", "bookworm", "trixie")
+    check("a local repository (file:/) is read, is not Debian's and is left as it is; the Debian line next to it is rewritten", rc_ == 0 and out_ == "deb [trusted=yes] file:///var/local/repo ./\ndeb http://deb.debian.org/debian trixie main\n", (rc_, out_, err_))
+    check("a local repository is foreign to Debian (it is paused, like any source that is not the distribution's)", tool_foreign("local.list", "deb [trusted=yes] file:///var/local/repo ./\n", "debian") == 0)
+    check("Ubuntu's own list of mirrors (mirror+file:/etc/apt/apt-mirrors.txt) is not read, and so is not foreign to Ubuntu (it is not paused)", tool_foreign("u.sources", "Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble\nComponents: main\n", "ubuntu") == 1)
+    # what it cannot read it says so, with the file, and writes no output
+    for label, name_, text_, want in (("a cdrom line", "sources.list", "# a comment\ndeb cdrom:[Debian GNU/Linux 11]/ bullseye main\n", "line 2"),
+                                      ("a mirror+file: list that is not Debian's", "debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/other.list\nSuites: bookworm\nComponents: main\n", "stanza 1"),
+                                      ("an address with no scheme", "debian.sources", "Types: deb\nURIs: deb.debian.org/debian\nSuites: bookworm\nComponents: main\n", "stanza 1"),
+                                      ("a stanza that mixes Debian's address and another's", "debian.sources", "Types: deb\nURIs: https://deb.debian.org/debian https://example.org/x\nSuites: bookworm\nComponents: main\n", "mixes")):
+        rc_, out_, err_ = tool_rw(name_, text_, "bookworm", "trixie")
+        check("fails loudly, naming the file: %s (status 3, the path and where in it on stderr, nothing on stdout)" % label, rc_ == 3 and out_ == "" and os.path.join(tool_dir, name_) in err_ and want in err_ and "cannot read" in err_, (rc_, out_, err_))
+    rc_, out_, err_ = tool_do("nothing-here.list", "x", "rewrite", "bookworm", "trixie", os.path.join(tool_dir, "no-such-dir", "x.list"))
+    check("fails loudly when the file cannot be opened at all", rc_ == 3 and "no-such-dir" in err_ and "cannot read" in err_, (rc_, err_))
+    check("a file that cannot be opened is not foreign (the rewrite names it)", tool_do("x.list", "x", "foreign", "debian", os.path.join(tool_dir, "no-such-dir", "x.list"))[0] == 1)
+    rc_, out_, err_ = tool_do("latin.list", "", "rewrite", "bookworm", "trixie", "{f}", raw=b"# caf\xe9 bookworm\ndeb http://deb.debian.org/debian bookworm main\n")
+    check("a byte that is not UTF-8 in a comment goes through as it was (the file is read and written byte for byte), and the line next to it is rewritten", rc_ == 0 and out_ == "# caf\udce9 bookworm\ndeb http://deb.debian.org/debian trixie main\n", (rc_, repr(out_), err_))
+
     # the probes made of bash alone, against a server of our own
     port = free_port()
     srv = os.path.join(tool_dir, "srv.py")
@@ -1544,14 +1648,71 @@ esac
     check("a simulation that still has things to do gets a catch-up pass and a second look, and the unit says it was needed", os.path.exists(os.path.join(w, "out/step-catchup1.log")) and os.path.exists(os.path.join(w, "out/step-converge2.log")), os.listdir(os.path.join(w, "out")))
     shutil.rmtree(w, ignore_errors=True)
 
+    def load_sources(w_, files_, extra=None):
+        """the apt directory of a world holds exactly these files ({'/etc/apt/...': text}, as real_sources gives them) and what extra adds ({'apt/...': text})"""
+        for old_ in [os.path.join(w_, "apt", "sources.list")] + [os.path.join(w_, "apt", "sources.list.d", n_) for n_ in os.listdir(os.path.join(w_, "apt", "sources.list.d"))]:
+            if os.path.exists(old_):
+                os.remove(old_)
+        for path_, text_ in files_.items():
+            put(w_, "apt/" + path_[len("/etc/apt/"):], text_)
+        for path_, text_ in (extra or {}).items():
+            put(w_, path_, text_)
+
     w, env = world("debian")
-    put(w, "apt/sources.list", "# nothing\n")
-    put(w, "apt/sources.list.d/debian.sources", "Types: deb\nURIs: mirror+file:///etc/apt/mirrors/debian.list\nSuites: bullseye\nComponents: main\n")
+    load_sources(w, {"/etc/apt/sources.list": "deb http://deb.debian.org/debian stable main\n# bookworm is the next one\n"})
     p = in_world(w, env, "hop_unit")
     ul = get(w, "out/hop-unit.log")
-    check("a rewrite that leaves no line of the target release stops the unit before apt is run, and says why (ENDED, not DONE)", "ABORTED no source names bookworm" in ul and ul.rstrip().endswith("ENDED 1") and "DONE" not in ul
-          and not [x for x in calls(w) if x.startswith("apt-get")], (ul, calls(w)))
+    check("every source in a suite that is not rewritten (an alias) leaves no line of the target release: the unit stops before apt is run, a comment that names the release does not count, and the files it looked at are said (ENDED, not DONE)",
+          "ABORTED no source names bookworm after the rewrite (the files apt reads: sources.list )" in ul and ul.rstrip().endswith("ENDED 1") and "DONE" not in ul and not [x for x in calls(w) if x.startswith("apt-get")], (ul, calls(w)))
     shutil.rmtree(w, ignore_errors=True)
+
+    # the real sources of Debian 12's cloud image: the unit rewrites them to Debian 13 and goes on to its steps (the first real run of d12-13 ended here: "no source names trixie after the rewrite")
+    w, env = world("debian")
+    load_sources(w, D12)
+    p = in_world(w, env | {"HOP_FROM": "bookworm", "TARGET_CODENAME": "trixie", "TARGET_VERSION_ID": "13"}, "hop_unit")
+    ul = get(w, "out/hop-unit.log")
+    check("the Debian unit on the real sources of Debian 12's cloud image: debian.sources is Debian 13's (trixie, backports dropped, the mirror+file: lists kept), Docker's is paused, the unit goes on to its steps and ends with DONE",
+          get(w, "apt/sources.list.d/debian.sources") == D12_WANT and get(w, "apt/sources.list") == D12["/etc/apt/sources.list"] and os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused"))
+          and "ABORTED" not in ul and ul.rstrip().endswith("DONE") and any(x.startswith("apt-get ") and x.endswith(" dist-upgrade") for x in calls(w)), (ul, get(w, "apt/sources.list.d/debian.sources"), calls(w)[:4]))
+    check("... and its sources-before.txt and sources-after.txt are the evidence of it", "Suites: trixie trixie-updates" in get(w, "out/sources-after.txt") and "Suites: bookworm bookworm-updates bookworm-backports" in get(w, "out/sources-before.txt"))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    load_sources(w, D11)
+    p = in_world(w, env, "hop_unit")
+    check("the Debian unit on the real sources of the d11-12 leg (the archive's security line, deb-src): Debian 12's, Docker's paused, DONE", get(w, "apt/sources.list") == D11_WANT and get(w, "out/hop-unit.log").rstrip().endswith("DONE")
+          and os.path.exists(os.path.join(w, "apt/sources.list.d/docker.list.casaos-paused")), (get(w, "apt/sources.list"), get(w, "out/hop-unit.log")))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # a file the tool cannot read ends the unit, names the file, leaves /etc/apt as it was and gives Docker's source back
+    w, env = world("debian")
+    load_sources(w, {"/etc/apt/sources.list": NODOCKER, "/etc/apt/sources.list.d/docker.list": DOCKER_L}, {"apt/sources.list.d/extra.list": "deb cdrom:[Debian GNU/Linux 11]/ bullseye main\n"})
+    p = in_world(w, env, "hop_unit")
+    ul = get(w, "out/hop-unit.log")
+    left = os.listdir(os.path.join(w, "apt/sources.list.d"))
+    check("a source the tool cannot read ends the unit before apt: ABORTED names the file and says where in it, then ENDED, never DONE, and no apt-get ran",
+          "ABORTED the sources tool cannot read %s/apt/sources.list.d/extra.list: line 1" % w.replace("\\", "/") in ul and ul.rstrip().endswith("ENDED 1") and "DONE" not in ul and not [x for x in calls(w) if x.startswith("apt-get")], (ul, calls(w)))
+    check("... /etc/apt is as it was (the sources.list that was read first is not rewritten, no half-written file is left) and Docker's source is back under its name",
+          get(w, "apt/sources.list") == NODOCKER and sorted(left) == ["docker.list", "extra.list"] and get(w, "apt/sources.list.d/docker.list") == DOCKER_L, (left, get(w, "apt/sources.list")))
+    check("... and the evidence is complete all the same: sources-before.txt, sources-after.txt, and SRC_END in the unit's log", os.path.exists(os.path.join(w, "out/sources-before.txt")) and os.path.exists(os.path.join(w, "out/sources-after.txt")) and " SRC_END" in ul)
+    shutil.rmtree(w, ignore_errors=True)
+
+    # a file that apt does not read is not read by the tool either
+    w, env = world("debian")
+    load_sources(w, {"/etc/apt/sources.list": NODOCKER, "/etc/apt/sources.list.d/docker.list": DOCKER_L}, {"apt/sources.list.d/debian.sources.save": "Types: deb\nURIs: cdrom:x\nSuites: bullseye\n", "apt/sources.list.d/old.list.dpkg-old": "deb cdrom:[x]/ bullseye main\n"})
+    p = in_world(w, env, "hop_unit")
+    check("a .save and a .dpkg-old in sources.list.d are not sources: the unit does not read them (it would stop on their garbage) and does not touch them", get(w, "out/hop-unit.log").rstrip().endswith("DONE")
+          and get(w, "apt/sources.list.d/debian.sources.save").startswith("Types: deb\nURIs: cdrom:x") and get(w, "apt/sources.list.d/old.list.dpkg-old").startswith("deb cdrom:"), (get(w, "out/hop-unit.log"), os.listdir(os.path.join(w, "apt/sources.list.d"))))
+    shutil.rmtree(w, ignore_errors=True)
+
+    # what is paused is Docker's source and nothing of the distribution's, on the real sources of every leg (and Debian 13's assumed)
+    for leg_, files_, fam_ in (("d11-12", D11, "debian"), ("d12-13", D12, "debian"), ("d13 (assumed)", D13, "debian"), ("u22-24", U22, "ubuntu"), ("u24-26", U24, "ubuntu")):
+        w, env = world(fam_)
+        load_sources(w, files_)
+        p = in_world(w, env, "pause_sources")
+        paused = sorted(n_ for n_ in os.listdir(os.path.join(w, "apt/sources.list.d")) if n_.endswith(".casaos-paused"))
+        check("real %s: the sources that are paused are Docker's and only Docker's (docker.list), and Debian's or Ubuntu's own are not" % leg_, paused == ["docker.list.casaos-paused"] and get(w, "out/sources-paused.txt").split() == [posix(w) + "/apt/sources.list.d/docker.list"]
+              and get(w, "apt/sources.list") == files_["/etc/apt/sources.list"], (paused, get(w, "out/sources-paused.txt")))
+        shutil.rmtree(w, ignore_errors=True)
 
     # the unit, Ubuntu
     for variant in ("hold", "keep"):
@@ -1614,6 +1775,20 @@ esac
           and "download.docker.com/linux/debian bullseye" in get(w, "out/sandbox-kept-sources.txt"), get(w, "out/sandbox-paused-sources.txt"))
     after = subprocess.run([BASH, "-c", 'cd "%s/apt" && find . -type f | sort | xargs cat | sha256sum' % posix(w)], capture_output=True, text=True).stdout
     check("the sandbox leaves the apt directory as it was", before == after and before != "", (before, after))
+    shutil.rmtree(w, ignore_errors=True)
+    # ... on the real sources of Debian 12's cloud image, which the sandbox of the first real d12-13 run read as Debian 12's (it never saw trixie, and its update said so only in a file nobody read)
+    w, env = world("debian")
+    load_sources(w, D12)
+    p = in_world(w, env | {"HOP_FROM": "bookworm", "TARGET_CODENAME": "trixie"}, 'sandbox paused "%s/sb"; sandbox kept "%s/sb2"' % (posix(w), posix(w)))
+    sbs, sbk = get(w, "out/sandbox-paused-sources.txt"), get(w, "out/sandbox-kept-sources.txt")
+    check("the sandbox on the real sources of Debian 12's cloud image names trixie and no bookworm, keeps the mirror+file: lists, and the paused one has no Docker line while the kept one has it",
+          "Suites: trixie trixie-updates" in sbs and "Suites: trixie-security" in sbs and "bookworm" not in sbs and "mirror+file:///etc/apt/mirrors/debian-security.list" in sbs and "docker" not in sbs and "download.docker.com" in sbk and not os.path.exists(os.path.join(w, "out/aborted")), (sbs, sbk, p.stderr[-200:]))
+    shutil.rmtree(w, ignore_errors=True)
+    w, env = world("debian")
+    load_sources(w, D12, {"apt/sources.list.d/extra.list": "deb cdrom:[Debian GNU/Linux 12]/ bookworm main\n"})
+    p = in_world(w, env | {"HOP_FROM": "bookworm", "TARGET_CODENAME": "trixie"}, 'sandbox paused "%s/sb"; echo "went on"' % posix(w))
+    check("a file the tool cannot read ends the sandbox's phase and says which one (an aborted run, INVALID in the report), and apt is not run on a sandbox that never had the target",
+          "the sandbox's sources: the sources tool cannot read %s/apt/sources.list.d/extra.list: line 1" % w.replace("\\", "/") in get(w, "out/aborted") and "went on" not in p.stdout and not [x for x in calls(w) if x.startswith("apt-get")], (get(w, "out/aborted"), p.stdout, calls(w)))
     shutil.rmtree(w, ignore_errors=True)
 
     w, env = world("debian")

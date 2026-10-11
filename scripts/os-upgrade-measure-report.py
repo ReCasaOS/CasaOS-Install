@@ -645,6 +645,8 @@ if ran_hop:
                       ("kernel-before.txt", "the kernel before"), ("kernel-after.txt", "the kernel after"), ("docker-before.txt", "Docker before"), ("docker-after.txt", "Docker after"),
                       ("deps-before.txt", "the installer's dependencies before"), ("deps-after.txt", "the installer's dependencies after"),
                       ("jwt-claims-jwt-before.json", "the claims of the token of the baseline"), ("hop-journal.txt", "the journal of the hop"), ("dpkg-hop.log", "dpkg's own log of the hop")):
+        if name == "dpkg-hop.log" and unit_ended:
+            continue    # a unit that ended itself before its first apt had nothing for dpkg to log: the reason it ended is the finding, and not the empty log that follows from it
         need(name, why)
     if unit_done:
         need("unit-end.txt", "the unit's last facts")

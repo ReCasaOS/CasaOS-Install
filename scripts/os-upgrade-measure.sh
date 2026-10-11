@@ -86,11 +86,17 @@ containerd_17() { apt-cache madison containerd.io | awk '$3 ~ /^1\.7\./ && !foun
 # The tool that rewrites apt's sources, written where the guest keeps it. Python, for the two formats (one-line and deb822) and for what a
 # line of either says. osresearch-debian.md, step 11 (REWRITE SOURCES): the suite and its -updates and -security, the backports and
 # proposed-updates lines dropped, the archive's hosts moved back to the mirror (the archive has no next release), non-free-firmware beside
-# non-free. A line that is not Debian's is left alone (Docker's is paused, not rewritten).
+# non-free. A line that is not Debian's is left alone (Docker's is paused, not rewritten). The forms the legs meet: Debian 11's one-line sources.list (with the archive's security
+# line), the deb822 debian.sources of the cloud images of Debian 12 and 13 (several suites on one Suites line, and `mirror+file:///etc/apt/mirrors/debian.list` for an address, kept as
+# it is because the list names the host), and Ubuntu's own (ubuntu.sources, 22.04's sources.list), which are not this tool's to rewrite: the Ubuntu tool does that. An address in a form
+# that it does not read makes it stop with status 3 and a line that names the file, never pass the file on as it was.
 write_sources_tool() {
     cat >"$1" <<'PY'
 #!/usr/bin/env python3
-# rewrite FROM TO FILE: FILE as the hop leaves it (stdout). foreign FAMILY FILE: status 0 when the file has repositories and none is the distribution's.
+# rewrite FROM TO FILE: FILE as the hop leaves it (stdout). Status 3, and a line on stderr that names FILE, when FILE holds a repository whose address this tool cannot
+# read (it does not guess whose it is, and does not leave it as it is: a hop that goes on with a source it did not read is not a hop).
+# foreign FAMILY FILE: status 0 when the file has repositories and none is the distribution's, 1 for anything else (a file that cannot be read included: `rewrite` names it).
+import os
 import re
 import sys
 
@@ -98,16 +104,32 @@ SUFFIXES = ("", "-updates", "-security")
 DROPPED = ("-backports", "-backports-sloppy", "-proposed-updates")
 LINE = re.compile(r"^(\s*)(deb(?:-src)?)((?:\s+\[[^\]]*\])?)(\s+)(\S+)(\s+)(\S+)((?:\s+\S+)*)\s*$")
 URI = re.compile(r"^[A-Za-z0-9+.-]+://([^/:\s]+)(?::[0-9]+)?(/\S*)?$")
+# apt's mirror method: `mirror+file:/etc/apt/mirrors/debian.list` (one slash or three) names a file whose lines are the mirrors. The cloud images of Debian 12 and 13 ship
+# their sources so (debian.list for the archive, debian-security.list for the security updates), the mirror lists name the host, and so the address is the distribution's and
+# it is kept as it stands. A local repository (file:/...) is read, and is not the distribution's.
+MIRROR_FILE = re.compile(r"^mirror\+file:(?://)?(/\S*)$")
+DEBIAN_MIRRORS = re.compile(r"^debian(?:-[a-z0-9]+)*\.list$")
+LOCAL = re.compile(r"^file:/")
 
 
-def distro_uri(uri, family):
+class Unreadable(Exception):
+    pass
+
+
+def whose(uri, family):
+    """'distro' (an address of the distribution), 'other' (an address that is read and is not), 'unreadable' (a form this tool does not know)"""
+    m = MIRROR_FILE.match(uri)
+    if m:
+        return "distro" if family == "debian" and DEBIAN_MIRRORS.match(m.group(1).rsplit("/", 1)[-1]) else "unreadable"
     m = URI.match(uri)
-    if not m:
-        return False
-    host, path = m.group(1).lower(), m.group(2) or "/"
-    if family == "debian":
-        return host.endswith("debian.org") or path == "/debian" or path.startswith(("/debian/", "/debian-security"))
-    return host.endswith(("ubuntu.com", "canonical.com")) or path == "/ubuntu" or path.startswith("/ubuntu/")
+    if m:
+        host, path = m.group(1).lower(), m.group(2) or "/"
+        if family == "debian":
+            mine = host.endswith("debian.org") or path == "/debian" or path.startswith(("/debian/", "/debian-security"))
+        else:
+            mine = host.endswith(("ubuntu.com", "canonical.com")) or path == "/ubuntu" or path.startswith("/ubuntu/")
+        return "distro" if mine else "other"
+    return "other" if LOCAL.match(uri) else "unreadable"
 
 
 def move_host(uri):
@@ -134,11 +156,16 @@ def add_firmware(comps):
     return comps
 
 
-def rewrite_line(line, src, dst):
+def rewrite_line(line, src, dst, where):
     m = LINE.match(line)
-    if not m or not distro_uri(m.group(5), "debian"):
+    if not m:
         return line
     ind, kind, opts, s1, uri, s2, suite, rest = m.groups()
+    owner = whose(uri, "debian")
+    if owner == "unreadable":
+        raise Unreadable("%s: the address %s is in a form this tool does not read (not scheme://host/path, and not a mirror+file: list of Debian's)" % (where, uri))
+    if owner == "other":
+        return line
     suites = new_suites([suite], src, dst)
     if not suites:
         return "# osm-removed: " + line
@@ -158,11 +185,18 @@ def parse_822(block):
     return items
 
 
-def rewrite_822(block, src, dst):
+def rewrite_822(block, src, dst, where):
     items = parse_822(block)
     by = {i[0]: i for i in items if i[0]}
-    uris = by["URIs"][2].split() if "URIs" in by else []
-    if not uris or not all(distro_uri(u, "debian") for u in uris) or "Suites" not in by:
+    if "URIs" not in by or "Suites" not in by:
+        return block
+    uris = by["URIs"][2].split()
+    owners = [whose(u, "debian") for u in uris]
+    if "unreadable" in owners:
+        raise Unreadable("%s (URIs: %s): an address is in a form this tool does not read (not scheme://host/path, and not a mirror+file: list of Debian's)" % (where, " ".join(uris)))
+    if "distro" in owners and "other" in owners:
+        raise Unreadable("%s (URIs: %s): one stanza mixes the distribution's addresses and others, and this tool does not split it" % (where, " ".join(uris)))
+    if "distro" not in owners:
         return block
     suites = new_suites(by["Suites"][2].split(), src, dst)
     if not suites:
@@ -176,25 +210,43 @@ def rewrite_822(block, src, dst):
 
 def rewrite(text, src, dst, deb822):
     if deb822:
-        return "\n\n".join(rewrite_822(b, src, dst) for b in re.split(r"\n[ \t]*\n", text.strip("\n"))) + "\n"
-    return "\n".join(rewrite_line(ln, src, dst) for ln in text.split("\n"))
+        blocks = re.split(r"\n[ \t]*\n", text.strip("\n"))
+        return "\n\n".join(rewrite_822(b, src, dst, "stanza %d" % (n + 1)) for n, b in enumerate(blocks)) + "\n"
+    return "\n".join(rewrite_line(ln, src, dst, "line %d" % (n + 1)) for n, ln in enumerate(text.split("\n")))
 
 
 def uris_of(text, deb822):
     if deb822:
-        return [u for ln in text.split("\n") if ln.startswith("URIs:") for u in ln.split(":", 1)[1].split()]
+        found = []
+        for b in re.split(r"\n[ \t]*\n", text.strip("\n")):
+            by = {i[0]: i for i in parse_822(b) if i[0]}
+            found += by["URIs"][2].split() if "URIs" in by else []
+        return found
     return [m.group(5) for m in (LINE.match(ln) for ln in text.split("\n")) if m]
 
 
+def read(path):
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        return f.read()
+
+
 def main(argv):
+    sys.stdout.reconfigure(errors="surrogateescape")
     if len(argv) == 5 and argv[1] == "rewrite":
-        with open(argv[4], encoding="utf-8") as f:
-            sys.stdout.write(rewrite(f.read(), argv[2], argv[3], argv[4].endswith(".sources")))
+        try:
+            out = rewrite(read(argv[4]), argv[2], argv[3], argv[4].endswith(".sources"))
+        except (OSError, Unreadable) as e:
+            sys.stderr.write("the sources tool cannot read %s: %s\n" % (argv[4], e))
+            return 3
+        sys.stdout.write(out)
         return 0
     if len(argv) == 4 and argv[1] == "foreign":
-        with open(argv[3], encoding="utf-8") as f:
-            uris = uris_of(f.read(), argv[3].endswith(".sources"))
-        return 0 if uris and all(URI.match(u) for u in uris) and not any(distro_uri(u, argv[2]) for u in uris) else 1
+        try:
+            uris = uris_of(read(argv[3]), argv[3].endswith(".sources"))
+        except OSError:
+            return 1
+        owners = [whose(u, argv[2]) for u in uris]
+        return 0 if owners and "unreadable" not in owners and "distro" not in owners else 1
     sys.stderr.write("usage: rewrite FROM TO FILE | foreign debian|ubuntu FILE\n")
     return 2
 
@@ -931,18 +983,19 @@ sb_opts() {
 # directory, apt's own state and cache in others, no locking, and the real transaction simulated against it (the old apt reading the new release's
 # InRelease is the unknown). variant paused: only Debian's sources, as the hop leaves them; kept: Docker's source too, as it stands on the box.
 sandbox() {
-    local v="$1" sb="$2" f base dest
+    local v="$1" sb="$2" f base dest err files=()
     mkdir -p "${sb}/lists/partial" "${sb}/cache/archives/partial" "${sb}/parts"
     : >"${sb}/sources.list"
-    for f in "${APT_DIR}/sources.list" "${APT_DIR}/sources.list.d"/*; do
-        [ -f "${f}" ] || continue
+    # a file the tool cannot read ends the phase and says which one, instead of a sandbox that never saw the target release
+    mapfile -t files < <(apt_source_files)
+    for f in "${files[@]}"; do
         base="${f##*/}"
         dest="${sb}/parts/${base}"
         if [ "${f}" = "${APT_DIR}/sources.list" ]; then dest="${sb}/sources.list"; fi
         if python3 "${SOURCES_PY}" foreign debian "${f}"; then
             if [ "${v}" = kept ]; then cp "${f}" "${dest}"; fi
         else
-            python3 "${SOURCES_PY}" rewrite "${HOP_FROM}" "${TARGET_CODENAME}" "${f}" >"${dest}"
+            err="$(python3 "${SOURCES_PY}" rewrite "${HOP_FROM}" "${TARGET_CODENAME}" "${f}" 2>&1 >"${dest}")" || abort "the sandbox's sources: ${err//$'\n'/ / }"
         fi
     done
     for f in "${sb}/sources.list" "${sb}/parts"/*; do
@@ -1151,6 +1204,25 @@ run_step() {
     df -P -m / /boot 2>/dev/null | awk -v n="${name}" 'NR > 1 {printf "%s %s %s\n", n, $6, $4}' >>"${OUT}/df-steps.txt" || true
 }
 
+# apt_source_files: the files apt reads its sources from, one per line: sources.list, and the *.list and *.sources of sources.list.d (a .save, a .dpkg-old or a paused one is not read by
+# apt, and not by this)
+apt_source_files() {
+    local f
+    for f in "${APT_DIR}/sources.list" "${APT_DIR}/sources.list.d"/*.list "${APT_DIR}/sources.list.d"/*.sources; do
+        if [ -f "${f}" ]; then printf '%s\n' "${f}"; fi
+    done
+}
+
+# names_codename <codename>: status 0 when a file apt reads its sources from has a line, a comment aside, with the release as a word of it (a suite: after a space, and ending the word or
+# followed by -updates or -security)
+names_codename() {
+    local f
+    while IFS= read -r f; do
+        if grep -Eqs "^[^#]*[[:space:]]$1([[:space:]-]|$)" "${f}"; then return 0; fi
+    done < <(apt_source_files)
+    return 1
+}
+
 # pause_sources [list]: the sources that are not the distribution's are renamed (osresearch-ubuntu.md, section 7a; os-upgrade-design.md, section 5: the apt source
 # of Docker is paused during the hop). The names go to $OUT/<list> (sources-paused.txt by default).
 pause_sources() {
@@ -1174,25 +1246,37 @@ resume_sources() {
 }
 
 hop_unit_debian() {
-    local from="${HOP_FROM}" to="${TARGET_CODENAME}" f dest pass
+    local from="${HOP_FROM}" to="${TARGET_CODENAME}" f dest pass err seen
+    local staged=() files=()
     local apt_hop=(apt-get -y -q -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
-    # the sources, atomically per file, after a copy of /etc/apt (osresearch-debian.md, step 11)
+    # the sources, atomically per file, after a copy of /etc/apt (osresearch-debian.md, step 11). Every file is rewritten under a new name first, and none replaces its original before
+    # all of them were read: a file the tool cannot read ends the unit (ABORTED, with the file and what is wrong with it), with /etc/apt as it was and Docker's source given back
     umark SRC_START
     mkdir -p "${BACKUP_DIR}"
     cp -a "${APT_DIR}" "${BACKUP_DIR}/apt-orig"
     apt_config_dump "${OUT}/sources-before.txt"
     pause_sources
-    for f in "${APT_DIR}/sources.list" "${APT_DIR}/sources.list.d"/*; do
-        [ -f "${f}" ] || continue
-        case "${f}" in *.casaos-paused) continue ;; esac
+    mapfile -t files < <(apt_source_files)
+    for f in "${files[@]}"; do
         dest="${f}.osm-new"
-        python3 "${SOURCES_PY}" rewrite "${from}" "${to}" "${f}" >"${dest}" && mv "${dest}" "${f}"
+        if ! err="$(python3 "${SOURCES_PY}" rewrite "${from}" "${to}" "${f}" 2>&1 >"${dest}")"; then
+            rm -f "${staged[@]}" "${dest}"
+            resume_sources
+            apt_config_dump "${OUT}/sources-after.txt"
+            umark SRC_END
+            umark "ABORTED ${err//$'\n'/ / }"
+            return 1
+        fi
+        staged+=("${dest}")
     done
+    for dest in "${staged[@]}"; do mv "${dest}" "${dest%.osm-new}"; done
     apt_config_dump "${OUT}/sources-after.txt"
     umark SRC_END
-    # a rewrite that left no line of the target release (a source in a form the tool does not read, a mirror it does not know) is no hop: nothing is run against the old release's names
-    if ! grep -rqs -- "${to}" "${APT_DIR}/sources.list" "${APT_DIR}/sources.list.d"; then
-        umark "ABORTED no source names ${to} after the rewrite"
+    # a rewrite that left no line of the target release (every source of the distribution in a suite the tool does not rewrite, such as an alias) is no hop: nothing is run against the old
+    # release's names
+    if ! names_codename "${to}"; then
+        seen="$(printf '%s ' "${files[@]##*/}")"
+        umark "ABORTED no source names ${to} after the rewrite (the files apt reads: ${seen:-none})"
         return 1
     fi
     # apt-get update, then the minimal upgrade and the full one, each downloaded first (osresearch-debian.md, steps 12, 14, 16)
