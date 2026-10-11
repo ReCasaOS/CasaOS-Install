@@ -17,6 +17,7 @@ REPORT=<path>, MEASURE_SCRIPT=<path> and WORKFLOW=<path> run the cases against o
 the cases whose name matches. REPORT_ONLY=1 stops after the cases of the report, GUEST_ONLY=1 skips them. TEST_BASH=<path> names a bash where plain
 `bash` is not the one.
 """
+import ast
 import json
 import os
 import re
@@ -200,6 +201,51 @@ def step_log(s, name):
     return "Reading package lists...\nDone\n"
 
 
+# what the core answers to GET /v1/sys/os on the day of the fixture's calls, written out here by hand from the spec (os-upgrade-pr01-spec.md, PR 1 core, and the core's route test),
+# not worked out by the code under test: the support of a release and the release after it
+RUN_STAMP = datetime(2026, 10, 11, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+RELEASE_CYCLE = "https://ubuntu.com/about/release-cycle"
+
+
+def esm(ends):
+    return {"name": "Ubuntu Pro (ESM)", "ends": ends, "precision": "month"}
+
+
+def nxt(family, version, codename, pretty):
+    return {"id": family, "version_id": version, "codename": codename, "pretty_name": pretty, "state": "report"}
+
+
+CORE_SUPPORT = {
+    ("debian", "11"): ({"state": "security_ended", "ends": "2026-08-31", "precision": "day", "extended": {"name": "Debian ELTS (Freexian)", "ends": "2031-06-30", "precision": "day"},
+                        "source": "https://www.debian.org/News/2026/20260831"}, nxt("debian", "12", "bookworm", "Debian 12 (bookworm)")),
+    ("debian", "12"): ({"state": "supported", "ends": "2028-06-30", "precision": "day", "source": "https://www.debian.org/News/2026/20260712"}, nxt("debian", "13", "trixie", "Debian 13 (trixie)")),
+    ("debian", "13"): ({"state": "supported", "ends": "2030-06-30", "precision": "day", "source": "https://www.debian.org/releases/"}, None),
+    ("ubuntu", "22.04"): ({"state": "supported", "ends": "2027-05-31", "precision": "month", "extended": esm("2032-04-21"), "source": RELEASE_CYCLE}, nxt("ubuntu", "24.04", "noble", "Ubuntu 24.04 LTS (noble)")),
+    ("ubuntu", "24.04"): ({"state": "supported", "ends": "2029-05-31", "precision": "month", "extended": esm("2034-04-25"), "source": RELEASE_CYCLE}, nxt("ubuntu", "26.04", "resolute", "Ubuntu 26.04 LTS (resolute)")),
+    ("ubuntu", "26.04"): ({"state": "supported", "ends": "2031-05-29", "precision": "month", "extended": esm("2036-04-23"), "source": RELEASE_CYCLE}, None),
+}
+
+
+def core_answer(family, version, codename, pretty, arch="amd64"):
+    """the envelope the route answers for a plain Debian or Ubuntu"""
+    support, nxt_ = json.loads(json.dumps(CORE_SUPPORT[(family, version)]))
+    data = {"id": family, "version_id": version, "codename": codename, "pretty_name": pretty, "arch": arch, "known": True, "support": support}
+    if nxt_:
+        data["next"] = nxt_
+    return {"success": 200, "message": "ok", "data": data}
+
+
+def sysos_files(d, tag, osr, answer, stamp=RUN_STAMP, code="200", rc=0, err=""):
+    """what the guest keeps of one call of GET /v1/sys/os"""
+    put(d, "sysos-%s.os-release" % tag, osr)
+    put(d, "sysos-%s.time" % tag, "%.6f\n" % stamp)
+    put(d, "sysos-%s.code" % tag, code + "\n")
+    put(d, "sysos-%s.rc" % tag, "%d\n" % rc)
+    put(d, "sysos-%s.err" % tag, err)
+    if answer is not None:
+        put(d, "sysos-%s.json" % tag, json.dumps(answer, separators=(",", ":")))
+
+
 def build(d, s, spec=None):
     """the directory a healthy leg leaves; spec: variant (hold|keep), offered (False: an Ubuntu hop Canonical has not opened)"""
     spec = spec or {}
@@ -332,6 +378,7 @@ def build(d, s, spec=None):
         put(d, "%s-after.code" % n, "200\n")
     put(d, "jwt-fresh.code", "200\n")
     put(d, "sysstate-wait.txt", "running\n")
+    sysos_files(d, "before", os_release(s["old_pretty"], s["family"], s["old"], s["old_code"]), core_answer(s["family"], s["old"], s["old_code"], s["old_pretty"]))
     put(d, "sysstate-wait.rc", "0\n")
     put(d, "analyze.txt", "Startup finished in 3.2s (kernel) + 10.1s (userspace) = 13.3s\n")
     # witnesses: an acknowledged write every 2 s, none while the box is down
@@ -391,6 +438,7 @@ def build(d, s, spec=None):
         put(d, "unit-%s.txt" % tag, "pid 4242\ninvocation %s\nmanager %s\nsystemd %s\ndbus %s\nlibc6 %s\ntty not a tty\n" % (hex32("inv"), "247" if tag == "start" else "252", s["systemd"][0 if tag == "start" else 1], s["dbus"][0 if tag == "start" else 1], s["libc"][0 if tag == "start" else 1]))
     put(d, "os-hop", new_os)
     put(d, "os-after", new_os)
+    sysos_files(d, "after", new_os, core_answer(s["family"], s["new"], s["new_code"], s["new_pretty"]))
     jd = datetime.fromtimestamp(T0 + S["hop_start"] + 700, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     put(d, "hop-journal.txt", "%s.123456+00:00 host systemd[1]: Stopping OpenBSD Secure Shell server...\n%s.223456+00:00 host systemd[1]: Started OpenBSD Secure Shell server.\n" % (jd, jd))
     put(d, "apt-history.log", "Start-Date: 2026-10-10  12:00:00\nCommandline: apt-get dist-upgrade\n")
@@ -420,7 +468,9 @@ _templates = {}
 
 
 def run_report(d, leg):
-    p = subprocess.run([sys.executable, REPORT, d, leg], capture_output=True, text=True, env=ENV, encoding="utf-8")
+    # a time zone 14 hours ahead of UTC (POSIX form: XXX-14), whatever this machine's own is: the day of a call of GET /v1/sys/os is its UTC day, and a report that took the local day
+    # of the machine it runs on would see the next day for 14 hours of every day, here as well as on a runner whose clock is UTC
+    p = subprocess.run([sys.executable, REPORT, d, leg], capture_output=True, text=True, env=dict(ENV, TZ="XXX-14"), encoding="utf-8")
     return p.returncode, p.stdout + p.stderr
 
 
@@ -914,6 +964,198 @@ invalid("the leg's claims file is not JSON", L, "jwt-claims-jwt-before.json is n
 case("an invalid run still tells the reasons and exits 1, and never writes a table", L, 1, must_have=["INVALID RUN", "- INVALID:"], must_not_have=["## The go/no-go table", "**GO**", "**NO-GO**"], mutate=lambda d: put(d, "aborted", "boom\n"))
 case("the report is written to report.md as well", L, 0, must_have=["MEASURED"], mutate=lambda d: None)
 case("a bad leg name is refused with a usage message", L, 2, empty=True, must_have=["usage"], mutate=None) if False else None
+
+# ---- what the core says about the system (GET /v1/sys/os) -------------------------------------------------------------------------------------------
+
+Q_SYSOS_B = "GET /v1/sys/os before the hop"
+Q_SYSOS_A = "GET /v1/sys/os after the reboot"
+
+
+def sy_edit(tag, fn):
+    """the answer of a call, changed: fn(the whole answer) in place"""
+    return lambda d: jedit(d, "sysos-%s.json" % tag, fn)
+
+
+def sy_data(tag, **changes):
+    return sy_edit(tag, lambda j: j["data"].update(changes))
+
+
+def sy_state(tag, state):
+    return sy_edit(tag, lambda j: j["data"]["support"].update(state=state))
+
+
+def sy_drop(tag, key):
+    return sy_edit(tag, lambda j: j["data"].pop(key))
+
+
+def sy_at(tag, y, m, dd, hh=10, mi=0, ss=0):
+    """the call was made on this day (UTC)"""
+    return lambda d: put(d, "sysos-%s.time" % tag, "%.6f\n" % datetime(y, m, dd, hh, mi, ss, tzinfo=timezone.utc).timestamp())
+
+
+def sy_invalid(name, leg, q, reason, mutate, spec=None):
+    """the call left nothing that can be judged: its verdict is INVALID, the run is an invalid run (exit 1), and nothing is a GO"""
+    case(name, leg, 1, mutate=mutate, spec=spec, rows={q: "INVALID"}, must_have=["INVALID RUN", reason], must_not_have=["**GO**", "## The go/no-go table"])
+
+
+SYSOS_CELLS = {"d11-12": ("security_ended", "supported"), "d12-13": ("supported", "supported"), "u22-24": ("supported", "supported"), "u24-26": ("supported", "supported")}
+for leg in LEGS:
+    s_ = LEGS[leg]
+    before_state, after_state = SYSOS_CELLS[leg]
+    case("%s: what the core says about the system is shown before and after the hop, and both verdicts pass" % leg, leg, 0,
+         must_have=["## What the core says about this system", "| asked (UTC day of the guest's clock) | 2026-10-11 | 2026-10-11 |", "| HTTP status, curl's exit | 200, 0 | 200, 0 |",
+                    "| what the guest's os-release says | %s %s %s (%s) | %s %s %s (%s) |" % (s_["family"], s_["old"], s_["old_code"], s_["old_pretty"], s_["family"], s_["new"], s_["new_code"], s_["new_pretty"]),
+                    "| id, version_id, codename | %s %s %s | %s %s %s |" % (s_["family"], s_["old"], s_["old_code"], s_["family"], s_["new"], s_["new_code"]),
+                    "| known, variant | True, none | True, none |", "| support.state | %s | %s |" % (before_state, after_state)],
+         must_not_have=["INVALID", "**FAIL**"], rows={Q_SYSOS_B: "PASS", Q_SYSOS_A: "PASS"})
+case("d11-12: the facts of the answer are all there: the end, the extended programme, the source and the next release", "d11-12", 0,
+     must_have=["| support.ends (precision) | 2026-08-31 (day) | 2028-06-30 (day) |", "| support.extended | Debian ELTS (Freexian) until 2031-06-30 (day) | none |", "| support.source | https://www.debian.org/News/2026/20260831 | https://www.debian.org/News/2026/20260712 |",
+                "| next | debian 12 bookworm (report) | debian 13 trixie (report) |", "| arch | amd64 | amd64 |"], rows={Q_SYSOS_B: "PASS"})
+for leg in ("u22-24", "u24-26"):
+    case("%s: a hop that was not offered: the answer before is judged, nothing is asked after, and the verdict there is NOT_OFFERED, neutral and not a pass" % leg, leg, 0, spec={"offered": False},
+         rows={Q_SYSOS_B: "PASS", Q_SYSOS_A: "NOT_OFFERED"}, must_have=["| asked (UTC day of the guest's clock) | 2026-10-11 | not asked |"], must_not_have=["INVALID", "**GO**", "**FAIL**"])
+
+# one thing is wrong in the answer before the hop: FAIL, and it says which
+L = "d11-12"
+flips("sysos before: the core says another id", L, Q_SYSOS_B, "FAIL", sy_data("before", id="ubuntu"), must_have=["id is 'ubuntu', the guest's os-release says 'debian'"])
+flips("sysos before: the core says another version_id", L, Q_SYSOS_B, "FAIL", sy_data("before", version_id="12"), must_have=["version_id is '12', the guest's os-release says '11'"])
+flips("sysos before: the core says another codename", L, Q_SYSOS_B, "FAIL", sy_data("before", codename="bookworm"), must_have=["codename is 'bookworm', the guest's os-release says 'bullseye'"])
+flips("sysos before: the core says no codename", L, Q_SYSOS_B, "FAIL", sy_drop("before", "codename"), must_have=["codename is None, the guest's os-release says 'bullseye'"])
+flips("sysos before: the core says known false", L, Q_SYSOS_B, "FAIL", sy_data("before", known=False), must_have=["known is False, not true"])
+flips("sysos before: the core does not say known", L, Q_SYSOS_B, "FAIL", sy_drop("before", "known"), must_have=["known is None, not true"])
+flips("sysos before: the core says it is a variant", L, Q_SYSOS_B, "FAIL", sy_data("before", variant="raspberrypi"), must_have=["variant is 'raspberrypi' (a plain Debian has none)"])
+flips("sysos before: the core says another support state", L, Q_SYSOS_B, "FAIL", sy_state("before", "supported"), must_have=["support.state is 'supported', the table says security_ended for debian 11 on 2026-10-11"])
+flips("sysos before: the core says no support at all", L, Q_SYSOS_B, "FAIL", sy_drop("before", "support"), must_have=["support.state is None, the table says security_ended"])
+flips("sysos before: the answer has no data object (it is not the envelope of the other routes)", L, Q_SYSOS_B, "FAIL", sy_edit("before", lambda j: j.update(data="x")), must_have=["the answer has no data object"])
+flips("sysos before: the answer is the bare object, with no envelope", L, Q_SYSOS_B, "FAIL", sy_edit("before", lambda j: [j.pop(k) for k in ("success", "message")] and j.update(j.pop("data"))), must_have=["the answer has no data object"])
+flips("sysos before: it is the os-release the answer is compared with, not the leg: the box says Debian 12 and the core says 11", L, Q_SYSOS_B, "FAIL",
+      lambda d: put(d, "sysos-before.os-release", os_release(DEB12["old_pretty"], "debian", "12", "bookworm")), must_have=["version_id is '11', the guest's os-release says '12'", "codename is 'bullseye', the guest's os-release says 'bookworm'"])
+flips("sysos before: the route answers an error of its own (HTTP 500): that is the route, FAIL", L, Q_SYSOS_B, "FAIL", lambda d: put(d, "sysos-before.code", "500\n"), must_have=["GET /v1/sys/os (before) answered HTTP 500"])
+flips("sysos before: two things wrong are both said", L, Q_SYSOS_B, "FAIL", seq(sy_data("before", known=False), sy_state("before", "supported")), must_have=["known is False, not true", "support.state is 'supported'"])
+flips("sysos before: a bar and a character that is not ASCII in the box's own answer do not break the table or the report", L, Q_SYSOS_B, "PASS", sy_data("before", pretty_name="D\u00e9bian | x"),
+      must_have=["| pretty_name | D?bian / x |"])
+
+# a call that left nothing that can be judged: INVALID, never a quiet pass
+for ext, why in (("rc", "sysos-before.rc is missing: the call of GET /v1/sys/os (before) did not run"), ("code", "sysos-before.code is missing, empty or unreadable"),
+                 ("os-release", "sysos-before.os-release is missing, empty or unreadable"), ("time", "sysos-before.time is missing, empty or unreadable"),
+                 ("json", "sysos-before.json is missing or empty: the call of GET /v1/sys/os (before) answered 200 and nothing was kept")):
+    sy_invalid("sysos before: no sysos-before.%s: the call is not proven" % ext, L, Q_SYSOS_B, why, lambda d, e=ext: remove(d, "sysos-before.%s" % e))
+sy_invalid("sysos before: an empty answer", L, Q_SYSOS_B, "sysos-before.json is missing or empty", lambda d: put(d, "sysos-before.json", ""))
+sy_invalid("sysos before: an answer that is not JSON", L, Q_SYSOS_B, "sysos-before.json is not a JSON object", lambda d: put(d, "sysos-before.json", "<html>502</html>"))
+sy_invalid("sysos before: an answer that is JSON and not an object", L, Q_SYSOS_B, "sysos-before.json is not a JSON object", lambda d: put(d, "sysos-before.json", "[]"))
+sy_invalid("sysos before: nothing answered (curl exit 7, HTTP 000): the harness could not ask, which is not a FAIL of the route", L, Q_SYSOS_B, "got no answer of the route: curl exit 7, HTTP 000 (curl: (7) Failed to connect",
+           lambda d: sysos_files(d, "before", get(d, "sysos-before.os-release"), None, code="000", rc=7, err="curl: (7) Failed to connect to 127.0.0.1 port 80\n"))
+for code in ("401", "403", "404", "502", "503", "504"):
+    sy_invalid("sysos before: HTTP %s is not an answer of the route (a credential, a release without the route, a gateway or a core that is not up): invalid" % code, L, Q_SYSOS_B, "HTTP %s" % code,
+               lambda d, c=code: put(d, "sysos-before.code", c + "\n"))
+sy_invalid("sysos before: curl ended with an error after a 200: nothing is proven", L, Q_SYSOS_B, "curl exit 28, HTTP 200", lambda d: put(d, "sysos-before.rc", "28\n"))
+sy_invalid("sysos before: a time that is not a time", L, Q_SYSOS_B, "sysos-before.time is missing, empty or unreadable", lambda d: put(d, "sysos-before.time", "yesterday\n"))
+sy_invalid("sysos before: an os-release with no ID", L, Q_SYSOS_B, "sysos-before.os-release is missing, empty or unreadable", lambda d: put(d, "sysos-before.os-release", "NAME=x\n"))
+sy_invalid("sysos before: a guest whose clock is before the table's AsOf (2026-10-09): the table cannot say, and that is the harness's problem", L, Q_SYSOS_B, "before the table's AsOf 2026-10-09", sy_at("before", 2026, 10, 8, 23, 59, 59))
+case("sysos before: an invalid call does not hide the other verdict: the after one is still judged", L, 1, mutate=lambda d: remove(d, "sysos-before.rc"), rows={Q_SYSOS_B: "INVALID", Q_SYSOS_A: "PASS"})
+
+# after the reboot
+flips("sysos after: the core still says the old release (it did not follow the new os-release)", L, Q_SYSOS_A, "FAIL",
+      lambda d: put(d, "sysos-after.json", json.dumps(core_answer("debian", "11", "bullseye", DEB11["old_pretty"]))),
+      must_have=["version_id is '11', the target release says '12'", "codename is 'bullseye', the target release says 'bookworm'", "support.state is 'security_ended', the table says supported for debian 12 on 2026-10-11"])
+flips("sysos after: the core says the target release with another support state", L, Q_SYSOS_A, "FAIL", sy_state("after", "security_ended"), must_have=["support.state is 'security_ended', the table says supported for debian 12"])
+flips("sysos after: the core says another id", "u22-24", Q_SYSOS_A, "FAIL", sy_data("after", id="debian"), must_have=["id is 'debian', the target release says 'ubuntu'"])
+flips("sysos after: the core says known false", L, Q_SYSOS_A, "FAIL", sy_data("after", known=False), must_have=["known is False, not true"])
+flips("sysos after: the core says it is a variant", L, Q_SYSOS_A, "FAIL", sy_data("after", variant="proxmox"), must_have=["variant is 'proxmox'"])
+flips("sysos after: the route answers an error of its own (HTTP 500)", L, Q_SYSOS_A, "FAIL", lambda d: put(d, "sysos-after.code", "500\n"), must_have=["GET /v1/sys/os (after) answered HTTP 500"])
+flips("sysos after: the verdict before does not move when the one after fails", L, Q_SYSOS_B, "PASS", sy_data("after", id="ubuntu"))
+for ext, why in (("rc", "sysos-after.rc is missing: the call of GET /v1/sys/os (after) did not run"), ("code", "sysos-after.code is missing, empty or unreadable"),
+                 ("json", "sysos-after.json is missing or empty")):
+    sy_invalid("sysos after: no sysos-after.%s: the call is not proven" % ext, L, Q_SYSOS_A, why, lambda d, e=ext: remove(d, "sysos-after.%s" % e))
+sy_invalid("sysos after: an answer that is not JSON", L, Q_SYSOS_A, "sysos-after.json is not a JSON object", lambda d: put(d, "sysos-after.json", "gateway error"))
+sy_invalid("sysos after: HTTP 404 while the core answers its version: the route is not there (an invalid run, the release under test has to carry it)", L, Q_SYSOS_A, "HTTP 404", lambda d: put(d, "sysos-after.code", "404\n"))
+sy_invalid("sysos after: nothing answered while the core answered its version: the harness could not ask", L, Q_SYSOS_A, "got no answer of the route: curl exit 7, HTTP 000",
+           lambda d: sysos_files(d, "after", get(d, "sysos-after.os-release"), None, code="000", rc=7))
+for core_code in ("000", "502"):
+    case("sysos after: nothing answered because the core did not come back (version/current: %s): OPEN, and not an invalid run, so that the finding of the core row stays" % core_code, L, 0,
+         mutate=seq(lambda d: sysos_files(d, "after", get(d, "sysos-after.os-release"), None, code="000", rc=7), lambda d, c=core_code: put(d, "core-after.code", c + "\n")),
+         rows={Q_SYSOS_A: "OPEN", Q_SYSOS_B: "PASS"}, must_have=["the core did not answer after the reboot (version/current: HTTP %s)" % core_code], must_not_have=["INVALID RUN"])
+sy_invalid("sysos after: a day before AsOf is the harness's problem after the hop too", L, Q_SYSOS_A, "before the table's AsOf 2026-10-09", sy_at("after", 2026, 10, 1))
+
+# a hop that did not run to its end never passes after: OPEN with the reason, whatever the answer says
+case("sysos after: a debian hop that did nothing (its first step failed, the box is the old release): OPEN, even when the answer looks right", L, 0, mutate=hop_did_nothing,
+     rows={Q_SYSOS_A: "OPEN", Q_SYSOS_B: "PASS"}, must_have=["the hop did not run to its end", "the box is 11 bullseye after the reboot, not 12 bookworm", "what the core said all the same: debian 12 bookworm, support.state supported"], must_not_have=["INVALID RUN"])
+case("sysos after: ... and when the core says what it should say of the old release it is still OPEN, with what it said", L, 0,
+     mutate=seq(hop_did_nothing, lambda d: put(d, "sysos-after.json", json.dumps(core_answer("debian", "11", "bullseye", DEB11["old_pretty"])))),
+     rows={Q_SYSOS_A: "OPEN"}, must_have=["what the core said all the same: debian 11 bullseye, support.state security_ended", "what the core says after the hop: the hop did not run to its end"], must_not_have=["INVALID RUN"])
+case("sysos after: an ubuntu tool that failed and left the box where it was: OPEN", "u22-24", 0, mutate=seq(tool_exit(1), box_unmoved), rows={Q_SYSOS_A: "OPEN", Q_SYSOS_B: "PASS"}, must_not_have=["INVALID RUN"])
+case("sysos after: the unit was cut (no DONE, no ENDED): OPEN", L, 0, mutate=lambda d: ledit(d, "hop-unit.log", lambda ls: [ln for ln in ls if not ln.endswith(" DONE")]), rows={Q_SYSOS_A: "OPEN"}, must_have=["the unit wrote neither DONE nor ENDED"])
+
+# the table of the core, and its boundary days. Each line is (year, month, day, what the core says), written by hand from the spec's rule and the dates of its table: security_ended from the
+# day AFTER the last day, ending_soon from 180 days before the last day (up to and including it), supported before, a day before AsOf (2026-10-09) is a wrong clock, and more than 18 months
+# after AsOf (the days from 2028-04-10) what is still to come is unknown while what has ended stays ended. Debian 11 ended before AsOf and Ubuntu 20.04 is not a leg: neither has a day
+# before its end to try. The Ubuntu 22.04 row ends 2027-05-31 (the core says the month; the original spec had 2027-06-01, the day after).
+BOUNDS = [
+    ("d11-12", "before", [(2026, 10, 9, "security_ended"), (2028, 4, 9, "security_ended"), (2028, 4, 10, "security_ended"), (2035, 1, 1, "security_ended")]),
+    ("d12-13", "before", [(2026, 10, 9, "supported"), (2028, 1, 1, "supported"), (2028, 1, 2, "ending_soon"), (2028, 4, 9, "ending_soon"), (2028, 4, 10, "unknown"), (2028, 6, 30, "unknown"), (2028, 7, 1, "security_ended")]),
+    ("d11-12", "after", [(2028, 1, 1, "supported"), (2028, 1, 2, "ending_soon")]),
+    ("d12-13", "after", [(2026, 10, 9, "supported"), (2028, 4, 9, "supported"), (2028, 4, 10, "unknown"), (2030, 6, 30, "unknown"), (2030, 7, 1, "security_ended")]),
+    ("u22-24", "before", [(2026, 10, 9, "supported"), (2026, 12, 1, "supported"), (2026, 12, 2, "ending_soon"), (2027, 5, 31, "ending_soon"), (2027, 6, 1, "security_ended"), (2028, 4, 10, "security_ended")]),
+    ("u24-26", "before", [(2026, 10, 9, "supported"), (2028, 4, 9, "supported"), (2028, 4, 10, "unknown"), (2029, 5, 31, "unknown"), (2029, 6, 1, "security_ended")]),
+    ("u22-24", "after", [(2026, 10, 9, "supported"), (2028, 4, 10, "unknown")]),
+    ("u24-26", "after", [(2026, 10, 9, "supported"), (2028, 4, 9, "supported"), (2028, 4, 10, "unknown"), (2031, 5, 29, "unknown"), (2031, 5, 30, "security_ended")]),
+]
+WRONG = {"supported": "ending_soon", "ending_soon": "supported", "security_ended": "ending_soon", "unknown": "supported"}
+for leg_, tag_, days_ in BOUNDS:
+    q_ = Q_SYSOS_B if tag_ == "before" else Q_SYSOS_A
+    s_ = LEGS[leg_]
+    rel_ = "%s %s" % (s_["family"], s_["old"] if tag_ == "before" else s_["new"])
+    for y_, m_, dd_, state_ in days_:
+        what_ = "%s %s, %s the hop, on %04d-%02d-%02d" % (leg_, rel_, "before" if tag_ == "before" else "after", y_, m_, dd_)
+        case("the table: %s: the core says %s and the table agrees" % (what_, state_), leg_, 0, mutate=seq(sy_at(tag_, y_, m_, dd_), sy_state(tag_, state_)), rows={q_: "PASS"})
+        case("the table: %s: the core says %s and the table does not" % (what_, WRONG[state_]), leg_, 0, mutate=seq(sy_at(tag_, y_, m_, dd_), sy_state(tag_, WRONG[state_])), rows={q_: "FAIL"})
+# the day is the UTC day: the last second of a day is that day, and midnight is the next one (this machine's own time zone does not decide)
+case("the table: the last second of 2028-01-01 (UTC) is still supported", "d12-13", 0, mutate=seq(sy_at("before", 2028, 1, 1, 23, 59, 59), sy_state("before", "supported")), rows={Q_SYSOS_B: "PASS"})
+case("the table: midnight of 2028-01-02 (UTC) is ending_soon", "d12-13", 0, mutate=seq(sy_at("before", 2028, 1, 2, 0, 0, 0), sy_state("before", "ending_soon")), rows={Q_SYSOS_B: "PASS"})
+case("the table: the verdict says which day it was judged on and what the table says of it", "d12-13", 0, mutate=sy_at("before", 2028, 1, 2), must_have=["the table says for the release it is judged against | ending_soon: the free security updates end 2028-06-30"],
+     rows={Q_SYSOS_B: "FAIL"})
+case("the table: the month precision of Ubuntu is said where the table is read", "u22-24", 0, must_have=["supported: the free security updates end 2027-05-31 (month precision)"])
+case("the table: a stale table is said to be stale where the core says unknown", "d12-13", 0, mutate=seq(sy_at("before", 2028, 5, 1), sy_state("before", "unknown")), rows={Q_SYSOS_B: "PASS"},
+     must_have=["the table is stale on 2028-05-01 (more than 18 months after 2026-10-09)"])
+
+
+def static(name, ok, detail=""):
+    """a check on the text of the report script itself, in the same list as the cases"""
+    if not wanted(name) or not report_cases_wanted():
+        return
+    count[0] += 1
+    if ok:
+        ok_line(name)
+    else:
+        failures.append("%s: %s" % (name, detail))
+
+
+with open(REPORT, newline="") as f:
+    report_text = f.read().replace("\r\n", "\n")
+table_src = re.search(r"^OS_SUPPORT_TABLE = (\{.*?^\})", report_text, re.M | re.S)
+mirror = ast.literal_eval(table_src.group(1)) if table_src else {}
+mirror_consts = {k: re.search(r"^%s = (.+)$" % k, report_text, re.M) for k in ("OS_SUPPORT_ASOF", "OS_SUPPORT_SOON_DAYS", "OS_SUPPORT_STALE_MONTHS")}
+mirror_consts = {k: ast.literal_eval(m.group(1)) if m else None for k, m in mirror_consts.items()}
+# what the spec says (os-upgrade-pr01-spec.md, PR 1 core, item 2), as the core has it today: the last day of the free security updates and whether the vendor says the day or the month
+SPEC_TABLE = {("debian", "11"): ("2026-08-31", "day"), ("debian", "12"): ("2028-06-30", "day"), ("debian", "13"): ("2030-06-30", "day"),
+              ("ubuntu", "22.04"): ("2027-05-31", "month"), ("ubuntu", "24.04"): ("2029-05-31", "month"), ("ubuntu", "26.04"): ("2031-05-29", "month")}
+static("the report's table is the spec's: the six releases of the legs, with their last day and their precision, AsOf 2026-10-09, 180 days, 18 months",
+       {k: (v["ends"], v["precision"]) for k, v in mirror.items()} == SPEC_TABLE and mirror_consts == {"OS_SUPPORT_ASOF": "2026-10-09", "OS_SUPPORT_SOON_DAYS": 180, "OS_SUPPORT_STALE_MONTHS": 18}, (mirror, mirror_consts))
+outside = re.sub(r"# ---- the core's table of the end of free security updates.*?    return state, said\n", "", report_text, flags=re.S)
+static("no date of support is said anywhere in the report script but in its one table", re.search(r"\b20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]\b", outside) is None and "OS_SUPPORT_TABLE" in report_text, re.findall(r"[^\n]*\b20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]\b[^\n]*", outside)[:3])
+# the table is a mirror of the core's: when the core's source is next to this repository (the sibling CasaOS checkout), it is held to it; the runner has no such file
+CORE_GO = os.environ.get("OSSUPPORT_GO") or os.path.join(HERE, "..", "..", "CasaOS", "pkg", "ossupport", "ossupport.go")
+if os.path.exists(CORE_GO):
+    with open(CORE_GO, newline="") as f:
+        core_go = f.read().replace("\r\n", "\n")
+    core_rows = {(i, v): (e, p.lower()) for i, v, e, p in re.findall(r'id: "(\w+)", versionID: "([0-9.]+)", codename: "\w+",\s+ends: "([0-9-]+)", precision: Precision(Day|Month)', core_go)}
+    asof = re.search(r"AsOf = time\.Date\((\d+), (\d+), (\d+),", core_go)
+    core_consts = {"OS_SUPPORT_ASOF": "%s-%02d-%02d" % tuple(int(x) for x in asof.groups()) if asof else None, "OS_SUPPORT_SOON_DAYS": int((re.search(r"endingSoonDays = (\d+)", core_go) or [0, 0])[1]),
+                   "OS_SUPPORT_STALE_MONTHS": int((re.search(r"staleAfterMonths = (\d+)", core_go) or [0, 0])[1])}
+    static("the report's table is the core's own (pkg/ossupport/ossupport.go next to this repository): the same last days, precisions, AsOf, 180 days and 18 months",
+           all(core_rows.get(k) == (v["ends"], v["precision"]) for k, v in mirror.items()) and bool(mirror) and core_consts == mirror_consts, ({k: core_rows.get(k) for k in mirror}, core_consts, mirror_consts))
+else:
+    print("skip: the core's ossupport.go is not next to this repository (OSSUPPORT_GO names it), the report's table is held to the spec only")
 
 # ---- the guest script ------------------------------------------------------------------------------------------------------------------
 

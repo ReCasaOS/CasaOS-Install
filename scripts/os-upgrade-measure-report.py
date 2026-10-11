@@ -14,6 +14,14 @@ quiet pass.
 The answers of the go/no-go table (os-upgrade-design.md, section 8) are GO, NO-GO, OPEN (what was measured cannot decide it, and
 the row says why) and NOT_OFFERED. Nothing is judged in the guest: it writes what it saw, and this file decides.
 
+Every leg also asks the core what it says about the system it runs on (GET /v1/sys/os, `sysos-before.*` and `sysos-after.*`: the guest asked once on the old release
+before the hop and once after the reboot) and judges two verdicts from it, PASS, FAIL, OPEN, NOT_OFFERED or INVALID: before the hop the identity of the answer is the
+guest's os-release (id, version_id, codename, known, no variant) and its support state is the one the end-of-support table (OS_SUPPORT_TABLE below, the core's own,
+mirrored) implies for the leg's release on the day of the call; after the reboot the same against the TARGET release. A call that did not run, a file that is missing, an
+answer that is not JSON or that the route did not give (no connection, 401, 403, 404, 502, 503, 504) is INVALID, never a quiet pass, and the run is invalid with it; a hop
+that did not run to its end (hop_ran) makes the after verdict OPEN, and an Ubuntu hop that was not offered NOT_OFFERED; a core that did not come back after the reboot is
+OPEN there (the row about the core coming back has the finding) and not an invalid run. A FAIL is a finding, like a NO-GO: the exit status stays 0.
+
 The legs, each one hop from a cloud image of the OLD release with Docker and ReCasaOS installed:
     d11-12  Debian 11 (the archive's security line, Docker 28.0.4) to 12      apt 2.2.4 in the sandbox against bookworm's InRelease
     d12-13  Debian 12 to 13                                                    apt 2.6.1 against trixie's
@@ -25,7 +33,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 
 out_dir, leg = sys.argv[1], sys.argv[2]
 
@@ -60,6 +68,55 @@ ALLOW_FIELDS = ("suite", "version", "label", "codename", "origin")
 # apt's own table (apt-pkg/acquire-item.cc, pkgAcqMetaBase::VerifyVendor, at the tags 2.2.4 and 2.6.1): a change of the Suite or of the Version of a repository is allowed by default (a notice, and
 # the update goes on; the Suite since apt 2.1.10), a change of the Label, the Origin or the Codename is an error until it is accepted
 ALLOWED_BY_DEFAULT = ("suite", "version")
+
+
+# ---- the core's table of the end of free security updates, mirrored --------------------------------------------------------------
+
+# This is the ONE place of this script that says a date of support. It mirrors pkg/ossupport/ossupport.go of the core (the `AsOf` var, the `table`, and `Evaluate`): when that
+# file changes this one changes with it. "ends" is the last day of the vendor's free security updates and "precision" says whether the vendor gives the day or only the month.
+# Evaluate: security_ended from the day AFTER "ends"; ending_soon from 180 days before it, up to and including the day itself; supported before that; a day before AsOf is a clock
+# that is wrong; more than 18 months after AsOf what is still to come (supported, ending_soon) is unknown, and what has ended stays ended. test-os-upgrade-measure.py reads this
+# literal (it stays plain strings and numbers), holds it to the boundary days of the spec, and to the core's own file when that sits next to this repository.
+OS_SUPPORT_ASOF = "2026-10-09"
+OS_SUPPORT_SOON_DAYS = 180
+OS_SUPPORT_STALE_MONTHS = 18
+OS_SUPPORT_TABLE = {
+    ("debian", "11"): {"ends": "2026-08-31", "precision": "day"},
+    ("debian", "12"): {"ends": "2028-06-30", "precision": "day"},
+    ("debian", "13"): {"ends": "2030-06-30", "precision": "day"},
+    ("ubuntu", "22.04"): {"ends": "2027-05-31", "precision": "month"},
+    ("ubuntu", "24.04"): {"ends": "2029-05-31", "precision": "month"},
+    ("ubuntu", "26.04"): {"ends": "2031-05-29", "precision": "month"},
+}
+
+
+def add_months(d, n):
+    """Go's AddDate(0, n, 0), which the core uses for its 18 months: the month moves, and a day that the new month does not have rolls into the one after"""
+    y, m = divmod(d.year * 12 + d.month - 1 + n, 12)
+    return date(y, m + 1, 1) + timedelta(days=d.day - 1)
+
+
+def os_support_state(family, version, day):
+    """(state, what the table says of it) that the core's table implies for a release on a day; the state is None when the table cannot say (the release is not in it, or
+    the day is before AsOf): that is the harness's problem and not the core's"""
+    row = OS_SUPPORT_TABLE.get((family, version))
+    asof = date.fromisoformat(OS_SUPPORT_ASOF)
+    if row is None:
+        return None, "%s %s is not in the table mirrored from the core: a leg's release has to be" % (family, version)
+    if day < asof:
+        return None, "the guest's clock says %s, before the table's AsOf %s: the clock is wrong, and the core answers unknown for such a day" % (day, asof)
+    end = date.fromisoformat(row["ends"])
+    if day > end:
+        state = "security_ended"
+    elif (end - day).days <= OS_SUPPORT_SOON_DAYS:
+        state = "ending_soon"
+    else:
+        state = "supported"
+    said = "the free security updates end %s%s" % (row["ends"], " (month precision)" if row["precision"] == "month" else "")
+    if state != "security_ended" and day > add_months(asof, OS_SUPPORT_STALE_MONTHS):
+        return "unknown", "%s; the table is stale on %s (more than %d months after %s): the core says unknown instead of a state that may be false" % (said, day, OS_SUPPORT_STALE_MONTHS, asof)
+    return state, said
+
 
 lines = []
 P = lines.append
@@ -659,6 +716,196 @@ if started:
 notes = read("prepare-notes").strip()
 if notes:
     show_row("what the old release needed to be refreshed", notes.replace("\n", "; "))
+P("")
+
+
+# ---- what the core says about this system (GET /v1/sys/os) -----------------------------------------------------------------------------------------------------
+
+SYSOS_NO_ANSWER = ("000", "401", "403", "404", "502", "503", "504")     # the route gave no answer: the harness could not ask, or the release has no such route, or the core is not up
+
+
+def load_sysos(tag):
+    """what the guest kept of one call of GET /v1/sys/os (tag before or after): kind '' for an answer that was read, 'missing' for a call that left no usable record of itself,
+    'unreadable' for a 200 whose body is not a JSON object, 'noanswer' for a call that got no answer of the route, 'error' for any other status; problem says why"""
+    n = "sysos-%s" % tag
+    r = dict(tag=tag, kind="", problem="", code="", rc=None, day=None, osrel={}, json=None, data=None)
+    if rc_of(n) is None:
+        r.update(kind="missing", problem="%s.rc is missing: the call of GET /v1/sys/os (%s) did not run" % (n, tag))
+        return r
+    r["rc"] = rc_of(n)
+    r["code"] = read(n + ".code").strip()
+    r["osrel"] = osrel(n + ".os-release")
+    try:
+        r["day"] = datetime.fromtimestamp(float(read(n + ".time").strip()), timezone.utc).date()
+    except (ValueError, OverflowError, OSError):
+        pass
+    gaps = [n + ext for ext, ok in ((".code", re.fullmatch(r"[0-9]{3}", r["code"])), (".os-release", r["osrel"].get("ID")), (".time", r["day"])) if not ok]
+    if gaps:
+        r.update(kind="missing", problem="%s is missing, empty or unreadable: the call of GET /v1/sys/os (%s) left no usable record of itself" % (", ".join(gaps), tag))
+        return r
+    if r["rc"] != 0 or r["code"] in SYSOS_NO_ANSWER:
+        err = " ".join(read(n + ".err").split())[:120]
+        r.update(kind="noanswer", problem="GET /v1/sys/os (%s) got no answer of the route: curl exit %s, HTTP %s%s" % (tag, r["rc"], r["code"], (" (%s)" % err) if err else ""))
+        return r
+    if r["code"] != "200":
+        r.update(kind="error", problem="GET /v1/sys/os (%s) answered HTTP %s" % (tag, r["code"]))
+        return r
+    if not read(n + ".json").strip():
+        r.update(kind="missing", problem="%s.json is missing or empty: the call of GET /v1/sys/os (%s) answered 200 and nothing was kept" % (n, tag))
+        return r
+    try:
+        r["json"] = json.loads(read(n + ".json"))
+    except ValueError:
+        r["json"] = None
+    if not isinstance(r["json"], dict):
+        r.update(kind="unreadable", problem="%s.json is not a JSON object: the answer of GET /v1/sys/os (%s) cannot be read" % (n, tag))
+        return r
+    r["data"] = r["json"].get("data") if isinstance(r["json"].get("data"), dict) else None
+    return r
+
+
+def sysos_text(x, n=90):
+    """a value of the box's own answer, for a cell of a table: printable ASCII, no bar"""
+    return re.sub(r"[^\x20-\x7e]", "?", str(x)).replace("|", "/")[:n]
+
+
+def sysos_get(r, *path):
+    v = r["data"]
+    for k in path:
+        v = v.get(k) if isinstance(v, dict) else None
+    return v
+
+
+def judge_sysos(r, want, against, family, version):
+    """(verdict, reason) for an answer that was read: its identity against `want` (what `against` says it is), its support state against the table for the release the box is on"""
+    d = r["data"]
+    if d is None:
+        return "FAIL", "the answer has no data object: it is not the envelope of the other routes (success, message, data)"
+    bad = ["%s is %r, %s says %r" % (k, d.get(k), against, want[k]) for k in ("id", "version_id", "codename") if (d.get(k) or "") != want[k]]
+    if d.get("known") is not True:
+        bad.append("known is %r, not true" % (d.get("known"),))
+    if d.get("variant"):
+        bad.append("variant is %r (a plain %s has none)" % (d.get("variant"), family.title()))
+    expected, why = os_support_state(family, version, r["day"])
+    if expected is None:
+        return "INVALID", why
+    if sysos_get(r, "support", "state") != expected:
+        bad.append("support.state is %r, the table says %s for %s %s on %s (%s)" % (sysos_get(r, "support", "state"), expected, family, version, r["day"], why))
+    if bad:
+        return "FAIL", "; ".join(bad)
+    return "PASS", "identity %s %s %s as %s says, known, no variant; support.state %s as the table says for %s %s on %s (%s)" % (
+        want["id"], want["version_id"], want["codename"], against, expected, family, version, r["day"], why)
+
+
+def seen_sysos(r):
+    """what the answer said, in a few words, for a verdict that is not made of it"""
+    return "%s %s %s, support.state %s" % (sysos_get(r, "id"), sysos_get(r, "version_id"), sysos_get(r, "codename"), sysos_get(r, "support", "state"))
+
+
+SYSOS = {"before": load_sysos("before")}
+if ran_hop:
+    SYSOS["after"] = load_sysos("after")
+Q_SYSOS_BEFORE = "GET /v1/sys/os before the hop: the system and its support are the box's"
+Q_SYSOS_AFTER = "GET /v1/sys/os after the reboot: the system and its support are the target release's"
+sysos_verdicts = []
+
+sysos_b = SYSOS["before"]
+if sysos_b["kind"] in ("missing", "unreadable", "noanswer"):
+    sysos_verdicts.append((Q_SYSOS_BEFORE, "INVALID", sysos_b["problem"]))
+    invalid(sysos_b["problem"])
+elif sysos_b["kind"] == "error":
+    sysos_verdicts.append((Q_SYSOS_BEFORE, "FAIL", sysos_b["problem"]))
+else:
+    sysos_v, sysos_why = judge_sysos(sysos_b, {"id": sysos_b["osrel"].get("ID", ""), "version_id": sysos_b["osrel"].get("VERSION_ID", ""), "codename": sysos_b["osrel"].get("VERSION_CODENAME", "")},
+                                     "the guest's os-release", L["family"], L["old"])
+    sysos_verdicts.append((Q_SYSOS_BEFORE, sysos_v, sysos_why))
+    if sysos_v == "INVALID":
+        invalid(sysos_why)
+
+if skipped:
+    sysos_verdicts.append((Q_SYSOS_AFTER, "NOT_OFFERED", "the hop was not offered, so nothing was upgraded and nothing was asked after it: neutral, and not a pass"))
+elif not ran_hop:
+    sysos_verdicts.append((Q_SYSOS_AFTER, "INVALID", "the hop phase did not run, so nothing was asked after it"))
+else:
+    sysos_a = SYSOS["after"]
+    if sysos_a["kind"] in ("missing", "unreadable"):
+        sysos_verdicts.append((Q_SYSOS_AFTER, "INVALID", sysos_a["problem"]))
+        invalid(sysos_a["problem"])
+    elif not hop_ran:
+        sysos_verdicts.append((Q_SYSOS_AFTER, "OPEN", "the hop did not run to its end (%s); what the core said all the same: %s" % (hop_why, seen_sysos(sysos_a) if not sysos_a["kind"] else sysos_a["problem"])))
+        open_q("what the core says after the hop: the hop did not run to its end (%s)" % hop_why)
+    elif sysos_a["kind"] == "noanswer" and read("core-after.code").strip() != "200":
+        sysos_verdicts.append((Q_SYSOS_AFTER, "OPEN", "the core did not answer after the reboot (version/current: HTTP %s), so the route could not be asked; %s" % (read("core-after.code").strip() or "none", sysos_a["problem"])))
+        open_q("what the core says after the hop: the core did not answer after the reboot (the row about the core coming back has the finding)")
+    elif sysos_a["kind"] == "noanswer":
+        sysos_verdicts.append((Q_SYSOS_AFTER, "INVALID", sysos_a["problem"]))
+        invalid(sysos_a["problem"])
+    elif sysos_a["kind"] == "error":
+        sysos_verdicts.append((Q_SYSOS_AFTER, "FAIL", sysos_a["problem"]))
+    else:
+        sysos_v, sysos_why = judge_sysos(sysos_a, {"id": L["family"], "version_id": L["new"], "codename": L["new_code"]}, "the target release", L["family"], L["new"])
+        sysos_verdicts.append((Q_SYSOS_AFTER, sysos_v, sysos_why))
+        if sysos_v == "INVALID":
+            invalid(sysos_why)
+
+P("## What the core says about this system")
+P("")
+P("`GET /v1/sys/os`, through the gateway with the loopback secret, asked by the guest twice: on the old release before the hop, and after the reboot of the hop (the core reads "
+  "/etc/os-release at each call, so the second answer shows whether it follows the new release). Each answer is set against the guest's own os-release (before) or the target release "
+  "(after), and its support state against the core's end-of-support table (pkg/ossupport, mirrored in this script, checked on %s) for the day of the call." % OS_SUPPORT_ASOF)
+P("")
+
+
+def sysos_cell(r, fn):
+    if r is None:
+        return "not asked"
+    try:
+        v = fn(r)
+    except (AttributeError, KeyError, TypeError):
+        v = None
+    return sysos_text(v if v not in (None, "") else "n/a")
+
+
+def sysos_extended(r):
+    e = sysos_get(r, "support", "extended")
+    return "%s until %s (%s)" % (e.get("name"), e.get("ends"), e.get("precision")) if isinstance(e, dict) else "none"
+
+
+def sysos_next(r):
+    n = sysos_get(r, "next")
+    return "%s %s %s (%s)" % (n.get("id"), n.get("version_id"), n.get("codename"), n.get("state")) if isinstance(n, dict) else "none"
+
+
+def sysos_table(r, family, version):
+    if r is None or not r["day"]:
+        return "n/a"
+    state, why = os_support_state(family, version, r["day"])
+    return ("%s: %s" % (state, why)) if state else why
+
+
+P("| | before the hop | after the reboot |")
+P("|---|---|---|")
+for sysos_label, sysos_fn in (
+        ("asked (UTC day of the guest's clock)", lambda r: r["day"]),
+        ("HTTP status, curl's exit", lambda r: "%s, %s" % (r["code"], r["rc"])),
+        ("what the guest's os-release says", lambda r: "%s %s %s (%s)" % (r["osrel"].get("ID"), r["osrel"].get("VERSION_ID"), r["osrel"].get("VERSION_CODENAME"), r["osrel"].get("PRETTY_NAME"))),
+        ("id, version_id, codename", lambda r: "%s %s %s" % (sysos_get(r, "id"), sysos_get(r, "version_id"), sysos_get(r, "codename"))),
+        ("pretty_name", lambda r: sysos_get(r, "pretty_name")),
+        ("arch", lambda r: sysos_get(r, "arch")),
+        ("known, variant", lambda r: "%s, %s" % (sysos_get(r, "known"), sysos_get(r, "variant") or "none")),
+        ("support.state", lambda r: sysos_get(r, "support", "state")),
+        ("support.ends (precision)", lambda r: "%s (%s)" % (sysos_get(r, "support", "ends"), sysos_get(r, "support", "precision"))),
+        ("support.extended", sysos_extended),
+        ("support.source", lambda r: sysos_get(r, "support", "source")),
+        ("next", sysos_next)):
+    show_row(sysos_label, sysos_cell(SYSOS["before"], sysos_fn), sysos_cell(SYSOS.get("after"), sysos_fn))
+show_row("what the table says for the release it is judged against", sysos_text(sysos_table(SYSOS["before"], L["family"], L["old"]), 200),
+         sysos_text(sysos_table(SYSOS["after"], L["family"], L["new"]), 200) if "after" in SYSOS else "not asked")
+P("")
+P("| verdict | result | what was compared |")
+P("|---|---|---|")
+for sysos_q, sysos_v, sysos_why in sysos_verdicts:
+    P("| %s | **%s** | %s |" % (sysos_q, sysos_v, sysos_text(sysos_why, 700)))
 P("")
 
 
