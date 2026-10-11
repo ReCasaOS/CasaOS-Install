@@ -104,6 +104,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.23
+
+**The dashboard says when your system has run out of security support**: a badge for Debian and Ubuntu releases whose free or standard security updates have ended (Debian 11 today), with the date, the official upgrade documentation and what ReCasaOS cannot do for you yet.
+
 ## What is in v0.5.22
 
 **After a failed update of Docker across a major version, the dashboard no longer offers a way back that does not work**: tested, the packages went back and the containers did not.
