@@ -39,7 +39,8 @@
 #                                  apt-mark before the first check, as an owner does who wants Docker where it is. The dashboard does not refuse
 #                                  a hold any more: it offers the update with `held` true and the names, refuses a POST that does not confirm the
 #                                  hold (409 `held`), and goes ahead on the owner's word (allow_held true), as `apt-get install --only-upgrade
-#                                  --allow-change-held-packages` would, and leaves the hold alone. What `apt-mark showhold` says when the update
+#                                  --allow-change-held-packages` would, which drops the hold of every package dpkg unpacks: the unit puts it back and
+#                                  says so (HOLDS). What `apt-mark showhold` says when the update
 #                                  is asked for and when it has ended (dpkg's own answer) is recorded (holds-before.txt, holds-after.txt); the
 #                                  proof lifts the hold itself once that is recorded, so that the failure injection can put the box back.
 #
@@ -499,8 +500,8 @@ hold_docker() { apt-mark hold "${PROOF_HOLDS[@]}" >"${OUT}/hold-set.txt" 2>&1; }
 # lift_holds: the held leg's hold, lifted once the update has ended and dpkg's answer is recorded, so that the failure injection can put the box back
 lift_holds() { apt-mark unhold "${PROOF_HOLDS[@]}" >>"${OUT}/hold-set.txt" 2>&1; }
 
-# record_holds <file>: what dpkg itself says is on hold (apt-mark showhold): its exit status on the first line, then the names. The report sets the hold's
-# survival against it: the status of the run says so too, but what dpkg says is the hold
+# record_holds <file>: what dpkg itself says is on hold (apt-mark showhold): its exit status on the first line, then the names. The report judges by it whether the
+# hold is back after the update: the status of the run says so too (holds_kept), but what dpkg says is the hold
 record_holds() {
     local out rc=0
     out="$(apt-mark showhold 2>&1)" || rc=$?
@@ -551,7 +552,7 @@ refusals() {
     [ -n "${PLAN_ID}" ] || abort "the first check has no docker.update.plan_id: the stack under test has no Docker update, or does not offer it on this box"
     CALL_MAX=60 call_as internal containers-before GET /v1/sys/docker/containers
 
-    # a hold is the owner's deliberate act: the update goes ahead over it on his word only, and the hold stays
+    # a hold is the owner's deliberate act: the update goes ahead over it on his word only, and the unit puts the hold back when it has ended
     hold_refusals
 
     # another process holds dpkg's lock (an fcntl lock, which is what dpkg takes and the core asks about)
@@ -622,7 +623,7 @@ update_run() {
 
     snapshot after
     dpkg_dump after
-    # and what dpkg says is on hold now: the update was asked to leave the hold alone
+    # and what dpkg says is on hold now: dpkg dropped the hold of what it unpacked, and the unit has to have put it back
     if [ "${HOLD_RUN:-0}" = 1 ]; then record_holds holds-after.txt; fi
     cp "$(runtime_log)" "${OUT}/docker-update.log" 2>/dev/null || true
     collect_journal unit-journal.txt

@@ -1178,11 +1178,12 @@ case("a plan whose id counts the new packages: dropping one from the list is a d
      mutate=lambda d: jedit(d, "packages-1.json", lambda j: update(j).update(packages=[p for p in pkgs(j) if p["name"] != "libedit2"])))
 
 # the update over a hold: the minor leg that puts docker-ce, docker-ce-cli and containerd.io on hold before its first check and is given `hold`. The check offers the update
-# with held true, the update goes ahead on the confirmation, and dpkg's own answer, the status and the unit's log all say that the hold is still there
+# with held true, the update goes ahead on the confirmation, dpkg drops the hold of every package it unpacks and the unit puts it back, and dpkg's own answer, the status and the
+# unit's log all say that the hold is back
 V_FIRST_HELD = "the first check, with Docker's packages on hold, offers the update with held true and the three held packages named"
-V_HOLDS = "after the update apt-mark showhold (dpkg's own answer) still lists the packages that were on hold"
-V_HELD_STATUS = "the status of the run over a hold says held true, names the held packages, and says the hold was kept"
-V_HELD_LOG = "the log has the HELD line (the packages on hold at the start) and the HOLDS line (those still on hold at the end), the hold untouched"
+V_HOLDS = "after the update apt-mark showhold (dpkg's own answer) lists the packages that were on hold: the unit put the hold back"
+V_HELD_STATUS = "the status of the run over a hold says held true, names the held packages, and says the hold is back (holds_kept)"
+V_HELD_LOG = "the log has the HELD line (the packages on hold at the start) and the HOLDS line (those on hold again at the end), HOLDS before the terminal marker"
 HOLD_HEALTHY = ["Docker update proof, minor leg: PASS", "; docker-ce, docker-ce-cli and containerd.io on hold from before the first check", "## The update over a hold",
                 "**PASS** " + V_FIRST_HELD, "**PASS** " + V_HOLDS, "**PASS** " + V_HELD_STATUS, "**PASS** " + V_HELD_LOG,
                 "before the update containerd.io, docker-ce, docker-ce-cli; after it containerd.io, docker-ce, docker-ce-cli", "The status says held True, holds_kept True",
@@ -1208,7 +1209,7 @@ def hlog(fn):
 
 HELD_LINE = marker("HELD", " ".join(HELD3))
 HOLDS_LINE = marker("HOLDS", " ".join(HELD3))
-case("a healthy minor leg that holds Docker's packages passes: the update goes ahead over the hold and the hold is still there", 0, HOLD_HEALTHY, ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR)
+case("a healthy minor leg that holds Docker's packages passes: the update goes ahead over the hold and the unit puts the hold back", 0, HOLD_HEALTHY, ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR)
 case("other holds on the box are not the proof's business", 0, ["**PASS** " + V_HOLDS], ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR,
      mutate=lambda d: [put(d, n, "exit 0\nlinux-image-amd64\n" + "\n".join(HELD3) + "\nvim\n") for n in ("holds-before.txt", "holds-after.txt")])
 case("the packages in any order, with blank lines and noise between them, are the packages", 0, ["**PASS** " + V_HOLDS], ["**FAIL**", "INVALID", "something apt-mark said"], leg="minor", spec=HOLD_MINOR,
@@ -1237,16 +1238,16 @@ hfails("a run over a hold whose status does not say it was held", V_HELD_STATUS,
 hfails("a run over a hold whose status has no held field", V_HELD_STATUS, hfinal(lambda s: s.pop("held")))
 hfails("a run over a hold whose status names no held package", V_HELD_STATUS, hfinal(lambda s: s.update(held_packages=[])))
 hfails("a run over a hold whose status names two of the three", V_HELD_STATUS, hfinal(lambda s: s.update(held_packages=["containerd.io", "docker-ce"])))
-hfails("a run over a hold whose status says the hold was not kept", V_HELD_STATUS, hfinal(lambda s: s.update(holds_kept=False)))
-hfails("a run over a hold whose status does not say whether it was kept", V_HELD_STATUS, hfinal(lambda s: s.pop("holds_kept")))
-hfails("a run over a hold whose status says it was kept in words and not as a boolean", V_HELD_STATUS, hfinal(lambda s: s.update(holds_kept="true")))
+hfails("a run over a hold whose status says the hold is not back", V_HELD_STATUS, hfinal(lambda s: s.update(holds_kept=False)))
+hfails("a run over a hold whose status does not say whether the hold is back", V_HELD_STATUS, hfinal(lambda s: s.pop("holds_kept")))
+hfails("a run over a hold whose status says the hold is back in words and not as a boolean", V_HELD_STATUS, hfinal(lambda s: s.update(holds_kept="true")))
 # the unit's own words
 hfails("a log with no HELD line (a unit that does not say what it found on hold)", V_HELD_LOG, hlog(lambda ls: [ln for ln in ls if not ln.startswith(PREFIX + "HELD ")]))
 hfails("a log with no HOLDS line (a unit that does not say what it left on hold)", V_HELD_LOG, hlog(lambda ls: [ln for ln in ls if not ln.startswith(PREFIX + "HOLDS ")]))
 hfails("a HELD line that found nothing on hold", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, marker("HELD", "-")))
 hfails("a HELD line that found two of the three", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, marker("HELD", "containerd.io docker-ce")))
 hfails("a HOLDS line with nothing on hold: the hold is gone", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "-")))
-hfails("a HOLDS line that lost a hold, though the status says it was kept", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "containerd.io docker-ce")))
+hfails("a HOLDS line that lost a hold, though the status says it is back", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "containerd.io docker-ce")))
 hfails("a HOLDS line that names a package that was not on hold at the start", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", " ".join(HELD3) + " bash")))
 hfails("a HOLDS line that systemd emptied (the script's variables gone)", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HOLDS_LINE, marker("HOLDS", "")))
 hfails("a HELD line that systemd emptied", V_HELD_LOG, lambda d: replace(d, "docker-update.log", HELD_LINE, marker("HELD", "")))
@@ -1259,20 +1260,25 @@ hfails("a HOLDS line of another nonce is somebody else's text", V_HELD_LOG, lamb
 hfails("two HELD lines", V_HELD_LOG, hlog(lambda ls: [x for ln in ls for x in ([ln, ln] if ln.startswith(PREFIX + "HELD ") else [ln])]))
 hfails("two HOLDS lines", V_HELD_LOG, hlog(lambda ls: [x for ln in ls for x in ([ln, ln] if ln.startswith(PREFIX + "HOLDS ") else [ln])]))
 hfails("a HOLDS line before the HELD line", V_HELD_LOG, hlog(swap_kinds("HELD", "HOLDS")))
-# the unit reads what is still on hold as it ends, which may be after the terminal marker: one HOLDS line right after it is the unit's last word, and nothing else may follow
-case("a HOLDS line right after the terminal marker is the unit's last word", 0, ["**PASS** " + V_HELD_LOG, "**PASS** success: the log has the markers"], ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR,
-     mutate=hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2]]))
-hfails("a HOLDS line after the terminal marker that is followed by output", "success: the log has the markers", hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2], "dpkg: trailing output"]))
+# the unit puts the hold back and says so before it says how the run ended (the status turns terminal on the terminal marker, so a HOLDS line read after it comes too late for
+# holds_kept): a HOLDS line after the terminal marker is a regression, and the log's last line is the terminal marker
+hfails("a HOLDS line right after the terminal marker: the unit said it late", V_HELD_LOG, hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2]]), extra=["**FAIL** success: the log has the markers"])
+hfails("a HOLDS line after the terminal marker that is followed by output", V_HELD_LOG, hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2], "dpkg: trailing output"]),
+       extra=["**FAIL** success: the log has the markers"])
+hfails("a RESTART_PENDING marker and then the HOLDS line", V_HELD_LOG, hlog(lambda ls: ls[:-2] + [marker("RESTART_PENDING", iso(T0 + 190)), ls[-2]]))
+hfails("a FAILED marker and then the HOLDS line", V_HELD_LOG, hlog(lambda ls: ls[:-2] + [marker("FAILED", iso(T0 + 190) + " daemon"), ls[-2]]))
 hfails("two HOLDS lines after the terminal marker", V_HELD_LOG, hlog(lambda ls: ls[:-2] + [ls[-1], ls[-2], ls[-2]]), extra=["**FAIL** success: the log has the markers"])
 hfails("a HOLDS line after the terminal marker, and one before it", V_HELD_LOG, hlog(lambda ls: ls[:-1] + [ls[-1], ls[-2]]))
 hinvalid("no log on the leg that holds Docker's packages", "docker-update.log was not collected", lambda d: remove(d, "docker-update.log"), silent=(V_HELD_LOG,))
 hinvalid("no last status on the leg that holds Docker's packages", "status-final.json holds no status", lambda d: remove(d, "status-final.json"), silent=(V_HELD_STATUS,))
 hfails("a held package that the run removed", "the run removed no package", lambda d: ledit(d, "dpkg-after.tsv", lambda ls: [ln for ln in ls if not ln.startswith("docker-ce-cli\t")]))
 hfails("a held package the run did not upgrade", "dpkg upgraded exactly the plan's upgrades", lambda d: replace(d, "dpkg-after.tsv", "docker-ce-cli\t5:29.8.2-1~debian.12~bookworm\thi", "docker-ce-cli\t5:29.8.1-1~debian.12~bookworm\thi"))
-# a leg that holds nothing does not need the lines a leg that holds something needs
+# a leg that holds nothing does not need the lines a leg that holds something needs, but a HOLDS line it has comes before the terminal marker
 for leg_ in ("major", "minor"):
-    case("a leg that holds nothing passes with the HOLDS line after the terminal marker (%s)" % leg_, 0, ["PASS"], ["**FAIL**", "INVALID"], leg=leg_,
-         mutate=lambda d: [ledit(d, n, lambda ls: ls[:-2] + [ls[-1], ls[-2]]) for n in ("docker-update.log", "docker-update-fail.log")])
+    fails("a HOLDS line after the terminal marker of the run, on a leg that holds nothing (%s)" % leg_, "success: the log has the markers",
+          lambda d: ledit(d, "docker-update.log", lambda ls: ls[:-2] + [ls[-1], ls[-2]]), leg=leg_)
+    fails("a HOLDS line after the terminal marker of the failure run, on a leg that holds nothing (%s)" % leg_, F_LOG,
+          lambda d: ledit(d, "docker-update-fail.log", lambda ls: ls[:-2] + [ls[-1], ls[-2]]), leg=leg_)
     case("a leg that holds nothing passes with the logs of a core that prints no HELD and HOLDS line (%s)" % leg_, 0, ["PASS"], ["**FAIL**", "INVALID"], leg=leg_,
          mutate=lambda d: [ledit(d, n, lambda ls: [ln for ln in ls if not ln.startswith((PREFIX + "HELD ", PREFIX + "HOLDS "))]) for n in ("docker-update.log", "docker-update-fail.log")])
 # `hold` is asked for where the guest put the packages on hold, and nowhere else
@@ -1283,6 +1289,71 @@ case("a report asked for the hold when the guest did not do it", 1, ["INVALID RU
      ["**FAIL** " + V_HOLDS], leg="minor", args=["hold"])
 case("a report given the kill and the hold both, as the leg that does both would", 0, ["PASS", "**PASS** " + V_HOLDS, "kill -9: the log agrees with the status"], ["**FAIL**", "INVALID"], leg="minor",
      spec=dict(HOLD_MINOR, kill=True))
+
+# the rollback command of a run over a hold: the core puts the flag right after --allow-downgrades and ends by putting the hold back on the packages the status names
+# (RollbackCommandHeld); a run that held nothing gets the plain command. The failure run of the leg that holds is made a run over a hold here, as the core reports one
+HOLD_FLAG = "--allow-change-held-packages"
+HOLD_SUFFIX = " && sudo apt-mark hold " + " ".join(HELD3)
+
+
+def held_rollback(plain):
+    return plain.replace("--allow-downgrades ", "--allow-downgrades " + HOLD_FLAG + " ", 1) + HOLD_SUFFIX
+
+
+def held_status(name, command=None, **more):
+    """a mutation: the status in `name` is the one of a run over the three held packages, and its rollback command is command(the plain one), the held shape when None"""
+    def edit(d):
+        def change(j):
+            s = final(j)
+            s.update(held=True, held_packages=list(HELD3))
+            s.update(more)
+            s["rollback_command"] = held_rollback(s["rollback_command"]) if command is None else command(s["rollback_command"])
+        jedit(d, name, change)
+    return edit
+
+
+def held_failure(command=None, **more):
+    """a mutation: the failure run is a run over a hold, with the hold put back: the status, and the HELD and HOLDS lines of its log"""
+    def edit(d):
+        held_status("fail-status-final.json", command, holds_kept=True, **more)(d)
+        jedit(d, "fail-status-final.json", lambda j: final(j).update(log=final(j)["log"].replace(marker("HELD", "-"), marker("HELD", " ".join(HELD3))).replace(marker("HOLDS", "-"), marker("HOLDS", " ".join(HELD3)))))
+        ledit(d, "docker-update-fail.log", lambda ls: [ln[:-1] + " ".join(HELD3) if ln.startswith((PREFIX + "HELD ", PREFIX + "HOLDS ")) and ln.endswith(" -") else ln for ln in ls])
+    return edit
+
+
+def rfails(name, command, **more):
+    fails(name, F_CMD, held_failure(command, **more), leg="minor", spec=HOLD_MINOR)
+
+
+case("a failure over a hold whose status gives the held rollback command passes", 0, ["**PASS** " + F_CMD, "**PASS** " + F_LOG], ["**FAIL**", "INVALID"], leg="minor", spec=HOLD_MINOR,
+     mutate=held_failure())
+rfails("a held run whose rollback command is the plain one (the flag and the hold are missing)", lambda plain: plain)
+rfails("a held run whose rollback command has the flag and does not put the hold back", lambda plain: held_rollback(plain)[:-len(HOLD_SUFFIX)])
+rfails("a held run whose rollback command puts the hold back and has no flag", lambda plain: plain + HOLD_SUFFIX)
+rfails("a held run whose rollback command puts the hold back on two of the three", lambda plain: held_rollback(plain)[:-len(" docker-ce-cli")])
+rfails("a held run whose rollback command puts the hold back on another package", lambda plain: held_rollback(plain)[:-len("docker-ce-cli")] + "bash")
+rfails("a held run whose rollback command names the held packages in another order", lambda plain: plain.replace("--allow-downgrades ", "--allow-downgrades " + HOLD_FLAG + " ", 1)
+       + " && sudo apt-mark hold docker-ce containerd.io docker-ce-cli")
+rfails("a held run whose rollback command has another command after the hold", lambda plain: held_rollback(plain) + "; rm -rf /")
+rfails("a held run whose rollback command has the flag before --allow-downgrades", lambda plain: plain.replace("--allow-downgrades ", HOLD_FLAG + " --allow-downgrades ", 1) + HOLD_SUFFIX)
+rfails("a held run whose rollback command has the flag twice", lambda plain: held_rollback(plain).replace(HOLD_FLAG + " ", HOLD_FLAG + " " + HOLD_FLAG + " ", 1))
+rfails("a held run whose rollback command puts the hold back with no name", lambda plain: held_rollback(plain)[:-len(" ".join(HELD3))])
+rfails("a held run whose status names no held package, though the command does", lambda plain: held_rollback(plain), held_packages=[])
+rfails("a held run whose status names no held package, and whose command puts the hold back on nothing", lambda plain: held_rollback(plain)[:-len(" ".join(HELD3))], held_packages=[])
+rfails("a held run whose status names a package out of the allowlist", lambda plain: plain.replace("--allow-downgrades ", "--allow-downgrades " + HOLD_FLAG + " ", 1) + " && sudo apt-mark hold bash",
+       held_packages=["bash"])
+rfails("a run whose status says held in words and not as a boolean, with the held command", lambda plain: held_rollback(plain), held="true")
+# a run that held nothing gets the plain command: the flag and the hold that is put back are a wrong answer
+fails("a rollback command with the flag, from a run that held nothing", F_CMD, lambda d: jedit(d, "fail-status-final.json", lambda j: final(j).update(
+      rollback_command=final(j)["rollback_command"].replace("--allow-downgrades ", "--allow-downgrades " + HOLD_FLAG + " ", 1))), leg="minor")
+fails("a rollback command that puts a hold back, from a run that held nothing", F_CMD, lambda d: jedit(d, "fail-status-final.json", lambda j: final(j).update(
+      rollback_command=final(j)["rollback_command"] + HOLD_SUFFIX)), leg="minor")
+# the killed run is judged the same way
+case("a killed run over a hold whose status gives the held rollback command passes", 0, ["**PASS** " + K_ROLLBACK], ["**FAIL**", "INVALID"], leg="minor", spec=KILL_MINOR,
+     mutate=held_status("kill-status-final.json"))
+kfails("a killed run over a hold whose rollback command is the plain one", K_ROLLBACK, held_status("kill-status-final.json", lambda plain: plain))
+kfails("a killed run that held nothing whose rollback command has the flag", K_ROLLBACK, lambda d: jedit(d, "kill-status-final.json", lambda j: final(j).update(
+       rollback_command=final(j)["rollback_command"].replace("--allow-downgrades ", "--allow-downgrades " + HOLD_FLAG + " ", 1))))
 
 # a tool of the harness that failed on the guest (a date that cannot read a time, a curl that reaches nothing, an apt that cannot fetch, a docker CLI that
 # cannot run) is not a wrong value of the feature: it is an invalid run, and says nothing about the button. Each case has its twin, the value the feature
