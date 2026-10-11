@@ -30,6 +30,13 @@ name: os-upgrade-measure
 # gateway and AppManagement come back after the reboot without help, and whether an API token issued before the hop is still accepted; dpkg --audit,
 # apt-get check and the failed units before and after; the kernel and /boot; the durations of every step.
 #
+# Every leg also asks the core of the ReCasaOS it installed what it says about the system it runs on: GET /v1/sys/os, a read-only route of the release under test, called by the
+# guest through the gateway with the loopback secret, once on the old release before the hop and once after the reboot (the core reads /etc/os-release at each call, so the second
+# answer proves that it follows the new release). The report judges two verdicts from it: before the hop the identity of the answer is the guest's os-release and its support state
+# is the one the core's end-of-support table implies for the day of the run; after the reboot the same against the target release. A call that did not run, an answer that is
+# not JSON, or a release that has no such route (HTTP 404: the published latest release has to carry it) is an INVALID RUN, never a quiet pass; a FAIL is a finding that leaves
+# the job green, as a NO-GO does.
+#
 # The Ubuntu legs also ask what the tool does to Docker once its source is paused. ubuntu_variant hold holds docker-ce, docker-ce-cli and
 # containerd.io (the rest of Docker's packages and a package that no repository has are the controls); keep leaves nothing held and writes
 # RemoveObsoletes=no in /etc/update-manager/release-upgrades.d: run it twice to have both answers.
