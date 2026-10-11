@@ -586,6 +586,18 @@ def no_boot_change_after(name):
 
 L = "d11-12"
 flips("sandbox: the sandbox's update fails", L, Q_SANDBOX, "NO-GO", lambda d: rec(d, "sandbox-paused-update", "E: The repository does not have a Release file.\n", 100), must_have=["The repository does not have a Release file"])
+flips("sandbox: its sources do not name the target (the rewriter left the old suite): OPEN, not a GO, and the Docker row that reads its plan is OPEN too", L, Q_SANDBOX, "OPEN",
+      lambda d: put(d, "sandbox-paused-sources.txt", "==> sources.list <==\ndeb http://deb.debian.org/debian bullseye main\n"), must_have=["the sandbox did not see bookworm: its sources do not name it"])
+case("sandbox: ... and the frozen Docker row, which reads that plan, is OPEN with it", L, 0, rows={Q_SANDBOX: "OPEN", Q_FROZEN: "OPEN"}, mutate=lambda d: put(d, "sandbox-paused-sources.txt", "==> sources.list <==\ndeb http://deb.debian.org/debian bullseye main\n"),
+     must_have=["the sandbox plan could not be read, or did not see bookworm"], must_not_have=["INVALID RUN"])
+flips("sandbox: its plan has nothing to do (0 upgraded, 0 new): OPEN", L, Q_SANDBOX, "OPEN", lambda d: rec(d, "sandbox-paused-dist-upgrade", apt_summary(0, 0, 0, 0)), must_have=["its plan has nothing to do"])
+case("sandbox: a comment that names the target is not a source", L, 0, rows={Q_SANDBOX: "OPEN"}, mutate=lambda d: put(d, "sandbox-paused-sources.txt", "==> sources.list <==\n# deb http://deb.debian.org/debian bookworm main\ndeb http://deb.debian.org/debian bullseye main\n"))
+invalid("sandbox: a mirror that could not be reached during the update of the sandbox is invalid, not a NO-GO", L, "the mirror could not be reached while the sandbox updated (sandbox-paused-update: Temporary failure resolving 'deb.debian.org')",
+        lambda d: rec(d, "sandbox-paused-update", "Err:1 http://deb.debian.org/debian bookworm InRelease\n  Temporary failure resolving 'deb.debian.org'\nE: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Temporary failure resolving 'deb.debian.org'\n", 100))
+invalid("sandbox: the same for the sandbox that keeps Docker's source", L, "the mirror could not be reached while the sandbox updated (sandbox-kept-update",
+        lambda d: rec(d, "sandbox-kept-update", "E: Failed to fetch https://download.docker.com/linux/debian/dists/bullseye/InRelease  Could not connect to download.docker.com:443 (1.2.3.4), connection timed out\nConnection timed out\n", 100))
+case("sandbox: an update that fails because the repository has no Release file is a real answer: NO-GO, and not an invalid run", L, 0, rows={Q_SANDBOX: "NO-GO"}, must_not_have=["INVALID RUN"],
+     mutate=lambda d: rec(d, "sandbox-paused-update", "E: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  404  Not Found\nE: The repository 'http://deb.debian.org/debian bookworm InRelease' does not have a Release file.\n", 100))
 flips("sandbox: -s dist-upgrade fails", L, Q_SANDBOX, "NO-GO", lambda d: rec(d, "sandbox-paused-dist-upgrade", "E: Unable to correct problems, you have held broken packages.\n", 100))
 flips("sandbox: -s upgrade fails", L, Q_SANDBOX, "NO-GO", lambda d: rec(d, "sandbox-paused-upgrade", "E: x\n", 100))
 flips("sandbox: /etc/apt is not as it was", L, Q_SANDBOX, "NO-GO", lambda d: put(d, "etc-apt-after-sandbox.sha", "c" * 64 + "\n"), must_have=["/etc/apt CHANGED"])

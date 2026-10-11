@@ -776,16 +776,32 @@ if DEBIAN:
     P("/etc/apt before and after the sandbox: %s. /var/lib/apt/lists: %s." % ("identical" if same_etc else "DIFFERENT", "identical" if same_lists else "DIFFERENT"))
     P("")
     pr = sims["paused"]["rcs"]
+    # a mirror that could not be reached is the runner's network, not an answer of apt about the release
+    for nm in ("sandbox-paused-update", "sandbox-kept-update"):
+        lost = net_failure(read(nm + ".txt")) if rc_of(nm) not in (None, 0) else ""
+        if lost:
+            invalid("the mirror could not be reached while the sandbox updated (%s: %s): that is not an answer of apt about the release; dispatch the leg again" % (nm, lost))
     if None not in pr:
         sandbox_ok = pr == [0, 0, 0] and same_etc and same_lists
+        # ... and a sandbox that never saw the target release says nothing about it: its sources have to name it (a mirror in a form the rewriter does not read leaves the old suite), and its plan
+        # has to be a real one
+        names_target = re.search(r"^(?!\s*#).*\b%s\b" % re.escape(L["new_code"]), read("sandbox-paused-sources.txt"), re.M) is not None
+        plan0 = sims["paused"]["counts"]
+        saw_target = names_target and bool(plan0) and plan0[0] + plan0[1] > 0
         why = []
         for part, text in (("update", read("sandbox-paused-update.txt")), ("-s upgrade", read("sandbox-paused-upgrade.txt")), ("-s dist-upgrade", read("sandbox-paused-dist-upgrade.txt"))):
             e = first_error(text)
             if e:
                 why.append("%s: %s" % (part, e))
-        answer("The sandbox plan works (else one-phase confirmation, the guards staying in the unit)", "GO" if sandbox_ok else "NO-GO",
-               ("update, -s upgrade and -s dist-upgrade exit %s, /etc/apt and the lists untouched" % "/".join(str(x) for x in pr)) if sandbox_ok else
-               "exits %s; /etc/apt %s, lists %s%s" % ("/".join(str(x) for x in pr), "untouched" if same_etc else "CHANGED", "untouched" if same_lists else "CHANGED", ("; " + "; ".join(why)) if why else ""))
+        if sandbox_ok and not saw_target:
+            sandbox_ok = None
+            answer("The sandbox plan works (else one-phase confirmation, the guards staying in the unit)", "OPEN", "the sandbox did not see %s: %s" % (
+                L["new_code"], "its sources do not name it" if not names_target else "its plan has nothing to do (0 upgraded, 0 newly installed)"))
+            open_q("the sandbox plan: it never saw %s, so it says nothing about the real transaction" % L["new_code"])
+        else:
+            answer("The sandbox plan works (else one-phase confirmation, the guards staying in the unit)", "GO" if sandbox_ok else "NO-GO",
+                   ("update, -s upgrade and -s dist-upgrade exit %s, /etc/apt and the lists untouched, and the sandbox saw %s" % ("/".join(str(x) for x in pr), L["new_code"])) if sandbox_ok else
+                   "exits %s; /etc/apt %s, lists %s%s" % ("/".join(str(x) for x in pr), "untouched" if same_etc else "CHANGED", "untouched" if same_lists else "CHANGED", ("; " + "; ".join(why)) if why else ""))
         # how close is it to the real transaction
         if ran_hop and "minimal" in steps and "full" in steps:
             real = {k: apt_parse(step_text(k)) for k in ("minimal", "full")}
@@ -1183,7 +1199,7 @@ if ran_hop:
                "the paused simulation removes %s; after the reboot docker-ce/-cli/containerd.io are %s; the engine answers %s (before %s)" % (
                    ("an engine package: " + ", ".join(sorted(set(pr_rem)))) if pr_rem else "no engine package", "the same installed versions" if dock_kept_after else "NOT all the same installed versions", dsv["after"] or "nothing", dsv["before"]))
     elif DEBIAN:
-        answer("The docker-ce built for %s survives the hop (its source paused)" % L["old_code"], "OPEN", "the sandbox plan could not be read")
+        answer("The docker-ce built for %s survives the hop (its source paused)" % L["old_code"], "OPEN", "the sandbox plan could not be read, or did not see %s" % L["new_code"])
     # the box after the reboot answers for itself
     fact("Docker after the reboot", "answers %s (before %s); packages: %s" % (dsv["after"], dsv["before"], kv("docker-after.txt").get("packages", "")[:200]))
 
