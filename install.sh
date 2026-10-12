@@ -1139,9 +1139,25 @@ Check_Service_status() {
     done
 }
 
+# The port the gateway listens on, from its ini file: the key `port` alone. The
+# file also has `httpsport` and may have other keys that end in "port", which a
+# plain grep for "port" picks up too (and which made the address shown at the
+# end of an install read "http://192.168.1.15:https 80"). 80 when the file does
+# not say a number.
+Get_Gateway_Port() {
+    local lines port
+    lines=$(${sudo_cmd} cat "${CASA_CONF_PATH}" 2>/dev/null | sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*//p') || lines=""
+    port="${lines%%$'\n'*}"
+    port="${port//[[:space:]]/}"
+    if [[ ! "${port}" =~ ^[0-9]+$ ]]; then
+        port=80
+    fi
+    echo "${port}"
+}
+
 # Get the physical NIC IP
 Get_IPs() {
-    PORT=$(${sudo_cmd} cat ${CASA_CONF_PATH} | grep port | sed 's/port=//')
+    PORT=$(Get_Gateway_Port)
     ALL_NIC=$($sudo_cmd ls /sys/class/net/ | grep -v "$(ls /sys/devices/virtual/net/)")
     for NIC in ${ALL_NIC}; do
         IP=$($sudo_cmd ifconfig "${NIC}" | grep inet | grep -v 127.0.0.1 | grep -v inet6 | awk '{print $2}' | sed -e 's/addr://g')
