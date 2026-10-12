@@ -184,6 +184,11 @@ check("the report says what the pin step names (the box's own release, which apt
 NOT_RUNNING_ROWS = tuple(("*", code, "info", "why", "not_running", "ok") for code in ("docker_swarm", "containers_policy", "containers_ports"))
 check("the report asks that a held Docker with a newer one on offer is an info that says held true (on d11, where the clean box has the warning of a newer Docker; u22 has none on offer)",
       STEP_BY_ID["held_docker"]["expect"] == (("d11", "docker_update_pending", "info", "held", True, "warn"),), STEP_BY_ID["held_docker"]["expect"])
+# the clean box has Docker's source alone, a note: another vendor's file is what makes it a warning, and the core names that file, and not Docker's, in other_files
+THIRD_PARTY_ROW = ("*", "sources_third_party", "warn", "other_files", ["osr-third-party.list"], "info")
+check("the report asks that another vendor's source file turns the clean box's note on Docker's source (info) into a warning that names the file, and only it, in other_files",
+      STEP_BY_ID["sources_third_party"]["expect"] == (THIRD_PARTY_ROW,) and STEP_BY_ID["sources_third_party"]["sev"] == "warn" and STEP_BY_ID["sources_third_party"]["needle"] == "osr-third-party",
+      {k: STEP_BY_ID["sources_third_party"].get(k) for k in ("expect", "sev", "needle")})
 check("the report asks that a Docker that is not running leaves the swarm, the policy and the ports checks saying `not_running` as info, whichever way it is stopped",
       STEP_BY_ID["docker_down"]["expect"] == NOT_RUNNING_ROWS and STEP_BY_ID["docker_down_service"]["expect"] == NOT_RUNNING_ROWS, (STEP_BY_ID["docker_down"]["expect"], STEP_BY_ID["docker_down_service"]["expect"]))
 check("the report asks that the step that stops only Docker's service finds the service inactive after the call, and lets the `apps` check say it could not ask (AppManagement is stopped with it)",
@@ -528,7 +533,7 @@ V_LOCK_KEPT = "with dpkg's lock held, the lock was still its holder's after the 
 V_CLEAN_NO_REFUSE = "a clean cloud image with ReCasaOS and Docker has no refuse"
 V_CLEAN_STATE = "the state of the clean box is ready or attention"
 V_CLEAN_AGREE = "the four answers on the unchanged box say the same thing (same codes, same severities)"
-V_CLEAN_DOCKER = "Docker's apt source is listed as a third-party source (warn), named"
+V_CLEAN_DOCKER = "Docker's apt source alone is a note on the clean box: sources_third_party is info, names it in docker_files, has no other_files"
 V_CLEAN_SNAPSHOT = "the reminder to take a snapshot is always there (snapshot_reminder, info)"
 V_CLEAN_SMART = "the clean box has smartctl, as the installer puts smartmontools on every box, and the core finds it: smart_failed is not `no_smartctl` (a virtio disk says `unavailable`, an info)"
 GLOBAL_VERDICTS = [V_ROUTE, V_SHAPE, V_COUNTS, V_HOP, V_FIELDS, V_TEXT, V_TIME, V_BUDGET, V_SYSOS, V_INV_FILES, V_INV_UNITS, V_INV_PORTS, V_LOCK_FAST, V_LOCK_BUSY, V_LOCK_KEPT,
@@ -929,13 +934,30 @@ if not os.environ.get("GUEST_ONLY"):
     # on u22: the d11 guest is built to have the newer Docker that makes docker_update_pending a warning, and a clean box that does not say so is an INVALID RUN of its own (below)
     fails("clean: the four answers do not agree (a severity that changed)", V_CLEAN_AGREE, lambda d: set_sev(d, "ready-base", "docker_update_pending", "info"), leg="u22", extra=["docker_update_pending"])
     fails("clean: the four answers do not agree (a warning that is an info in one of them)", V_CLEAN_AGREE, lambda d: set_sev(d, "ready-inv-2", "backup_age", "info"), extra=["backup_age"])
-    fails("clean: Docker's source is not named in the third-party warning", V_CLEAN_DOCKER,
-          lambda d: [jdata(d, n, lambda x: [c.update(title="Third-party sources", detail="one file", data={"unknown": False, "files": ["x.list"]}) for c in x["checks"] if c["code"] == "sources_third_party"]) for n in ("ready-base",)])
-    fails("clean: the third-party source is only an info", V_CLEAN_DOCKER, lambda d: set_sev(d, "ready-base", "sources_third_party", "info"))
-    fails("clean: no third-party check at all", V_CLEAN_DOCKER, lambda d: drop_check(d, "ready-base", "sources_third_party"))
+    # Docker's source is on the clean box (the installer puts it there), and alone it is a note: an info that names it in docker_files and has no other_files (the core's contract for the code)
+    def third(fn):
+        return lambda d: jdata(d, "ready-base", lambda x: [fn(c) for c in x["checks"] if c["code"] == "sources_third_party"])
+
+    case("clean: Docker's source alone is an info that names it in docker_files, with no other_files", 0, ["**PASS** " + V_CLEAN_DOCKER, "sources_third_party is info, docker_files docker.list, hosts download.docker.com"], ["FAIL", "INVALID"])
+    case("clean: the same on Ubuntu", 0, ["**PASS** " + V_CLEAN_DOCKER, "sources_third_party is info, docker_files docker.list, hosts download.docker.com"], ["FAIL", "INVALID"], leg="u22")
+    fails("clean: Docker's source alone is warned of, as the core did before (a warning, and no other_files)", V_CLEAN_DOCKER, lambda d: set_sev(d, "ready-base", "sources_third_party", "warn"), extra=["sources_third_party is warn, docker_files docker.list"])
+    fails("clean: Docker's source is not named in docker_files", V_CLEAN_DOCKER, third(lambda c: c["data"].pop("docker_files")), extra=["no docker_files"])
+    fails("clean: docker_files is empty", V_CLEAN_DOCKER, third(lambda c: c["data"].update(docker_files=[])), extra=["no docker_files"])
+    fails("clean: a source that is not Docker's (a warning that has other_files)", V_CLEAN_DOCKER,
+          lambda d: (set_sev(d, "ready-base", "sources_third_party", "warn"), third(lambda c: c["data"].update(other_files=["x.list"]))(d)), extra=["sources_third_party is warn", "other_files x.list"])
+    fails("clean: an info that has other_files (another source is a warning, and only that)", V_CLEAN_DOCKER, third(lambda c: c["data"].update(other_files=["x.list"])), extra=["other_files x.list"])
+    fails("clean: an empty other_files is still an other_files", V_CLEAN_DOCKER, third(lambda c: c["data"].update(other_files=[])), extra=["other_files"])
+    fails("clean: the host is not Docker's", V_CLEAN_DOCKER, third(lambda c: c["data"].update(hosts=["repo.example.invalid"])), extra=["hosts repo.example.invalid"])
+    fails("clean: no host at all", V_CLEAN_DOCKER, third(lambda c: c["data"].pop("hosts")), extra=["no hosts"])
+    fails("clean: no third-party check at all", V_CLEAN_DOCKER, lambda d: drop_check(d, "ready-base", "sources_third_party"), extra=["not in the answer"])
+    fails("clean: the third-party check is ok (it says nothing of Docker's source)", V_CLEAN_DOCKER, lambda d: set_sev(d, "ready-base", "sources_third_party", "ok"))
+    fails("clean: the third-party check has no data", V_CLEAN_DOCKER, third(lambda c: c.update(data={})))
     fails("clean: no reminder to take a snapshot", V_CLEAN_SNAPSHOT, lambda d: drop_check(d, "ready-base", "snapshot_reminder"))
     fails("clean: the reminder to take a snapshot is ok (it must always be said)", V_CLEAN_SNAPSHOT, lambda d: set_sev(d, "ready-base", "snapshot_reminder", "ok"))
     case("clean: a box with warnings is attention, and is clean", 0, ["**PASS** " + V_CLEAN_STATE, "State **attention**"], ["FAIL"])
+    # Docker's source, a note, does not keep the box at attention: with nothing else to warn of (on the guests a newer Docker on offer, on d11, and the backup nobody made are what do), it is ready
+    case("clean: a box that has Docker's source and no warning is ready, and is clean", 0, ["**PASS** " + V_CLEAN_STATE, "**PASS** " + V_CLEAN_DOCKER, "State **ready**"], ["FAIL", "INVALID"], leg="u22",
+         mutate=lambda d: [set_sev(d, n, "backup_age", "info") for n in all_calls(d)])
 
     # the guest has smartctl (install.sh puts smartmontools on every box): a virtio disk does not answer SMART, so smart_failed is an info that says `unavailable`, and never `no_smartctl`
     def smart_why(d, why, call="ready-base"):
@@ -1124,7 +1146,11 @@ if not os.environ.get("GUEST_ONLY"):
             invalid("step %s: the dirty call left no answer %s" % (sid, tag), "no answer was recorded for step-%s-dirty" % sid, lambda d, D=D: remove(d, D + ".code"), leg=leg_, silent=[f_fires(s)])
             invalid("step %s: the call after the undo left no answer %s" % (sid, tag), "no answer was recorded for step-%s-clean" % sid, lambda d, C=C: remove(d, C + ".code"), leg=leg_, silent=[f_undone(s)])
             invalid("step %s: skipped on a system where it exists %s" % (sid, tag), "step %s: the guest skipped it" % sid, lambda d, sid=sid: put(d, "step-%s.skipped" % sid, "no reason\n"), leg=leg_)
-    fails("step held: a warning of the clean box that is a refuse with the dirt is a check that fires with it", f_alone(STEP_BY_ID["held"]), lambda d: make(d, "step-held-dirty", "sources_third_party", "refuse"),
+    fails("step held: a warning of the clean box that is a refuse with the dirt is a check that fires with it", f_alone(STEP_BY_ID["held"]), lambda d: make(d, "step-held-dirty", "backup_age", "refuse"),
+          extra=["also fires: backup_age"])
+    fails("step held: a note of the clean box (Docker's source, an info) that is a refuse with the dirt is a check that fires with it", f_alone(STEP_BY_ID["held"]), lambda d: make(d, "step-held-dirty", "sources_third_party", "refuse"),
+          extra=["also fires: sources_third_party"])
+    fails("step held: a note of the clean box (Docker's source) that is a warning with the dirt is a check that fires with it", f_alone(STEP_BY_ID["held"]), lambda d: make(d, "step-held-dirty", "sources_third_party", "warn"),
           extra=["also fires: sources_third_party"])
     fails("step held: a warning of the clean box that is a refuse with the dirt (`could not find out`) is one too", f_alone(STEP_BY_ID["held"]),
           lambda d: [make(d, "step-held-dirty", "docker_update_pending", "refuse"), jdata(d, "step-held-dirty", lambda x: [c["data"].update(unknown=True) for c in x["checks"] if c["code"] == "docker_update_pending"])],
@@ -1146,6 +1172,22 @@ if not os.environ.get("GUEST_ONLY"):
          mutate=lambda d: [set_sev(d, n, "reboot_first", "refuse") for n in all_calls(d) if n.startswith("ready-") or n in ("step-reboot_first-dirty", "step-reboot_first-clean")])
     case("step sources_third_party: the clean answer that already names the needle cannot tell it from the dirt (INVALID)", 1, ["INVALID RUN", "already names osr-third-party"], [],
          mutate=lambda d: jdata(d, "ready-base", lambda x: [c.update(detail=c["detail"] + " osr-third-party.list") for c in x["checks"] if c["code"] == "sources_third_party"]))
+    # Docker's source is a note on the clean box, and the dirt (another vendor's file) is what makes it a warning that names the file in other_files; after the undo it is the note again
+    for leg_ in ("d11", "u22"):
+        S3, STEP3 = "step-sources_third_party-dirty", STEP_BY_ID["sources_third_party"]
+        fails("step sources_third_party: the dirt is named in files and not in other_files (%s)" % leg_, f_expect(STEP3, THIRD_PARTY_ROW),
+              lambda d: jdata(d, S3, lambda x: [c["data"].pop("other_files") for c in x["checks"] if c["code"] == "sources_third_party"]), leg=leg_)
+        fails("step sources_third_party: Docker's own file is in other_files as well as the dirt (%s)" % leg_, f_expect(STEP3, THIRD_PARTY_ROW),
+              lambda d: jdata(d, S3, lambda x: [c["data"].update(other_files=["docker.list", "osr-third-party.list"]) for c in x["checks"] if c["code"] == "sources_third_party"]), leg=leg_,
+              extra=['and other_files is ["docker.list", "osr-third-party.list"]'])
+        fails("step sources_third_party: the dirt is another vendor's file and other_files names another file (%s)" % leg_, f_expect(STEP3, THIRD_PARTY_ROW),
+              lambda d: jdata(d, S3, lambda x: [c["data"].update(other_files=["x.list"]) for c in x["checks"] if c["code"] == "sources_third_party"]), leg=leg_)
+        fails("step sources_third_party: after the undo the source is warned of still, as the core did before (%s)" % leg_, f_undone(STEP3),
+              lambda d: set_sev(d, "step-sources_third_party-clean", "sources_third_party", "warn"), leg=leg_)
+        fails("step sources_third_party: after the undo the note is gone (the check is ok) (%s)" % leg_, f_undone(STEP3),
+              lambda d: set_sev(d, "step-sources_third_party-clean", "sources_third_party", "ok"), leg=leg_)
+        case("step sources_third_party: with a clean box that is not Docker's alone (a warning) the dirt cannot be told from what is there: NOT TESTABLE (%s)" % leg_, 1,
+             ["**NOT TESTABLE** " + f_expect(STEP3, THIRD_PARTY_ROW), "**FAIL** " + V_CLEAN_DOCKER], ["INVALID"], leg=leg_, mutate=lambda d: set_sev(d, "ready-base", "sources_third_party", "warn"))
     case("a step whose undo failed taints the ones after it: they are not judged, never a FAIL of the feature", 1,
          ["INVALID RUN", "step held: the undo failed", "not judged: the undo of step held failed"], ["**FAIL** step", "**PASS** step broken_dpkg"],
          mutate=lambda d: [put(d, "step-held.undo-rc", "1\n"), make(d, "step-held-clean", "held", "refuse"), make(d, "step-broken_dpkg-dirty", "held", "refuse"), make(d, "step-broken_dpkg-clean", "held", "refuse")])
@@ -2224,6 +2266,9 @@ if not os.environ.get("REPORT_ONLY"):
     check("the workflow says that the first call of the route is the first call of the invariance window and that a 404 there ends the run, and no more that the guest calls the route as soon as the services answer",
           "The first call of the route is the first call of the invariance window" in wf_flat and "a 404 ends the run there" in wf_flat
           and "as soon as the gateway, the core and AppManagement answer" not in wf_flat and "the first call of GET /v1/sys/os/readiness there is" in wf_flat, "")
+    check("the workflow says that Docker's own source is a note on the clean box (info, named in docker_files, no other_files), that another vendor's source is what makes it a warning, and that the releases before the note fail that verdict",
+          "alone it is a note (info) that names it in docker_files and has no other_files" in wf_flat and "a source that is not Docker's is what makes `sources_third_party` a warning, and only then does it have other_files" in wf_flat
+          and "the releases before that change (v0.5.25 among them) warn of Docker's source, and the clean-box verdict of Docker's source fails on them" in wf_flat, "")
     check("the workflow says which calls the invariance window sees and which it does not: the five calls of the route and GET /v1/sys/os, not the answer of the unchanged box nor the other calls of the matrix",
           "the five calls of the route and GET /v1/sys/os named above" in wf_flat and "not the answer of the unchanged box that the steps are compared with, nor the other calls of the matrix" in wf_flat, "")
     check("the guest script ends the run with the very words the workflow says", "the release under test has no /v1/sys/os/readiness" in guest_text)

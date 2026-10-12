@@ -17,9 +17,9 @@
  },
  "counts": {
   "refuse": 1,
-  "warn": 3,
+  "warn": 2,
   "ok": 43,
-  "info": 4
+  "info": 5
  },
  "checks": [
   {
@@ -33,25 +33,6 @@
     "unknown": false
    },
    "action": "review_sources"
-  },
-  {
-   "code": "sources_third_party",
-   "severity": "warn",
-   "title": "Some software comes from other sources than Debian or Ubuntu",
-   "detail": "These sources are paused for the upgrade, since the next release may not exist on them. Docker's is put back, for the new release, after it. The others stay paused until you turn them on.",
-   "data": {
-    "docker_files": [
-     "docker.list"
-    ],
-    "files": [
-     "docker.list"
-    ],
-    "hosts": [
-     "download.docker.com"
-    ],
-    "unknown": false
-   },
-   "action": "none"
   },
   {
    "code": "docker_update_pending",
@@ -73,6 +54,25 @@
    "detail": "AppManagement has no backup that succeeded: if the upgrade ends badly, the apps' data is what is lost. Make a backup of the apps first.",
    "data": {
     "none": true,
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "sources_third_party",
+   "severity": "info",
+   "title": "Docker's package source is put back after the upgrade",
+   "detail": "It is put aside for the upgrade and rewritten for the new release afterwards. Nothing to do.",
+   "data": {
+    "docker_files": [
+     "docker.list"
+    ],
+    "files": [
+     "docker.list"
+    ],
+    "hosts": [
+     "download.docker.com"
+    ],
     "unknown": false
    },
    "action": "none"
@@ -469,5 +469,5 @@
    }
   }
  ],
- "text": "ReCasaOS: can this machine be upgraded to the next release?\nChecked: 2026-10-11T20:15:02Z\nResult: Not ready: 1 blocker.\nFrom: Debian GNU/Linux 11 (bullseye)\nTo: Debian 12 (bookworm)\nBlockers 1, warnings 3, notes 4, ok 43\n\nBLOCKERS\n[sources_pin] A release is pinned\n    A pin or a default release makes apt prefer one release over the others, and the upgrade between two releases does not work with it. It has to go for the upgrade.\n    default_release: bullseye\n    files: \n    suggested: review_sources\n\nWARNINGS\n[sources_third_party] Some software comes from other sources than Debian or Ubuntu\n    These sources are paused for the upgrade, since the next release may not exist on them. Docker's is put back, for the new release, after it. The others stay paused until you turn them on.\n    docker_files: docker.list\n    files: docker.list\n    hosts: download.docker.com\n[docker_update_pending] A newer Docker is waiting\n    apt knows a newer version of Docker than the one installed. Its source is paused during the upgrade, so it is not updated by it: update Docker first, with the button of the System packages window, so that the upgrade starts from a Docker that is up to date.\n    candidate: 5:29.8.0-1~debian.11~bullseye\n    installed: 5:28.0.4-1~debian.11~bullseye\n    package: docker-ce\n[backup_age] No backup of the apps was made\n    AppManagement has no backup that succeeded: if the upgrade ends badly, the apps' data is what is lost. Make a backup of the apps first.\n    none: true\n\nNOTES\n[sources_network_checked_later] The mirrors and the security archive are checked when the plan is made\n    Whether the next release exists on each mirror, and whether the security archive still has its files, needs the network: the plan step asks, and this report does not.\n[smart_failed] The health of the disk was not checked\n    The disk of the system did not say whether it is failing (it is a virtual disk, or its controller does not pass the question on), it sleeps and was not woken to be asked, the stack it is on has more disks than are asked, or smartctl is not installed here: this report cannot tell.\n    checked: false\n    disks: /dev/vda\n    why: unavailable\n[network_names] The names of the network cards are checked before the restart\n    A new release can name the network cards differently, and a card that has another name than the one the machine's settings give it has no network. The step that comes before the restart looks at each card, and pins its name when it would change. This report does not.\n[snapshot_reminder] Take a snapshot, or keep a way to the console\n    An upgrade of the system cannot be undone. Before it, take a snapshot of the machine (a virtual machine's, a provider's), or be sure of a screen and a keyboard, a serial line or a console in front of it: a tunnel such as Tailscale goes down with the network card. This report cannot check that you did.\n\nOK (43): unsupported_os, vendor_os, unproven_arch, container, virt_xen, no_systemd, not_root, busy, apps, reboot_first, uptime_long, broken_dpkg, held, held_docker, sources_cdrom, sources_alias, sources_proposed, sources_format, sources_backports, sources_firmware, foreign_arch, keyring_old, host_services, dkms, merged_usr, bootloader, root_zfs, root_luks, md_degraded, log_on_tmpfs, disk_root, disk_archives, disk_boot, ram, power, fstab_unresolved, fstab_network, network_uplink, docker_swarm, docker_origin, docker_down, containers_policy, containers_ports\n\nThis check changes nothing on the machine.\n"
+ "text": "ReCasaOS: can this machine be upgraded to the next release?\nChecked: 2026-10-11T20:15:02Z\nResult: Not ready: 1 blocker.\nFrom: Debian GNU/Linux 11 (bullseye)\nTo: Debian 12 (bookworm)\nBlockers 1, warnings 2, notes 5, ok 43\n\nBLOCKERS\n[sources_pin] A release is pinned\n    A pin or a default release makes apt prefer one release over the others, and the upgrade between two releases does not work with it. It has to go for the upgrade.\n    default_release: bullseye\n    files: \n    suggested: review_sources\n\nWARNINGS\n[docker_update_pending] A newer Docker is waiting\n    apt knows a newer version of Docker than the one installed. Its source is paused during the upgrade, so it is not updated by it: update Docker first, with the button of the System packages window, so that the upgrade starts from a Docker that is up to date.\n    candidate: 5:29.8.0-1~debian.11~bullseye\n    installed: 5:28.0.4-1~debian.11~bullseye\n    package: docker-ce\n[backup_age] No backup of the apps was made\n    AppManagement has no backup that succeeded: if the upgrade ends badly, the apps' data is what is lost. Make a backup of the apps first.\n    none: true\n\nNOTES\n[sources_third_party] Docker's package source is put back after the upgrade\n    It is put aside for the upgrade and rewritten for the new release afterwards. Nothing to do.\n    docker_files: docker.list\n    files: docker.list\n    hosts: download.docker.com\n[sources_network_checked_later] The mirrors and the security archive are checked when the plan is made\n    Whether the next release exists on each mirror, and whether the security archive still has its files, needs the network: the plan step asks, and this report does not.\n[smart_failed] The health of the disk was not checked\n    The disk of the system did not say whether it is failing (it is a virtual disk, or its controller does not pass the question on), it sleeps and was not woken to be asked, the stack it is on has more disks than are asked, or smartctl is not installed here: this report cannot tell.\n    checked: false\n    disks: /dev/vda\n    why: unavailable\n[network_names] The names of the network cards are checked before the restart\n    A new release can name the network cards differently, and a card that has another name than the one the machine's settings give it has no network. The step that comes before the restart looks at each card, and pins its name when it would change. This report does not.\n[snapshot_reminder] Take a snapshot, or keep a way to the console\n    An upgrade of the system cannot be undone. Before it, take a snapshot of the machine (a virtual machine's, a provider's), or be sure of a screen and a keyboard, a serial line or a console in front of it: a tunnel such as Tailscale goes down with the network card. This report cannot check that you did.\n\nOK (43): unsupported_os, vendor_os, unproven_arch, container, virt_xen, no_systemd, not_root, busy, apps, reboot_first, uptime_long, broken_dpkg, held, held_docker, sources_cdrom, sources_alias, sources_proposed, sources_format, sources_backports, sources_firmware, foreign_arch, keyring_old, host_services, dkms, merged_usr, bootloader, root_zfs, root_luks, md_degraded, log_on_tmpfs, disk_root, disk_archives, disk_boot, ram, power, fstab_unresolved, fstab_network, network_uplink, docker_swarm, docker_origin, docker_down, containers_policy, containers_ports\n\nThis check changes nothing on the machine.\n"
 }

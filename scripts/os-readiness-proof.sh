@@ -646,7 +646,7 @@ dirty_sources_proposed() {
 undo_sources_proposed() { src_undo osr-proposed.list; }
 undone_sources_proposed() { src_undone osr-proposed.list; }
 
-# a source that is neither Debian's nor Ubuntu's, with a file name the report must name. Docker's own source is one too, and is on the clean box already.
+# another vendor's source, with a file name the report must name (other_files). Docker's own source is on the clean box already, as a note: this file is what makes it a warning.
 dirty_sources_third_party() { src_dirty osr-third-party.list "deb https://repo.example.invalid/osr-third-party stable main"; }
 undo_sources_third_party() { src_undo osr-third-party.list; }
 undone_sources_third_party() { src_undone osr-third-party.list; }

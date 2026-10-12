@@ -128,7 +128,9 @@ STEPS = [
     Step("sources_pin", "sources_pin", what="APT::Default-Release naming the box's own release (apt fails on one that no source offers)", watch=True),
     Step("sources_pin_prefs", "sources_pin", what="a preferences file pinning another release"),
     Step("sources_proposed", "sources_proposed", what="a proposed-updates source"),
-    Step("sources_third_party", "sources_third_party", mode="names", sev="warn", needle="osr-third-party", what="a third-party source file"),
+    # Docker's own source is on the clean box, a note (info). Another vendor's file is what makes it a warning, and the core names that file, and only it, in other_files
+    Step("sources_third_party", "sources_third_party", mode="names", sev="warn", needle="osr-third-party", what="another vendor's source file (Docker's own is a note already)",
+         expect=(("*", "sources_third_party", "warn", "other_files", ["osr-third-party.list"], "info"),)),
     Step("foreign_arch_empty", "foreign_arch", mode="quiet", what="dpkg --add-architecture i386 and no package of it"),
     Step("foreign_arch", "foreign_arch", what="dpkg --add-architecture i386 and a package installed from it", watch=True),
     Step("reboot_first", "reboot_first", what="/var/run/reboot-required"),
@@ -514,7 +516,7 @@ V_LOCK_KEPT = "with dpkg's lock held, the lock was still its holder's after the 
 V_CLEAN_NO_REFUSE = "a clean cloud image with ReCasaOS and Docker has no refuse"
 V_CLEAN_STATE = "the state of the clean box is ready or attention"
 V_CLEAN_AGREE = "the four answers on the unchanged box say the same thing (same codes, same severities)"
-V_CLEAN_DOCKER = "Docker's apt source is listed as a third-party source (warn), named"
+V_CLEAN_DOCKER = "Docker's apt source alone is a note on the clean box: sources_third_party is info, names it in docker_files, has no other_files"
 V_CLEAN_SNAPSHOT = "the reminder to take a snapshot is always there (snapshot_reminder, info)"
 V_CLEAN_SMART = "the clean box has smartctl, as the installer puts smartmontools on every box, and the core finds it: smart_failed is not `no_smartctl` (a virtio disk says `unavailable`, an info)"
 F_FIRES = "step %s: the dirty box makes `%s` %s"
@@ -787,9 +789,17 @@ if all(clean):
         maps = [sev_map(c) for c in clean]
         verdict(V_CLEAN_AGREE, all(m == maps[0] for m in maps), "same %d codes" % len(maps[0]) if all(m == maps[0] for m in maps) else
                 "they differ in: " + few(sorted({k for m in maps for k in m if any(o.get(k) != m.get(k) for o in maps)})))
+    # Docker's source is on every box of ReCasaOS and the upgrade rewrites it for the new release: alone, the core says it as a note (info) that names it in docker_files and has no
+    # other_files, which is only for the sources that are not Docker's (and only then is the finding a warning). hosts is then Docker's own host alone
     third = check_of(base, "sources_third_party")
-    verdict(V_CLEAN_DOCKER, third is not None and third.get("severity") == "warn" and "docker" in json.dumps(third).lower(),
-            "sources_third_party is %s%s" % (third.get("severity") if third else "not in the answer", "" if not third or "docker" in json.dumps(third).lower() else ", and does not name Docker's source"))
+    d3 = third.get("data") if third is not None and isinstance(third.get("data"), dict) else {}
+    docker_files, hosts = d3.get("docker_files"), d3.get("hosts")
+    def listed(v):
+        return few(v) if isinstance(v, list) else cell(v)
+    verdict(V_CLEAN_DOCKER, third is not None and third.get("severity") == "info" and isinstance(docker_files, list) and bool(docker_files) and "other_files" not in d3 and hosts == ["download.docker.com"],
+            "sources_third_party is not in the answer" if third is None else "sources_third_party is %s, %s%s, %s" % (
+                cell(third.get("severity"), 10), "docker_files " + listed(docker_files) if docker_files else "no docker_files",
+                ", other_files " + listed(d3["other_files"]) if "other_files" in d3 else "", "hosts " + listed(hosts) if hosts else "no hosts"))
     snap = check_of(base, "snapshot_reminder")
     verdict(V_CLEAN_SNAPSHOT, snap is not None and snap.get("severity") == "info", "snapshot_reminder is %s" % (snap.get("severity") if snap else "not in the answer"))
     # the guest has smartctl (install.sh puts smartmontools on every box), so a core that says it has none does not find it. A box that has none is not the box the proof is for
