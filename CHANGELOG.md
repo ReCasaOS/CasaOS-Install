@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.25] - 2026-10-12
+
+Components: CasaOS `v0.4.71`, CasaOS-UI `v0.4.85`. Unchanged from v0.5.24: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The dashboard can tell whether your machine could be upgraded to the next release of its operating system, and why not.** In the *Operating system* window, a new *Readiness* section runs a check of about 55 points on Debian 11 and 12 and Ubuntu 22.04 and 24.04 (amd64): the identity of the system and whether it is a variant ReCasaOS does not cover (Raspberry Pi OS, Armbian, DietPi, Proxmox, OpenMediaVault, TrueNAS), whether a package operation or an app operation is running, an unfinished dpkg state, held packages, the apt sources (cdrom, release nicknames such as `stable`, proposed and backports suites, third-party sources, the format), DKMS drivers and Secure Boot, the boot loader, the disks, the free space, the memory, the network, Docker (its origin, a swarm, a daemon that is down, a newer version on offer, containers that would not come back, published ports) and the date of the last backup. It reads the machine and **changes nothing on it**: no cache is refreshed, no lock is taken, no service is started, and a point it cannot tell is shown as "could not check", never as fine. Each finding says what it found, what to do, and which are only warnings. The report can be copied as text. ReCasaOS does not upgrade the operating system yet: this is the first step, and a refusal here is what the upgrade itself will later refuse on.
+
+### Fixed
+
+- **The address shown at the end of an install is right again** (ReCasaOS/CasaOS#21): on a box whose `gateway.ini` lists `httpsport=` before `port=80`, the installer read both lines as the port and printed `http://192.168.1.15:https 80` with a bash syntax error. It reads the key `port` alone now, and the release workflow checks that on every release.
+
+### Changed
+
+- **A new proof, `os-readiness-proof`**, boots a Debian 11 and an Ubuntu 22.04 guest, makes the machine dirty one way at a time (a held package, a release nickname in the sources, a stopped Docker, an unfinished dpkg journal, a full disk, and so on) and checks that the report names that cause alone, that it names nothing after the dirt is undone, and that the report changes nothing on the guest (the directories of dpkg, apt and ReCasaOS are hashed before and after).
+
 ## [0.5.24] - 2026-10-11
 
 Components: CasaOS `v0.4.70`, CasaOS-UI `v0.4.84`. Unchanged from v0.5.23: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

@@ -104,6 +104,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.25
+
+**The dashboard can tell whether your machine could be upgraded to the next release of its operating system, and why not**: a read-only check of about 55 points in the *Operating system* window. It changes nothing on the machine, and ReCasaOS does not upgrade the system for you yet.
+
 ## What is in v0.5.24
 
 **The dashboard updates Docker when its packages are on hold**, if you confirm it: it runs what the terminal command with `--allow-change-held-packages` runs, which drops the hold of the packages it updates, then puts the hold back and tells you whether it did.
