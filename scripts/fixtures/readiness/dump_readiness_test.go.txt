@@ -1,0 +1,216 @@
+package osreadiness
+
+// A throwaway test, not part of the core: it writes the Answer the core itself makes (NewAnswer(Run(...)))
+// for the box the readiness proof makes in CI, clean, and for each of the ways the proof dirties it. The
+// boxes are the core's own fake probe made to look like the proof's guest (a Debian 11 and an Ubuntu 22.04
+// cloud image with ReCasaOS, Docker and four witness containers): the shape and the severities are the core's,
+// what the real tools print on a real guest is not here and is what the VM legs are for.
+//
+//	FIXTURE_OUT=<dir> go test -count=1 -run TestDumpReadinessFixtures ./pkg/osreadiness/
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+type proofLeg struct {
+	name       string
+	codename   string
+	to         string
+	dockerOS   string // the path of Docker's repository: debian or ubuntu
+	dockerInst string
+	dockerCand string
+}
+
+var proofLegs = []proofLeg{
+	{name: "d11", codename: "bullseye", to: "bookworm", dockerOS: "debian", dockerInst: "5:28.0.4-1~debian.11~bullseye", dockerCand: "5:29.8.0-1~debian.11~bullseye"},
+	{name: "u22", codename: "jammy", to: "noble", dockerOS: "ubuntu", dockerInst: "5:29.8.0-1~ubuntu.22.04~jammy", dockerCand: "5:29.8.0-1~ubuntu.22.04~jammy"},
+}
+
+var proofSteps = []string{
+	"held", "held_docker", "broken_dpkg", "sources_cdrom", "sources_file", "sources_alias", "sources_pin", "sources_pin_prefs", "sources_proposed",
+	"sources_third_party", "foreign_arch_empty", "foreign_arch", "reboot_first", "fstab_unresolved", "containers_policy", "containers_ports_host",
+	"containers_ports_publish", "busy_lock", "busy_unit", "busy_packagekit", "disk_boot", "apps", "docker_down_service", "docker_down",
+}
+
+const (
+	proofRootUUID = "1e2f3a4b-0000-4000-8000-0000000000aa"
+	witnessP53    = `{"name":"/p-pub53","image":"img","restart":"unless-stopped","network":"bridge","mounts":[],"ports":{"80/tcp":[{"HostIp":"127.0.0.2","HostPort":"53"}]}}` + "\n"
+	// what `smartctl -n standby -H /dev/vda` says on a QEMU guest with a virtio disk (smartctl 7.2), with the exit status 1
+	virtioSmartctl = "smartctl 7.2 2020-12-30 r5155 [x86_64-linux-5.10.0-35-amd64] (local build)\nCopyright (C) 2002-20, Bruce Allen, Christian Franke, www.smartmontools.org\n\n" +
+		"/dev/vda: Unable to detect device type\nPlease specify device type with the -d option.\n\nUse smartctl -h to get a usage summary\n\n"
+)
+
+func dockerPolicyFor(l proofLeg, installed, candidate string) string {
+	repo := "        500 https://download.docker.com/linux/" + l.dockerOS + " " + l.codename + "/stable amd64 Packages\n"
+	text := "docker-ce:\n  Installed: " + installed + "\n  Candidate: " + candidate + "\n  Version table:\n"
+	if candidate != installed {
+		text += "     " + candidate + " 500\n" + repo
+	}
+	return text + " *** " + installed + " 500\n" + repo + "        100 /var/lib/dpkg/status\n"
+}
+
+// proofBox is the clean box of a leg, and then what the step does to it.
+func proofBox(t *testing.T, l proofLeg, step string) *fakeProbe {
+	f := newBox(t)
+	if l.name == "u22" {
+		ubuntu2204(f)
+		f.set("/etc/apt/sources.list", "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted\ndeb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted\n"+
+			"deb http://archive.ubuntu.com/ubuntu/ jammy universe\ndeb http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse\n"+
+			"deb http://security.ubuntu.com/ubuntu jammy-security main restricted\n")
+		f.set("/proc/sys/kernel/osrelease", "5.15.0-139-generic\n")
+		f.remove("/boot/vmlinuz-5.10.0-35-amd64", "/boot/vmlinuz-5.10.0-34-amd64")
+		f.set("/boot/vmlinuz-5.15.0-139-generic", "kernel")
+	}
+	f.set("/etc/apt/sources.list.d/docker.list", "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/"+l.dockerOS+" "+l.codename+" stable\n")
+	f.set("/proc/uptime", "612.40 540.10\n")
+	// a fresh guest: no backup made yet, the disk is a virtio one, root is found by its uuid
+	f.remove("/var/lib/casaos/backups/runs.json")
+	f.set("/proc/self/mountinfo", "22 1 253:1 / / rw,relatime shared:1 - ext4 /dev/vda1 rw,errors=remount-ro\n")
+	f.on(lsblkOf("/dev/vda1:part", "/dev/vda:disk"), 0, argvLsblk("/dev/vda1")...)
+	// the guest HAS smartctl: install.sh puts smartmontools on every box (7.2-1 on Debian 11 and on Ubuntu 22.04). A virtio disk does not pass SMART on: smartctl cannot tell the
+	// type of the device and exits with status 1, which the core says is `unavailable` (an info). `no_smartctl` would be a box without the tool, which this one is not.
+	f.on(virtioSmartctl, 1, argvSmart("/dev/vda")...)
+	f.set("/etc/fstab", "UUID="+proofRootUUID+"\t/\text4\trw,discard,errors=remount-ro\t0 1\n")
+	f.set("/dev/disk/by-uuid/"+proofRootUUID, "")
+	f.remove("/dev/disk/by-label/cloudimg-rootfs")
+	if l.name == "u22" {
+		f.installed(pkg("grub-pc", "2.06-2ubuntu7")+pkg("grub-efi-amd64-signed", "1.187.9+2.06-2ubuntu14.4"), bootloaderPackages...)
+		f.set("/var/cache/debconf/config.dat", "Name: grub-pc/install_devices\nTemplate: grub-pc/install_devices\nValue: /dev/vda\nFlags: seen\n")
+		f.set("/dev/vda", "")
+	}
+	// Docker from Docker's repository, and the witnesses
+	f.installed(pkg("docker-ce", l.dockerInst), "docker-ce", "docker.io")
+	f.on(dockerPolicyFor(l, l.dockerInst, l.dockerCand), 0, aptPolicyArgs("docker-ce")...)
+	witnesses := []string{inspected("p-always", "always", false), inspected("p-unless-stopped", "unless-stopped", false), inspected("p-db", "unless-stopped", false),
+		inspected("p-web", "unless-stopped", false, "80/tcp:18081")}
+	running(witnesses...)(f)
+
+	switch step {
+	case "":
+	case "held":
+		f.on(held("libc6"), 0, argvQuery()...)
+	case "held_docker":
+		f.on("hi \tdocker-ce\tamd64\t"+l.dockerInst+"\n", 0, argvQuery()...)
+	case "broken_dpkg":
+		f.set("/var/lib/dpkg/updates/0001", "")
+	case "sources_cdrom":
+		f.set("/etc/apt/sources.list.d/osr-cdrom.list", "deb cdrom:[Readiness proof disc 1]/ "+l.codename+" main\n")
+	case "sources_file":
+		f.set("/etc/apt/sources.list.d/osr-file.list", "deb [trusted=yes] file:/srv/osr-local-repo ./\n")
+	case "sources_alias":
+		line := "deb http://deb.debian.org/debian stable main\n"
+		if l.name == "u22" {
+			line = "deb http://archive.ubuntu.com/ubuntu devel main\n"
+		}
+		f.set("/etc/apt/sources.list.d/osr-alias.list", line)
+	case "sources_pin":
+		f.on("APT::Install-Recommends \"true\";\nAPT::Default-Release \""+l.codename+"\";\nDir::Cache \"var/cache/apt\";\n", 0, argvConfigDump...)
+	case "sources_pin_prefs":
+		f.set("/etc/apt/preferences.d/99osr-pin", "Package: *\nPin: release n="+l.to+"\nPin-Priority: 100\n")
+	case "sources_proposed":
+		line := "deb http://deb.debian.org/debian " + l.codename + "-proposed-updates main\n"
+		if l.name == "u22" {
+			line = "deb http://archive.ubuntu.com/ubuntu jammy-proposed main universe\n"
+		}
+		f.set("/etc/apt/sources.list.d/osr-proposed.list", line)
+	case "sources_third_party":
+		f.set("/etc/apt/sources.list.d/osr-third-party.list", "deb https://repo.example.invalid/osr-third-party stable main\n")
+	case "foreign_arch_empty":
+		f.on("i386\n", 0, argvForeign...)
+	case "foreign_arch":
+		f.on("i386\n", 0, argvForeign...)
+		f.on(pkgArch("osr-foreign", "i386", "1.0"), 0, argvQuery()...)
+	case "reboot_first":
+		f.set("/var/run/reboot-required", "")
+	case "fstab_unresolved":
+		f.set("/etc/fstab", "UUID="+proofRootUUID+"\t/\text4\trw,discard,errors=remount-ro\t0 1\nUUID=0a1b2c3d-0000-4000-8000-000000000001 /mnt/osr-missing ext4 defaults 0 2\n")
+	case "containers_policy":
+		running(append(witnesses, inspected("p-no", "no", false))...)(f)
+	case "containers_ports_host":
+		running(append(witnesses, inspected("p-hostnet", "unless-stopped", true))...)(f)
+	case "containers_ports_publish":
+		running(append(witnesses, witnessP53)...)(f)
+	case "busy_lock":
+		f.busyReason = "another package manager holds dpkg's lock"
+	case "busy_unit":
+		f.busyReason = "casaos-package-update is running"
+	case "busy_packagekit":
+		// PackageKit runs, as it does on a stock Ubuntu for five minutes after an apt run: the core does not ask about it
+		f.on("active\n", 0, argvUnit("packagekit.service")...)
+	case "disk_boot":
+		for _, p := range []string{"/", "/usr", "/boot", "/var/cache/apt/archives"} {
+			f.free[p] = 200 << 20
+		}
+	case "apps":
+		f.appsErr = errors.New("the box cannot ask AppManagement")
+	case "docker_down_service":
+		// Docker's service stopped and its socket left listening, and AppManagement stopped with it (it would connect to the socket
+		// again within a second, and start Docker): the daemon is not asked, and the apps check cannot ask AppManagement
+		dockerService("inactive", "loaded")(f)
+		f.set(dockerSocket, "")
+		f.appsErr = errors.New("the box cannot ask AppManagement")
+	case "docker_down":
+		dockerService("inactive", "loaded")(f)
+		f.remove(dockerSocket)
+	default:
+		t.Fatalf("no such step %q", step)
+	}
+	return f
+}
+
+func TestDumpReadinessFixtures(t *testing.T) {
+	out := os.Getenv("FIXTURE_OUT")
+	if out == "" {
+		t.Skip("FIXTURE_OUT is not set")
+	}
+	for _, l := range proofLegs {
+		dir := filepath.Join(out, l.name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, step := range append([]string{""}, proofSteps...) {
+			f := proofBox(t, l, step)
+			answer := NewAnswer(Run(context.Background(), f, Options{}))
+			body, err := json.MarshalIndent(answer, "", " ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := step
+			if name == "" {
+				name = "clean"
+			}
+			if err := os.WriteFile(filepath.Join(dir, name+".json"), append(body, '\n'), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if step == "docker_down" || step == "docker_down_service" {
+				// the daemon of a service that does not run is not asked: not by the client, not by a command that opens the socket
+				for _, argv := range f.attemptedCommands() {
+					if argv[0] == "docker" && strings.Join(argv, " ") != "docker --version" {
+						t.Fatalf("%s/%s: the core asked the daemon: %q", l.name, step, argv)
+					}
+				}
+			}
+			if step == "busy_packagekit" {
+				for _, argv := range f.attemptedCommands() {
+					if strings.Contains(strings.Join(argv, " "), "packagekit") {
+						t.Fatalf("%s/%s: the core asked about PackageKit: %q", l.name, step, argv)
+					}
+				}
+			}
+			var bad []string
+			for _, c := range answer.Checks {
+				if c.Severity != OK {
+					bad = append(bad, fmt.Sprintf("%s=%s", c.Code, c.Severity))
+				}
+			}
+			t.Logf("%s/%s: %s, %d checks: %s", l.name, name, answer.State, len(answer.Checks), strings.Join(bad, " "))
+		}
+	}
+}

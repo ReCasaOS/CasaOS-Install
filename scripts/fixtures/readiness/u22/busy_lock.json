@@ -1,0 +1,466 @@
+{
+ "checked_at": "2026-10-11T20:15:02Z",
+ "state": "blocked",
+ "hop": {
+  "from": {
+   "id": "ubuntu",
+   "version_id": "22.04",
+   "codename": "jammy",
+   "pretty_name": "Ubuntu 22.04.5 LTS"
+  },
+  "to": {
+   "id": "ubuntu",
+   "version_id": "24.04",
+   "codename": "noble",
+   "pretty_name": "Ubuntu 24.04 LTS (noble)"
+  }
+ },
+ "counts": {
+  "refuse": 1,
+  "warn": 2,
+  "ok": 41,
+  "info": 6
+ },
+ "checks": [
+  {
+   "code": "busy",
+   "severity": "refuse",
+   "title": "Another update or package operation is running",
+   "detail": "another package manager holds dpkg's lock.",
+   "data": {
+    "source": "maintenance",
+    "unknown": false
+   },
+   "action": "wait_for_package_manager"
+  },
+  {
+   "code": "sources_third_party",
+   "severity": "warn",
+   "title": "Some software comes from other sources than Debian or Ubuntu",
+   "detail": "These sources are paused for the upgrade, since the next release may not exist on them. Docker's is put back, for the new release, after it. The others stay paused until you turn them on.",
+   "data": {
+    "docker_files": [
+     "docker.list"
+    ],
+    "files": [
+     "docker.list"
+    ],
+    "hosts": [
+     "download.docker.com"
+    ],
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "backup_age",
+   "severity": "warn",
+   "title": "No backup of the apps was made",
+   "detail": "AppManagement has no backup that succeeded: if the upgrade ends badly, the apps' data is what is lost. Make a backup of the apps first.",
+   "data": {
+    "none": true,
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "sources_backports",
+   "severity": "info",
+   "title": "The backports lines will be dropped",
+   "detail": "Backports are made for one release: the upgrade removes these lines, and the packages that came from them are upgraded with the rest.",
+   "data": {
+    "files": [
+     "sources.list"
+    ],
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "sources_network_checked_later",
+   "severity": "info",
+   "title": "The mirrors and the security archive are checked when the plan is made",
+   "detail": "Whether the next release exists on each mirror, and whether the security archive still has its files, needs the network: the plan step asks, and this report does not.",
+   "data": {
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "smart_failed",
+   "severity": "info",
+   "title": "The health of the disk was not checked",
+   "detail": "The disk of the system did not say whether it is failing (it is a virtual disk, or its controller does not pass the question on), it sleeps and was not woken to be asked, the stack it is on has more disks than are asked, or smartctl is not installed here: this report cannot tell.",
+   "data": {
+    "checked": false,
+    "disks": [
+     "/dev/vda"
+    ],
+    "unknown": false,
+    "why": "unavailable"
+   },
+   "action": "none"
+  },
+  {
+   "code": "network_names",
+   "severity": "info",
+   "title": "The names of the network cards are checked before the restart",
+   "detail": "A new release can name the network cards differently, and a card that has another name than the one the machine's settings give it has no network. The step that comes before the restart looks at each card, and pins its name when it would change. This report does not.",
+   "data": {
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "snapshot_reminder",
+   "severity": "info",
+   "title": "Take a snapshot, or keep a way to the console",
+   "detail": "An upgrade of the system cannot be undone. Before it, take a snapshot of the machine (a virtual machine's, a provider's), or be sure of a screen and a keyboard, a serial line or a console in front of it: a tunnel such as Tailscale goes down with the network card. This report cannot check that you did.",
+   "data": {
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "not_offered",
+   "severity": "info",
+   "title": "Whether Canonical offers this upgrade is not checked here",
+   "detail": "Canonical opens each upgrade when it thinks it ready, and says so in metadata that is read from the network. The plan step asks for it; this report does not.",
+   "data": {
+    "unknown": false
+   },
+   "action": "none"
+  },
+  {
+   "code": "unsupported_os",
+   "severity": "ok",
+   "title": "The operating system is one the upgrade is for",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "vendor_os",
+   "severity": "ok",
+   "title": "The system is a plain Debian or Ubuntu",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "unproven_arch",
+   "severity": "ok",
+   "title": "The architecture is amd64",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "container",
+   "severity": "ok",
+   "title": "The system is not a container",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "virt_xen",
+   "severity": "ok",
+   "title": "The system is not a Xen guest",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "no_systemd",
+   "severity": "ok",
+   "title": "systemd is the init system",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "not_root",
+   "severity": "ok",
+   "title": "ReCasaOS runs as root",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "apps",
+   "severity": "ok",
+   "title": "No app has an operation in progress",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "reboot_first",
+   "severity": "ok",
+   "title": "No restart is waiting",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "uptime_long",
+   "severity": "ok",
+   "title": "The machine has not run for too long",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "broken_dpkg",
+   "severity": "ok",
+   "title": "dpkg is in a clean state",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "held",
+   "severity": "ok",
+   "title": "No package is on hold",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "held_docker",
+   "severity": "ok",
+   "title": "Docker's packages are not on hold",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "sources_cdrom",
+   "severity": "ok",
+   "title": "No source is a disc or a local directory",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "sources_alias",
+   "severity": "ok",
+   "title": "No source names a release by an alias",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "sources_pin",
+   "severity": "ok",
+   "title": "No release is pinned",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "sources_proposed",
+   "severity": "ok",
+   "title": "No source is the proposed updates",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "sources_format",
+   "severity": "ok",
+   "title": "Every source file can be read",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "foreign_arch",
+   "severity": "ok",
+   "title": "No package comes from another architecture",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "host_services",
+   "severity": "ok",
+   "title": "No server software with its own migrations is installed",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "dkms",
+   "severity": "ok",
+   "title": "No driver is built from source",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "merged_usr",
+   "severity": "ok",
+   "title": "/bin, /sbin and /lib are links into /usr",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "bootloader",
+   "severity": "ok",
+   "title": "The boot loader is GRUB, and can be updated",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "root_zfs",
+   "severity": "ok",
+   "title": "The system is not on ZFS",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "root_luks",
+   "severity": "ok",
+   "title": "The system is not on an encrypted disk",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "md_degraded",
+   "severity": "ok",
+   "title": "No software RAID array is degraded",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "log_on_tmpfs",
+   "severity": "ok",
+   "title": "The log of ReCasaOS is kept on a disk",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "disk_root",
+   "severity": "ok",
+   "title": "There is room on / and /usr",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "disk_archives",
+   "severity": "ok",
+   "title": "There is room for the packages to download",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "disk_boot",
+   "severity": "ok",
+   "title": "There is room on /boot",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "ram",
+   "severity": "ok",
+   "title": "There is memory for the upgrade",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "power",
+   "severity": "ok",
+   "title": "The machine is not running on a battery",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "fstab_unresolved",
+   "severity": "ok",
+   "title": "Every mount at start has its device",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "fstab_network",
+   "severity": "ok",
+   "title": "The mounts at start are in order",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "network_uplink",
+   "severity": "ok",
+   "title": "The machine is reached by a cable",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "docker_swarm",
+   "severity": "ok",
+   "title": "Docker is not part of a swarm",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "docker_origin",
+   "severity": "ok",
+   "title": "Docker comes from Docker's own repository",
+   "data": {
+    "installed": true,
+    "origin": "docker-repository",
+    "unknown": false
+   }
+  },
+  {
+   "code": "docker_down",
+   "severity": "ok",
+   "title": "The Docker daemon answers",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "docker_update_pending",
+   "severity": "ok",
+   "title": "Docker is up to date",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "containers_policy",
+   "severity": "ok",
+   "title": "The containers that run come back by themselves",
+   "data": {
+    "unknown": false
+   }
+  },
+  {
+   "code": "containers_ports",
+   "severity": "ok",
+   "title": "No container is the machine's DNS or web server",
+   "data": {
+    "unknown": false
+   }
+  }
+ ],
+ "text": "ReCasaOS: can this machine be upgraded to the next release?\nChecked: 2026-10-11T20:15:02Z\nResult: Not ready: 1 blocker.\nFrom: Ubuntu 22.04.5 LTS\nTo: Ubuntu 24.04 LTS (noble)\nBlockers 1, warnings 2, notes 6, ok 41\n\nBLOCKERS\n[busy] Another update or package operation is running\n    another package manager holds dpkg's lock.\n    source: maintenance\n    suggested: wait_for_package_manager\n\nWARNINGS\n[sources_third_party] Some software comes from other sources than Debian or Ubuntu\n    These sources are paused for the upgrade, since the next release may not exist on them. Docker's is put back, for the new release, after it. The others stay paused until you turn them on.\n    docker_files: docker.list\n    files: docker.list\n    hosts: download.docker.com\n[backup_age] No backup of the apps was made\n    AppManagement has no backup that succeeded: if the upgrade ends badly, the apps' data is what is lost. Make a backup of the apps first.\n    none: true\n\nNOTES\n[sources_backports] The backports lines will be dropped\n    Backports are made for one release: the upgrade removes these lines, and the packages that came from them are upgraded with the rest.\n    files: sources.list\n[sources_network_checked_later] The mirrors and the security archive are checked when the plan is made\n    Whether the next release exists on each mirror, and whether the security archive still has its files, needs the network: the plan step asks, and this report does not.\n[smart_failed] The health of the disk was not checked\n    The disk of the system did not say whether it is failing (it is a virtual disk, or its controller does not pass the question on), it sleeps and was not woken to be asked, the stack it is on has more disks than are asked, or smartctl is not installed here: this report cannot tell.\n    checked: false\n    disks: /dev/vda\n    why: unavailable\n[network_names] The names of the network cards are checked before the restart\n    A new release can name the network cards differently, and a card that has another name than the one the machine's settings give it has no network. The step that comes before the restart looks at each card, and pins its name when it would change. This report does not.\n[snapshot_reminder] Take a snapshot, or keep a way to the console\n    An upgrade of the system cannot be undone. Before it, take a snapshot of the machine (a virtual machine's, a provider's), or be sure of a screen and a keyboard, a serial line or a console in front of it: a tunnel such as Tailscale goes down with the network card. This report cannot check that you did.\n[not_offered] Whether Canonical offers this upgrade is not checked here\n    Canonical opens each upgrade when it thinks it ready, and says so in metadata that is read from the network. The plan step asks for it; this report does not.\n\nOK (41): unsupported_os, vendor_os, unproven_arch, container, virt_xen, no_systemd, not_root, apps, reboot_first, uptime_long, broken_dpkg, held, held_docker, sources_cdrom, sources_alias, sources_pin, sources_proposed, sources_format, foreign_arch, host_services, dkms, merged_usr, bootloader, root_zfs, root_luks, md_degraded, log_on_tmpfs, disk_root, disk_archives, disk_boot, ram, power, fstab_unresolved, fstab_network, network_uplink, docker_swarm, docker_origin, docker_down, docker_update_pending, containers_policy, containers_ports\n\nThis check changes nothing on the machine.\n"
+}
