@@ -15,11 +15,17 @@ name: os-readiness-proof
 #     GET /v1/sys/os/readiness there is (the one most likely to write something lazily: it is the first call of the window, made once its first snapshot is
 #     taken), GET /v1/sys/os, three more calls of the route, and one more while another process holds dpkg's lock (the call must neither wait for it nor take it).
 #     Only /var/log/casaos may differ. Nothing else is hashed: not /tmp, not /run, not /home or /root (a tool that writes there, as `dkms status` may in $TMPDIR, is not seen), and the
-#     report says so. A control (two snapshots a few seconds apart) tells what changes by itself, and that is left out and named. A service that changed between the
-#     two snapshots and that no call of the window can have caused is left out and named too: PID 1's own journal of the window (pid1-window.jsonl, `journalctl _PID=1 -o json`)
-#     says when each unit started or stopped, and a unit whose every event lies outside every call of the window (each widened by 3 s on both sides) is the box's own (on an
-#     Ubuntu systemd-timedated, a bus-activated service, starts about every five minutes whatever the report does); a change inside a call, or one that the journal cannot
-#     place (no file, no event of the unit, an event whose time cannot be read), fails. The guest first waits (four
+#     report says so. A control tells what changes by itself, and that is left out and named: two snapshots of the box, with two calls of GET /v1/sys/version/current at its
+#     start and a wait between the snapshots of about five minutes (320 s, CONTROL_SECONDS of the guest script), as long as the cadence of what a box starts by itself: on an Ubuntu
+#     something starts systemd-timedated, a bus-activated service, about every five minutes whatever the report does, and it is gone 30 s later, so that a control of a few seconds
+#     almost never saw it and a start inside the window was a false FAIL. A service that has an entry in PID 1's own journal of the control (pid1-control.jsonl, `journalctl _PID=1
+#     -o json`, taken right after the second snapshot, from 2 s before the control's start to 1 s after its end) started or stopped by itself during the control: it is noise wherever
+#     else it changes, left out of the verdict on the units and named with the time. A journal that cannot be believed (no file, an empty one, a line that is not a JSON object, a UNIT
+#     that is not a string, a time that is not a plausible one) leaves nothing out: the false red may come back, never a false pass. What this does not see: a service that the report
+#     itself starts AND that the box also starts by itself every few minutes is hidden by that noise (nothing the report does talks to timedate1, which starts systemd-timedated: the
+#     guest's busctl monitor of its callers and the unit's journal stay as diagnostics, printed by a verdict on the units that fails), and a file or a listening socket that changes by
+#     itself in five minutes is left out of its verdict as well. The control makes each leg about five minutes longer (the step that proves has 50 minutes and the job 75: a run takes
+#     a fraction of them). The guest first waits (four
 #     minutes at the most, or the run is invalid) for AppManagement's own check of the images, which renames a new /var/lib/casaos/image_updates.json into
 #     place three minutes after its start and would be taken for a write of the report. On an Ubuntu the last apt call of the preparation wakes PackageKit, which
 #     leaves by itself five minutes later and would be a unit that changed in the window: it is stopped there, and what it was is written down;

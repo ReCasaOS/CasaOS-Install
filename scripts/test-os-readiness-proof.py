@@ -299,7 +299,7 @@ def build(d, leg):
                         "apt apt 2.2.4 (amd64)\nsmartctl /usr/sbin/smartctl\npackagekit_after_apt %s\npackagekit inactive\n"
                         % (DOCKER_OFFER[leg], "active" if leg == "u22" else "inactive"))
     put(d, "leak-needles.tsv", "hostname\t%s\nipv4\t%s\nipv4\t172.17.0.1\nipv6\t%s\nmac\t%s\nuser\t%s\n" % (HOST, IPV4, IPV6, MAC, USER))
-    put(d, "timeline.tsv", "#\t%.6f\tprepare_start\n#\t%.6f\tinvariance_start\n" % (T0, T0 + 100))
+    put(d, "timeline.tsv", "#\t%.6f\tprepare_start\n#\t%.6f\tcontrol_start\n#\t%.6f\tinvariance_start\n" % (T0, T0 + 80, T0 + 100))
     put(d, "finished", iso(T0 + 3000) + "\n")
     put(d, "timer-units.txt", "logrotate.service\nsystemd-tmpfiles-clean.service\n")
     base = dict(TREE_ROWS)
@@ -632,6 +632,8 @@ if not os.environ.get("GUEST_ONLY"):
     invalid("a call that left no status", "no answer was recorded for step-busy_unit-dirty", lambda d: remove(d, "step-busy_unit-dirty.code"), silent=[V_ROUTE])
     invalid("a call that left no record of how curl ended", "step-busy_unit-dirty.curl, .code, .t0 or .t1 is missing", lambda d: remove(d, "step-busy_unit-dirty.curl"))
     invalid("a call that left no time", "ready-inv-2.curl, .code, .t0 or .t1 is missing", lambda d: remove(d, "ready-inv-2.t1"))
+    for what_, v_ in (("infinite", "inf"), ("not a number (NaN)", "nan"), ("minus infinity", "-inf"), ("1e999, which reads as infinity", "1e999")):
+        invalid("a call whose time is %s is no time: the call left no usable record of itself" % what_, "ready-inv-2.curl, .code, .t0 or .t1 is missing or unreadable", lambda d, v=v_: put(d, "ready-inv-2.t1", v + "\n"))
     invalid("the control's calls of the core that answered 500: the control did not run", "the control of the invariance window did not run", lambda d: api(d, "ctl-core-1", code=500, body={}))
 
     # ---- the control: GET /v1/sys/version/current answers a bare version, as text, outside the envelope (route/v1.go: ctx.String(200, common.VERSION)). Judged on its status and on there being an answer ----
@@ -901,11 +903,13 @@ if not os.environ.get("GUEST_ONLY"):
     invalid("invariance: a row of the units that is not one", "units-after.tsv has a row that is not a unit row", lambda d: ledit(d, "units-after.tsv", lambda t: t + "x\ty\n"))
     invalid("invariance: the timers' units are not known", "timer-units.txt is missing", lambda d: remove(d, "timer-units.txt"))
 
-    # ---- invariance: a unit that changed and that no call of the window can have caused, by PID 1's own journal ----
-    # In the healthy build the calls of the window are ready-route (205 to 206.2 seconds after T0), GET /v1/sys/os (220), ready-inv-1 (225), -2 (230), -3 (235) and the one under the lock (240 to 242). ctl-core-1 (210), ctl-core-2 (215)
-    # and ready-base (245) are NOT in the window. A call counts for 3 s before and after it: (209.2, 217) lies between the first call and the second, and what is before 202 or after 245 is outside every call.
+    # ---- invariance: a unit that started or stopped by itself during the control (PID 1's own journal of the control) is noise, wherever else it changes ----
+    # The healthy build's control runs from the marker control_start (80 s after T0) to the marker invariance_start (100 s after T0); PID 1's journal of it counts from 2 s before the first to 1 s after the second,
+    # so 78 to 101 s after T0. The calls of the window are far after that (ready-route 205 to 206.2 s, GET /v1/sys/os 220, ready-inv-1 225 to 226.2, -2 230, -3 235, the one under the lock 240 to 242, the control's own
+    # calls ctl-core-1 and -2 at 210 and 215: the build's clock is not the guest's, only the order of the calls matters).
     TD = "systemd-timedated.service"
-    clk = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S.%f")[:-2]
+    clk = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S")
+    clk2 = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S.%f")[:11]
 
     def pid1_line(unit, t, message="Starting Time & Date Service...", **extra):
         """an entry of `journalctl _PID=1 -o json` as PID 1 writes one about a unit: the unit it is about, the message, the job, the time in microseconds (a string, as journalctl says it)"""
@@ -920,126 +924,201 @@ if not os.environ.get("GUEST_ONLY"):
     def disappeared(unit=TD):
         return lambda d: ledit(d, "units-before.tsv", lambda t: t + "%s\tactive\trunning\t14332\tinv-td\n" % unit)
 
-    def journal(unit, *times, **kw):
+    def control_of(unit, *times, **kw):
+        """pid1-control.jsonl has an entry of the unit at each of these times (seconds after T0)"""
+        return lambda d: put(d, "pid1-control.jsonl", "".join(pid1_line(unit, T0 + t, **kw) for t in times))
+
+    def window_of(unit, *times, **kw):
         """pid1-window.jsonl has an entry of the unit at each of these times (seconds after T0)"""
         return lambda d: put(d, "pid1-window.jsonl", "".join(pid1_line(unit, T0 + t, **kw) for t in times))
 
-    def raw_journal(text):
-        return lambda d: put(d, "pid1-window.jsonl", text)
+    def raw(name, text):
+        return lambda d: put(d, name, text)
+
+    def timeline(control_start, invariance_start, extra=""):
+        return lambda d: put(d, "timeline.tsv", "#\t%.6f\tprepare_start\n#\t%s\tcontrol_start\n#\t%s\tinvariance_start\n%s" % (T0, control_start, invariance_start, extra))
 
     def both(*fns):
         return lambda d: [f(d) for f in fns]
 
-    def left_out(name, change, journal_of, said, unit=TD, **kw):
-        case("invariance, PID 1's journal: " + name, 0, ["**PASS** " + V_INV_UNITS, "left out: " + unit + " " + said, "outside every call of the window"], ["FAIL", "INVALID"], mutate=both(change, journal_of), **kw)
+    SELF = "- units that started or stopped by themselves during the control, by PID 1's own journal: "
+
+    def excused(name, change, journal_of, said, unit=TD, **kw):
+        case("invariance, the control's journal: " + name, 0, ["**PASS** " + V_INV_UNITS, "and left out: " + unit + ": " + said, SELF + unit + ": " + said], ["FAIL", "INVALID"], mutate=both(change, journal_of), **kw)
 
     def held_against(name, change, journal_of, extra=(), **kw):
-        fails("invariance, PID 1's journal: " + name, V_INV_UNITS, both(change, journal_of), extra=list(extra), **kw)
+        fails("invariance, the control's journal: " + name, V_INV_UNITS, both(change, journal_of), extra=list(extra), **kw)
 
-    # (a) a start far outside every call is the box's own: the verdict passes, and the report says what it left out and when, in the verdict, and in a section of its own
-    left_out("a unit that appeared and started long before the first call is the box's own, left out and named, with the time", appeared(), journal(TD, 100.0), "started by itself at " + clk(T0 + 100.0))
-    left_out("the same long after the last call", appeared(), journal(TD, 300.0), "started by itself at " + clk(T0 + 300.0))
-    case("invariance, PID 1's journal: what is left out is in the verdict, and in a section of the report with the times of the calls", 0,
-         ["**PASS** " + V_INV_UNITS + ": ", "; left out: " + TD + " started by itself at " + clk(T0 + 100.0),
-          "## What PID 1's journal says of the units that changed in the window", "- left out: " + TD + " started by itself at " + clk(T0 + 100.0),
-          "(the calls ran from " + clk(T0 + 205.0)[:-2] + " to " + clk(T0 + 242.0)[:-2] + ", and a call counts for 3 s before and after it)"], ["FAIL"], mutate=both(appeared(), journal(TD, 100.0)))
-    case("invariance, PID 1's journal: nothing left out, the section says none", 0, ["- left out: none"], ["FAIL"])
-    # (b) inside a call, whichever call of the window it is: held against the calls, as before, and the verdict says which call
-    for t_, call_ in ((205.5, "ready-route"), (220.5, "sysos-inv"), (226.0, "ready-inv-1"), (231.0, "ready-inv-2"), (236.0, "ready-inv-3"), (240.5, "ready-inv-lock")):
-        held_against("a unit that appeared during %s is held against the calls, and the verdict names the call" % call_, appeared(), journal(TD, t_), [TD + " appeared", "inside " + call_])
-    # (c) the 3 s on both sides of a call: inside by less than that is inside, outside by more is outside (the first call's earlier edge, its later edge, the second call's earlier edge, the last call's later edge)
-    for t_, inside_, what_ in ((202.5, True, "0.5 s inside the earlier edge of the first call"), (201.5, False, "0.5 s outside the earlier edge of the first call"),
-                               (208.7, True, "0.5 s inside the later edge of the first call"), (209.7, False, "0.5 s outside the later edge of the first call"),
-                               (217.5, True, "0.5 s inside the earlier edge of the second call"), (216.5, False, "0.5 s outside the earlier edge of the second call"),
-                               (244.5, True, "0.5 s inside the later edge of the call under the lock"), (245.5, False, "0.5 s outside the later edge of the call under the lock"),
-                               (228.0, True, "between two calls that are 3.8 s apart: inside the edges of both")):
-        if inside_:
-            held_against("a unit that appeared %s (%s s after T0) is held against the calls" % (what_, t_), appeared(), journal(TD, t_), [TD + " appeared"])
-        else:
-            left_out("a unit that appeared %s (%s s after T0) is the box's own" % (what_, t_), appeared(), journal(TD, t_), "started by itself at " + clk(T0 + t_))
-    # the calls of the control (ctl-core-1 at 210, ctl-core-2 at 215) and the answer of the unchanged box (ready-base at 245) are not calls of the window: their edges are not edges of it
-    left_out("a unit that appeared while only a call of the control (ctl-core-1, 210 s after T0, widened to 207 .. 214.2) ran is the box's own: that call is not in the window", appeared(), journal(TD, 213.0), "started by itself at " + clk(T0 + 213.0))
-    left_out("a unit that appeared while only ready-base (245 s after T0) ran is the box's own: that call is made after the window", appeared(), journal(TD, 247.0), "started by itself at " + clk(T0 + 247.0))
-    # (d) every event has to be outside: one inside is enough to hold the change against the calls, whatever the order and whatever the others say
-    held_against("several events of the unit, one of them inside a call: held against the calls", appeared(), journal(TD, 100.0, 226.0, 300.0), [TD + " appeared", "inside ready-inv-1"])
-    held_against("several events, the inside one first", appeared(), journal(TD, 226.0, 100.0), [TD + " appeared"])
-    held_against("several events, the inside one last", appeared(), journal(TD, 100.0, 101.0, 102.0, 240.5), [TD + " appeared"])
-    left_out("several events, all of them outside every call (a start and its stop, minutes apart): the box's own, with the first and the last time", appeared(), journal(TD, 100.0, 130.0, 213.0, 300.0),
-             "started by itself at " + clk(T0 + 100.0) + " to " + clk(T0 + 300.0))
-    # (e) no file: the old verdict
-    held_against("no file of PID 1's journal (journalctl is not there, or failed): the old verdict, held against the calls", appeared(), lambda d: remove(d, "pid1-window.jsonl"), [TD + " appeared"])
-    held_against("a file of PID 1's journal that is empty (it had nothing to say of the unit): held against the calls", appeared(), raw_journal(""), [TD + " appeared"])
-    # (f) events of another unit only, or of a unit whose name only contains the unit's
-    held_against("events of another unit only: held against the calls", appeared(), journal("ssh.service", 100.0), [TD + " appeared"])
-    held_against("events of a unit whose name contains the unit's only: held against the calls", appeared(), journal("x" + TD, 100.0), [TD + " appeared"])
-    held_against("events of the unit's name with something after it only: held against the calls", appeared(), journal(TD + ".d", 100.0), [TD + " appeared"])
-    held_against("an entry of another unit that is far outside, and the unit's own entry inside a call: held against the calls", appeared(),
-                 raw_journal(pid1_line("ssh.service", T0 + 100.0) + pid1_line(TD, T0 + 226.0)), [TD + " appeared"])
-    # (g) an event whose time cannot be read, or a journal that cannot be read: fail closed
-    for what_, line_ in (("a time that is not a number", pid1_line(TD, T0 + 100.0, __REALTIME_TIMESTAMP="abc")), ("an empty time", pid1_line(TD, T0 + 100.0, __REALTIME_TIMESTAMP="")),
-                         ("a time with a fraction", pid1_line(TD, T0 + 100.0, __REALTIME_TIMESTAMP="1790000100.5")), ("a negative time", pid1_line(TD, T0 + 100.0, __REALTIME_TIMESTAMP="-1790000100000000")),
-                         ("a time that is a JSON number and not the string journalctl writes", pid1_line(TD, T0 + 100.0, __REALTIME_TIMESTAMP=1790000100000000)),
-                         ("a time that is null", pid1_line(TD, T0 + 100.0, __REALTIME_TIMESTAMP=None))):
-        held_against("an event with %s: it cannot be placed, held against the calls" % what_, appeared(), raw_journal(line_), [TD + " appeared"])
-    no_time = json.loads(pid1_line(TD, T0 + 100.0))
-    del no_time["__REALTIME_TIMESTAMP"]
-    held_against("an event with no time at all: it cannot be placed, held against the calls", appeared(), raw_journal(json.dumps(no_time) + "\n"), [TD + " appeared"])
-    held_against("one event far outside and one with a time that cannot be read: held against the calls", appeared(), raw_journal(pid1_line(TD, T0 + 100.0) + pid1_line(TD, T0 + 101.0, __REALTIME_TIMESTAMP="x")), [TD + " appeared"])
-    held_against("one event far outside and a line that is not JSON (journalctl's own `-- No entries --`, a cut line): nothing of this journal is believed", appeared(),
-                 raw_journal(pid1_line(TD, T0 + 100.0) + "-- No entries --\n"), [TD + " appeared"])
-    held_against("one event far outside and a line that is JSON and not an object: nothing of this journal is believed", appeared(), raw_journal(pid1_line(TD, T0 + 100.0) + "[1, 2]\n"), [TD + " appeared"])
-    held_against("one event far outside and a last line that was cut in the middle: nothing of this journal is believed", appeared(), raw_journal(pid1_line(TD, T0 + 100.0) + pid1_line("ssh.service", T0 + 101.0)[:60]), [TD + " appeared"])
-    left_out("an entry of another unit with a time that cannot be read does not hold this unit's far events against the calls (it is about another unit)", appeared(),
-             raw_journal(pid1_line(TD, T0 + 100.0) + pid1_line("ssh.service", T0 + 101.0, __REALTIME_TIMESTAMP="x")), "started by itself at " + clk(T0 + 100.0))
-    left_out("an entry with no UNIT (a message of PID 1 about itself) is about no unit: it neither excuses nor holds anything against it", appeared(),
-             raw_journal(pid1_line(TD, T0 + 100.0) + json.dumps({"__REALTIME_TIMESTAMP": "%d" % round((T0 + 226.0) * 1e6), "_PID": "1", "MESSAGE": "Reloading."}) + "\n" + "\n"), "started by itself at " + clk(T0 + 100.0))
-    # (h) a unit that stopped, or that was started again (its invocation id changed), or that went inactive: the same rules
-    held_against("a unit that disappeared, with an event inside a call", disappeared(), journal(TD, 226.0), [TD + " disappeared"])
-    left_out("a unit that disappeared, with its events outside every call: stopped by itself", disappeared(), journal(TD, 100.0, 130.0), "stopped by itself at " + clk(T0 + 100.0) + " to " + clk(T0 + 130.0))
-    held_against("a unit that was started again (its invocation id changed), with an event inside a call", unit("after", "ssh.service", inv="inv-new"), journal("ssh.service", 231.0), ["ssh.service went from"])
-    left_out("a unit that was started again, with its events outside every call: changed by itself", unit("after", "ssh.service", inv="inv-new"), journal("ssh.service", 100.0, 100.5), "changed by itself at " + clk(T0 + 100.0) + " to " + clk(T0 + 100.5),
-             unit="ssh.service")
-    held_against("a unit that went inactive, with an event inside a call", unit("after", "docker.service", active="inactive", sub="dead"), journal("docker.service", 236.0), ["docker.service went from"])
-    left_out("a unit that went inactive, with its events outside every call: changed by itself", unit("after", "docker.service", active="inactive", sub="dead"), journal("docker.service", 100.0), "changed by itself at " + clk(T0 + 100.0),
-             unit="docker.service")
-    held_against("a unit that has another main pid, with no event of it in the journal: held against the calls", unit("after", "ssh.service", pid="9999"), journal(TD, 100.0), ["ssh.service went from"])
-    # a unit that is left out does not excuse another: the change that the journal cannot place still fails, and the one it can is still named
-    case("invariance, PID 1's journal: a unit that is left out does not excuse another that is not: the one inside a call fails, and the other is still named as left out", 1,
-         ["**FAIL** " + V_INV_UNITS, "ssh.service went from", "- left out: " + TD + " started by itself"], ["INVALID", "**FAIL** " + V_INV_UNITS + ": " + TD],
-         mutate=both(appeared(), unit("after", "ssh.service", inv="inv-new"), raw_journal(pid1_line(TD, T0 + 100.0) + pid1_line("ssh.service", T0 + 226.0))))
-    case("invariance, PID 1's journal: a unit that a timer starts and one that changed by itself in the control are left out as they were, and are not in the section of PID 1's journal", 0, ["**PASS** " + V_INV_UNITS, "- left out: none"], ["FAIL"],
+    # (a) an entry of the unit in the control, whatever it says: the unit started or stopped by itself during the control, and is the box's own wherever else it changes; the first entry (by time) is named
+    started_at = lambda t: "started by itself at " + clk(T0 + t) + " during the control"
+    excused("a unit that appeared, with an entry of it in the control: left out, and named with the time of its first entry", appeared(), control_of(TD, 90.0), started_at(90.0))
+    excused("the box's start of a bus-activated service, at the first instant of the interval (2 s before the marker control_start): inside", appeared(), control_of(TD, 78.0), started_at(78.0))
+    excused("... and at the last instant of it (1 s after the marker invariance_start): inside", appeared(), control_of(TD, 101.0), started_at(101.0))
+    excused("a unit that disappeared, with an entry that says it stopped: stopped by itself", disappeared(), control_of(TD, 90.0, message="Stopping Time & Date Service..."), "stopped by itself at " + clk(T0 + 90.0) + " during the control")
+    excused("... Stopped", disappeared(), control_of(TD, 90.0, message="Stopped Time & Date Service."), "stopped by itself at " + clk(T0 + 90.0) + " during the control")
+    excused("... Deactivated (the way PID 1 says that a unit ended: the message starts with the unit's name)", disappeared(), control_of(TD, 90.0, message="systemd-timedated.service: Deactivated successfully."),
+            "stopped by itself at " + clk(T0 + 90.0) + " during the control")
+    excused("a unit that was started again (its invocation id changed), with an entry of it in the control", unit("after", "ssh.service", inv="inv-new"),
+            control_of("ssh.service", 95.0, message="Started OpenBSD Secure Shell server."), started_at(95.0), unit="ssh.service")
+    excused("a unit that went inactive, with an entry of it in the control", unit("after", "docker.service", active="inactive", sub="dead"),
+            control_of("docker.service", 85.0, message="Stopped Docker Application Container Engine."), "stopped by itself at " + clk(T0 + 85.0) + " during the control", unit="docker.service")
+    excused("a unit that has another main pid, with an entry of it in the control", unit("after", "ssh.service", pid="9999"), control_of("ssh.service", 90.0, message="Started OpenBSD Secure Shell server."), started_at(90.0), unit="ssh.service")
+    excused("an entry that says neither a start nor a stop (a reload): the unit is the control's own all the same, and is said to have changed", appeared(), control_of(TD, 90.0, message="Reloading Time & Date Service."),
+            "changed by itself at " + clk(T0 + 90.0) + " during the control")
+    no_message = json.loads(pid1_line(TD, T0 + 90.0))
+    del no_message["MESSAGE"]
+    excused("an entry with no MESSAGE at all: the field UNIT alone is enough", appeared(), raw("pid1-control.jsonl", json.dumps(no_message) + "\n"), "changed by itself at " + clk(T0 + 90.0) + " during the control")
+    excused("an entry whose MESSAGE is not a string (journalctl writes a message with bytes it cannot show as a list or null): the unit is still the control's own", appeared(),
+            control_of(TD, 90.0, message=None), "changed by itself at " + clk(T0 + 90.0) + " during the control")
+    excused("several entries, listed out of order (a start at 95, another at 85, an end at 99): the first by TIME is named, and what it says decides the verb", appeared(),
+            raw("pid1-control.jsonl", pid1_line(TD, T0 + 95.0, "Started Time & Date Service.") + pid1_line(TD, T0 + 85.0, "Starting Time & Date Service...") + pid1_line(TD, T0 + 99.0, "systemd-timedated.service: Deactivated successfully.")),
+            started_at(85.0))
+    excused("an entry inside the interval among entries outside it: the one inside is named", appeared(),
+            raw("pid1-control.jsonl", pid1_line(TD, T0 + 10.0) + pid1_line(TD, T0 + 90.0, "systemd-timedated.service: Deactivated successfully.") + pid1_line(TD, T0 + 300.0)), "stopped by itself at " + clk(T0 + 90.0) + " during the control")
+    excused("an entry with no UNIT (a message of PID 1 about itself) and an entry of the unit: only the unit's counts", appeared(),
+            raw("pid1-control.jsonl", json.dumps({"__REALTIME_TIMESTAMP": "%d" % round((T0 + 85.0) * 1e6), "_PID": "1", "MESSAGE": "Reloading."}) + "\n" + pid1_line(TD, T0 + 90.0) + "\n"), started_at(90.0))
+    case("invariance, the control's journal: a unit that did not change in the window and has an entry in the control is named in the section, and is no part of the verdict's detail", 0,
+         ["**PASS** " + V_INV_UNITS + ": ", SELF + "ssh.service: started by itself at " + clk(T0 + 90.0) + " during the control"], ["FAIL", "and left out: ssh.service"],
+         mutate=control_of("ssh.service", 90.0, message="Started OpenBSD Secure Shell server."))
+    case("invariance, the control's journal: a healthy leg with a journal of the control that has nothing in the interval says none, and names nothing", 0, [SELF + "none\n"], ["FAIL", "and left out: "], mutate=control_of(TD, 10.0))
+    # an entry of the unit does not excuse another unit that changed, and the unit that it does excuse is still named
+    case("invariance, the control's journal: a unit that is left out does not excuse another that changed: the other fails, and the one with an entry is still named in the section", 1,
+         ["**FAIL** " + V_INV_UNITS, "ssh.service went from", " | left out, started or stopped by themselves during the control (PID 1's own journal): " + TD + ": started by itself at " + clk(T0 + 90.0) + " during the control",
+          SELF + TD + ": started by itself"], ["INVALID", "**FAIL** " + V_INV_UNITS + ": " + TD],
+         mutate=both(appeared(), unit("after", "ssh.service", inv="inv-new"), control_of(TD, 90.0)))
+    case("invariance, the control's journal: the units a timer starts and the ones that changed by themselves between the control's two snapshots are left out as before, and the section keeps its own line for each", 0,
+         ["**PASS** " + V_INV_UNITS, "- units: casaos.service", SELF + "none"], ["FAIL"],
          mutate=both(unit("after", "logrotate.service", inv="inv-ran", active="active", sub="running", pid="31"), unit("ctl-b", "casaos.service", inv="inv-x"), unit("after", "casaos.service", inv="inv-y")))
-    case("invariance, PID 1's journal: the section says what the verdict means: a unit that no call can have caused is left out, a change inside a call or one the journal cannot place fails", 0,
-         ["## What the invariance window looks at", "a unit that changed and that no call of the window can have caused", "PID 1's own journal", "pid1-window.jsonl", "widened by 3 s on both sides",
-          "A change inside a call, or one that the journal cannot place (no journal, no event of the unit, an event whose time cannot be read), fails"], ["FAIL"])
 
-    # a call of the window that left no record: the run is invalid, and nothing can be placed in time, so the change is held against the calls whatever the journal says
-    case("invariance, PID 1's journal: a call of the window that left no record of itself leaves nothing to place an event by: the change is held against the calls, and the run is invalid", 1,
-         ["INVALID RUN", "ready-inv-lock", "**FAIL** " + V_INV_UNITS, TD + " appeared"], [], mutate=both(appeared(), journal(TD, 100.0), lambda d: remove(d, "ready-inv-lock.code")))
-    # (i) the real shape: what PID 1 said of systemd-timedated on the Ubuntu 22.04 guest of the first real run (the lines of its timedated-journal.txt, `journalctl -u systemd-timedated.service -o short-precise`, written as the
-    # entries of -o json that PID 1 makes of them), and the times of that run's own calls. That start was 3.6 s before the run's first call: outside, and a start in the middle of the window is inside a call
+    # (b) no file of the control: the old verdict, and the report says why it has no unit to leave out
+    held_against("no pid1-control.jsonl (journalctl is not there, failed, or said more than 2 MiB): the unit is held against the calls, and the detail says the journal was not used", appeared(), lambda d: remove(d, "pid1-control.jsonl"),
+                 [TD + " appeared", "PID 1's journal of the control was not used: there is no pid1-control.jsonl"])
+    case("invariance, the control's journal: with no file the section says that nothing was left out for it, and why", 1, ["none (pid1-control.jsonl was not used, and no unit is left out for it: there is no pid1-control.jsonl)"], ["INVALID"],
+         mutate=appeared())
+    held_against("a pid1-control.jsonl that is empty: held against the calls", appeared(), raw("pid1-control.jsonl", ""), [TD + " appeared", "PID 1's journal of the control was not used: pid1-control.jsonl has no entry"])
+    held_against("a pid1-control.jsonl of blank lines only: held against the calls", appeared(), raw("pid1-control.jsonl", "\n\n  \n"), [TD + " appeared", "pid1-control.jsonl has no entry"])
+    # (c) the entries of another unit only, or of a name that only looks like the unit's
+    held_against("entries of another unit only: held against the calls", appeared(), control_of("ssh.service", 90.0), [TD + " appeared"])
+    held_against("entries of a unit whose name contains the unit's only: held against the calls", appeared(), control_of("x" + TD, 90.0), [TD + " appeared"])
+    held_against("entries of the unit's name with something after it only: held against the calls", appeared(), control_of(TD + ".d", 90.0), [TD + " appeared"])
+    held_against("entries of the unit's name in capitals only: held against the calls", appeared(), control_of(TD.upper(), 90.0), [TD + " appeared"])
+    held_against("an entry of another unit inside the interval, and the unit's own entry outside it: held against the calls", appeared(), raw("pid1-control.jsonl", pid1_line("ssh.service", T0 + 90.0) + pid1_line(TD, T0 + 200.0)), [TD + " appeared"])
+    # (d) the entries outside the interval of the control do not count, to the tenth of a second
+    for t_, what_ in ((77.9, "0.1 s before the first instant of the interval"), (101.1, "0.1 s after the last instant of it"), (10.0, "long before the control"), (0.0, "at T0 (the start of the run)"),
+                      (150.0, "after the marker invariance_start by a minute"), (205.5, "inside the first call of the window"), (226.0, "inside ready-inv-1"), (300.0, "long after the window")):
+        held_against("an entry of the unit %s (%s s after T0) is not an entry of the control: held against the calls" % (what_, t_), appeared(), control_of(TD, t_), [TD + " appeared"])
+    held_against("an entry of the unit in the journal of the WINDOW (pid1-window.jsonl) and none in the control's: the window's journal excuses nothing, whatever the time", appeared(), window_of(TD, 90.0, 100.0, 300.0), [TD + " appeared"])
+    # (e) a file that cannot be believed, a unit that is not a string, a time that is not one: no unit is left out of it, the report does not crash, and it says why
+    deep = "[" * 100000 + "]" * 100000 + "\n"
+    for what_, text_, why_ in (("a line that is not JSON (journalctl's own `-- No entries --`)", pid1_line(TD, T0 + 90.0) + "-- No entries --\n", "a line of pid1-control.jsonl is not JSON"),
+                               ("a last line that was cut in the middle", pid1_line(TD, T0 + 90.0) + pid1_line("ssh.service", T0 + 91.0)[:60], "a line of pid1-control.jsonl is not JSON"),
+                               ("a first line that is garbage", "garbage\n" + pid1_line(TD, T0 + 90.0), "a line of pid1-control.jsonl is not JSON"),
+                               ("a line nested a hundred thousand deep (the parser gives up)", pid1_line(TD, T0 + 90.0) + deep, "a line of pid1-control.jsonl is not JSON"),
+                               ("a line that is JSON and not an object (a list)", pid1_line(TD, T0 + 90.0) + "[1, 2]\n", "a line of pid1-control.jsonl is not a JSON object"),
+                               ("a line that is JSON and not an object (a string)", pid1_line(TD, T0 + 90.0) + '"x"\n', "a line of pid1-control.jsonl is not a JSON object"),
+                               ("a line that is JSON and not an object (null)", pid1_line(TD, T0 + 90.0) + "null\n", "a line of pid1-control.jsonl is not a JSON object"),
+                               ("a UNIT that is a list", pid1_line(TD, T0 + 90.0) + pid1_line(["a.service", TD], T0 + 91.0), "an entry of pid1-control.jsonl has a UNIT that is not a string"),
+                               ("a UNIT that is null", pid1_line(TD, T0 + 90.0) + pid1_line(None, T0 + 91.0), "an entry of pid1-control.jsonl has a UNIT that is not a string"),
+                               ("a UNIT that is a number", pid1_line(TD, T0 + 90.0) + pid1_line(5, T0 + 91.0), "an entry of pid1-control.jsonl has a UNIT that is not a string"),
+                               ("a UNIT that is an object", pid1_line(TD, T0 + 90.0) + pid1_line({"u": TD}, T0 + 91.0), "an entry of pid1-control.jsonl has a UNIT that is not a string"),
+                               ("a UNIT that is a boolean", pid1_line(TD, T0 + 90.0) + pid1_line(True, T0 + 91.0), "an entry of pid1-control.jsonl has a UNIT that is not a string")):
+        held_against("%s: nothing of the file is believed, the unit is held against the calls, and the report says why" % what_, appeared(), raw("pid1-control.jsonl", text_), [TD + " appeared", "PID 1's journal of the control was not used: " + why_])
+    for what_, value_ in (("a time that is not a number", "abc"), ("an empty time", ""), ("a time with a fraction (journalctl writes microseconds as digits)", "1790000090.5"), ("a negative time", "-1790000090000000"),
+                          ("a time that is infinite", "inf"), ("a time that is NaN", "nan"), ("a time with an exponent", "1.79e15"), ("a time of zero", "0"), ("a time before 2001 (1e8 s)", "100000000000000"),
+                          ("a time after 2096 (5e9 s)", "5000000000000000"), ("a time of twenty digits (1e14 s)", "99999999999999999999"), ("a time of twenty-three digits", "99999999999999999999999"),
+                          ("a time with a space", " 1790000090000000"), ("a time with a sign", "+1790000090000000"), ("a time that is a JSON number and not the string journalctl writes", 1790000090000000),
+                          ("a time that is null", None), ("a time that is a list", ["1790000090000000"])):
+        held_against("an entry with %s: no unit is left out of the file, held against the calls" % what_, appeared(), raw("pid1-control.jsonl", pid1_line(TD, T0 + 90.0, __REALTIME_TIMESTAMP=value_)),
+                     [TD + " appeared", "PID 1's journal of the control was not used: an entry of pid1-control.jsonl has a time that is not a plausible one"])
+    no_time = json.loads(pid1_line(TD, T0 + 90.0))
+    del no_time["__REALTIME_TIMESTAMP"]
+    held_against("an entry of the unit with no time at all: no unit is left out of the file", appeared(), raw("pid1-control.jsonl", json.dumps(no_time) + "\n"), [TD + " appeared", "has a time that is not a plausible one"])
+    held_against("one entry in the interval and one with a time that cannot be read, of ANOTHER unit: nothing of the file is believed (it is the file that cannot be trusted)", appeared(),
+                 raw("pid1-control.jsonl", pid1_line(TD, T0 + 90.0) + pid1_line("ssh.service", T0 + 91.0, __REALTIME_TIMESTAMP="x")), [TD + " appeared", "has a time that is not a plausible one"])
+    excused("an entry with no UNIT whose time is garbage is about no unit: it is not held against the file", appeared(),
+            raw("pid1-control.jsonl", pid1_line(TD, T0 + 90.0) + json.dumps({"__REALTIME_TIMESTAMP": "x", "MESSAGE": "Reloading."}) + "\n"), started_at(90.0))
+    case("invariance, the control's journal: the section says that the file was not used, and why, and that no unit is left out for it", 1, ["none (pid1-control.jsonl was not used, and no unit is left out for it: a line of pid1-control.jsonl is not JSON)"],
+         ["Traceback", "INVALID"], mutate=both(appeared(), raw("pid1-control.jsonl", "garbage\n")))
+    # the markers of the control: its interval is theirs, and one that is not known leaves nothing out
+    EXTRA = "#\t%.6f\tinvariance_done\n" % (T0 + 130)
+    for what_, tl_ in (("no marker control_start", lambda d: put(d, "timeline.tsv", "#\t%.6f\tprepare_start\n#\t%.6f\tinvariance_start\n" % (T0, T0 + 100))),
+                       ("no marker invariance_start", lambda d: put(d, "timeline.tsv", "#\t%.6f\tprepare_start\n#\t%.6f\tcontrol_start\n" % (T0, T0 + 80))),
+                       ("the marker invariance_start before the marker control_start (the interval would end before it begins)", timeline("%.6f" % (T0 + 100), "%.6f" % (T0 + 80))),
+                       ("the marker control_start twice", timeline("%.6f" % (T0 + 80), "%.6f" % (T0 + 100), "#\t%.6f\tcontrol_start\n" % (T0 + 85))),
+                       ("the marker invariance_start twice", timeline("%.6f" % (T0 + 80), "%.6f" % (T0 + 100), "#\t%.6f\tinvariance_start\n" % (T0 + 110))),
+                       ("a marker control_start whose time is not a time", timeline("soon", "%.6f" % (T0 + 100))), ("a marker control_start that is infinite", timeline("inf", "%.6f" % (T0 + 100))),
+                       ("a marker invariance_start that is NaN", timeline("%.6f" % (T0 + 80), "nan")), ("a marker control_start that is 5 s after the epoch", timeline("5.000000", "%.6f" % (T0 + 100))),
+                       ("a marker invariance_start with a comma for its fraction (a locale's EPOCHREALTIME)", timeline("%.6f" % (T0 + 80), ("%.6f" % (T0 + 100)).replace(".", ",")))):
+        held_against("the markers of the control: %s: its interval is not known, the unit is held against the calls" % what_, appeared(), both(control_of(TD, 90.0), tl_),
+                     [TD + " appeared", "PID 1's journal of the control was not used: the timeline has no marker control_start and invariance_start, in that order"])
+    excused("the markers of the control with other markers around them (the run's own timeline): the interval is the one of the two", appeared(), both(control_of(TD, 90.0), timeline("%.6f" % (T0 + 80), "%.6f" % (T0 + 100), EXTRA)), started_at(90.0))
+    excused("the interval follows the markers: a control that lasted 320 s has its entry at 300 s inside (and it is outside the healthy build's 20 s control)", appeared(), both(control_of(TD, 300.0), timeline("%.6f" % (T0 + 80), "%.6f" % (T0 + 400))),
+            started_at(300.0))
+    held_against("the interval follows the markers: the same entry at 300 s is outside a control of 20 s", appeared(), control_of(TD, 300.0), [TD + " appeared"])
+
+    # (g) the real shape: what PID 1 said of systemd-timedated on the Ubuntu 22.04 guest of the first real run (the lines of its timedated-journal.txt, `journalctl -u systemd-timedated.service -o short-precise`, written as the entries of
+    # -o json that PID 1 makes of them: a start every 301 s, 30 s of life), and the markers and calls of that run (the control from 1791783693.6 to 1791783701.9: the second start fell in it by luck, and the first one did not)
     REAL_ENTRIES = ((1791783398.694370, "Starting Time & Date Service...", {}), (1791783398.754998, "Started Time & Date Service.", {"JOB_RESULT": "done"}),
                     (1791783429.250922, "systemd-timedated.service: Deactivated successfully.", {}), (1791783699.173350, "Starting Time & Date Service...", {}),
                     (1791783699.259195, "Started Time & Date Service.", {"JOB_RESULT": "done"}))
-    REAL_CALLS = (("ready-route", 1791783702.782377, 1791783705.206141), ("sysos-inv", 1791783705.208231, 1791783705.217185), ("ready-inv-1", 1791783705.217376, 1791783707.580579),
-                  ("ready-inv-2", 1791783707.580828, 1791783710.015187), ("ready-inv-3", 1791783710.015482, 1791783712.164278), ("ready-inv-lock", 1791783712.687581, 1791783714.812513))
+    real_control = raw("pid1-control.jsonl", "".join(pid1_line(TD, t_, m_, **x_) for t_, m_, x_ in REAL_ENTRIES))
+    case("invariance, the control's journal: the real shape: a control as long as the cadence (320 s from 8.7 s before the first start) sees the box's own start of systemd-timedated, and the unit that appears in the window is left out and named", 0,
+         ["**PASS** " + V_INV_UNITS, "and left out: " + TD + ": started by itself at 05:36:38 during the control", SELF + TD + ": started by itself at 05:36:38 during the control", "(it lasted 322 s, from the marker control_start to the marker invariance_start)"],
+         ["FAIL", "INVALID"], mutate=both(appeared(), real_control, timeline("1791783390.000000", "1791783712.000000")))
+    case("invariance, the control's journal: the real shape, the control of the real run (8.2 s) that the second start fell in: left out, named at the second start (05:41:39)", 0,
+         ["**PASS** " + V_INV_UNITS, SELF + TD + ": started by itself at 05:41:39 during the control"], ["FAIL", "INVALID"], mutate=both(appeared(), real_control, timeline("1791783693.647453", "1791783701.877265")))
+    case("invariance, the control's journal: the false red as it was: a control of 8 s that neither start fell in (the guest of the first real run, when the second start was 2 minutes away): the unit that appears in the window is held against the calls", 1,
+         ["**FAIL** " + V_INV_UNITS, TD + " appeared", SELF + "none"], ["INVALID"], mutate=both(appeared(), real_control, timeline("1791783500.000000", "1791783508.000000")))
+    case("invariance, the control's journal: an entry 1.5 s before the marker control_start is inside the 2 s that the interval has before it", 0, ["**PASS** " + V_INV_UNITS], ["FAIL", "INVALID"],
+         mutate=both(appeared(), real_control, timeline("%.6f" % (1791783699.173350 + 1.5), "%.6f" % (1791783699.173350 + 330))))
+    case("invariance, the control's journal: an entry 3 s before the marker control_start is outside the interval", 1, ["**FAIL** " + V_INV_UNITS, TD + " appeared"], ["INVALID"],
+         mutate=both(appeared(), raw("pid1-control.jsonl", pid1_line(TD, 1791783699.173350)), timeline("%.6f" % (1791783699.173350 + 3.0), "%.6f" % (1791783699.173350 + 330))))
 
-    def real_calls(d):
-        for name, t0_, t1_ in REAL_CALLS:
-            api(d, name, t0=t0_, secs=t1_ - t0_, body=json.loads(slurp(d, name + ".json")) if name == "sysos-inv" else ready_body("d11", "busy_lock" if name == "ready-inv-lock" else "", t0_ + 1))
+    # (window) PID 1's journal of the WINDOW places the entries of a unit that stays held against the calls: for the verdict's detail alone, and never an excuse
+    for t_, where_ in ((205.0, "inside ready-route"), (226.0, "inside ready-inv-1"), (226.2, "inside ready-inv-1"), (241.0, "inside ready-inv-lock"), (213.0, "between two calls"), (150.0, "before the first call"),
+                       (100.0, "before the first call"), (300.0, "after the last call"), (247.0, "after the last call")):
+        held_against("the unit appeared; PID 1's journal of the window has it %s s after T0, %s: the verdict says so, and holds it against the calls" % (t_, where_), appeared(), window_of(TD, t_),
+                     [TD + " appeared", " | PID 1's journal of the window puts " + TD + " at " + clk2(T0 + t_) + " (" + where_ + ")"])
+    held_against("the unit appeared; PID 1's journal of the window has several entries, listed out of order, one of them with a time that cannot be read: all of them are said, in the order of their times", appeared(),
+                 raw("pid1-window.jsonl", pid1_line(TD, T0 + 300.0) + pid1_line(TD, T0 + 226.0) + pid1_line(TD, T0 + 100.0, __REALTIME_TIMESTAMP="x")),
+                 [TD + " appeared", " | PID 1's journal of the window puts " + TD + " at " + clk2(T0 + 226.0) + " (inside ready-inv-1), " + clk2(T0 + 300.0) + " (after the last call), a time that cannot be read"])
+    held_against("a call of the window whose end is before its start (t1 < t0) still has its own times: an entry between them is inside it", appeared(),
+                 both(lambda d: api(d, "ready-inv-1", t0=T0 + 226.0, secs=-2.0, body=json.loads(slurp(d, "ready-inv-1.json"))), window_of(TD, 225.0)), [TD + " appeared", " | PID 1's journal of the window puts " + TD + " at " + clk2(T0 + 225.0) + " (inside ready-inv-1)"])
+    case("invariance, the control's journal: a call of the window that left no record of itself makes the run invalid, and the verdict still names where PID 1's journal puts the entry among the calls that are there", 1,
+         ["INVALID RUN", "ready-inv-lock", "**FAIL** " + V_INV_UNITS, TD + " appeared", " | PID 1's journal of the window puts " + TD + " at " + clk2(T0 + 226.0) + " (inside ready-inv-1)"], [], mutate=both(appeared(), window_of(TD, 226.0), lambda d: remove(d, "ready-inv-lock.code")))
+    case("invariance, the control's journal: with no call of the window that left a record the run is invalid, the unit is held against the calls, and the place of its entry is said to be unknown, with no crash", 1,
+         ["INVALID RUN", "**FAIL** " + V_INV_UNITS, " | PID 1's journal of the window puts " + TD + " at " + clk2(T0 + 226.0) + " (no call to place it by)"], ["Traceback"],
+         mutate=both(appeared(), window_of(TD, 226.0), lambda d: remove(d, *[n + ".code" for n in ("ready-route", "sysos-inv", "ready-inv-1", "ready-inv-2", "ready-inv-3", "ready-inv-lock")])))
+    case("invariance, the control's journal: the unit appeared and PID 1's journal of the window has no entry of it: held against the calls, and the verdict says nothing of that journal", 1,
+         ["**FAIL** " + V_INV_UNITS + ": " + TD + " appeared"], ["PID 1's journal of the window puts", "INVALID"], mutate=both(appeared(), window_of("ssh.service", 226.0)))
+    for what_, text_ in (("a line that is not JSON", pid1_line(TD, T0 + 226.0) + "-- No entries --\n"), ("a UNIT that is a list", pid1_line(TD, T0 + 226.0) + pid1_line([TD], T0 + 227.0)),
+                         ("a line that is not an object", pid1_line(TD, T0 + 226.0) + "[1]\n"), ("a line nested a hundred thousand deep", pid1_line(TD, T0 + 226.0) + deep)):
+        case("invariance, the control's journal: pid1-window.jsonl with %s is not used for the detail, and the report does not crash: the unit is held against the calls" % what_, 1,
+             ["**FAIL** " + V_INV_UNITS, TD + " appeared"], ["PID 1's journal of the window puts", "Traceback", "INVALID"], mutate=both(appeared(), raw("pid1-window.jsonl", text_)))
+    held_against("no pid1-window.jsonl at all: held against the calls, as before", appeared(), lambda d: remove(d, "pid1-window.jsonl"), [TD + " appeared"])
+    held_against("a unit that was started again (its invocation id changed), with an entry of it in the journal of the window: held against the calls, with the place", unit("after", "ssh.service", inv="inv-new"), window_of("ssh.service", 231.0),
+                 ["ssh.service went from", " | PID 1's journal of the window puts ssh.service at " + clk2(T0 + 231.0) + " (inside ready-inv-2)"])
 
-    def real_journal(*extra_times):
-        text = "".join(pid1_line(TD, t_, m_, **x_) for t_, m_, x_ in REAL_ENTRIES)
-        return lambda d: put(d, "pid1-window.jsonl", text + "".join(pid1_line(TD, t_) for t_ in extra_times))
-    case("invariance, PID 1's journal: the real shape: the five entries of systemd-timedated of the first real run, outside every call of that run (the last start 3.6 s before the first call): left out, with the time", 0,
-         ["**PASS** " + V_INV_UNITS, "left out: " + TD + " started by itself at " + clk(1791783398.694370) + " to " + clk(1791783699.259195), "(the calls ran from " + clk(1791783702.782377)[:-2] + " to " + clk(1791783714.812513)[:-2]],
-         ["FAIL", "INVALID"], mutate=both(real_calls, appeared(), real_journal()))
-    case("invariance, PID 1's journal: the real shape with a start in the middle of the real window (the second call of the route is running): held against the calls", 1,
-         ["**FAIL** " + V_INV_UNITS, TD + " appeared", "inside ready-route, sysos-inv, ready-inv-1, ready-inv-2"], ["INVALID"], mutate=both(real_calls, appeared(), real_journal(1791783706.0)))
-    case("invariance, PID 1's journal: the real shape, 2.9 s before the first call of the real window: inside the 3 s, held against the calls", 1, ["**FAIL** " + V_INV_UNITS, TD + " appeared", "inside ready-route"], ["INVALID"],
-         mutate=both(real_calls, appeared(), real_journal(1791783702.782377 - 2.9)))
-    case("invariance, PID 1's journal: the real shape, 3.1 s before the first call of the real window: outside the 3 s, left out", 0, ["**PASS** " + V_INV_UNITS, "left out: " + TD], ["FAIL", "INVALID"],
-         mutate=both(real_calls, appeared(), real_journal(1791783702.782377 - 3.1)))
+    # (h) only units are left out so: a file and a listening socket that changed in the window are held against the calls whatever PID 1 says of the control
+    case("invariance, the control's journal: a unit that is left out does not excuse a file created in the window: the verdict on the files fails by its own name", 1,
+         ["**PASS** " + V_INV_UNITS, "**FAIL** " + V_INV_FILES, "created /etc/cron.d/new"], ["INVALID", "**FAIL** " + V_INV_UNITS],
+         mutate=both(appeared(), control_of(TD, 90.0), inv("after", lambda t: t + manifest_text({"/etc/cron.d/new": ("f", "5", "1790000999000000000", "1790000999000000000", "644", "0:0", "7" * 64)}))))
+    case("invariance, the control's journal: an entry whose UNIT is the path of the file does not excuse it", 1, ["**FAIL** " + V_INV_FILES, "created /etc/cron.d/new"], ["INVALID"],
+         mutate=both(control_of("/etc/cron.d/new", 90.0), inv("after", lambda t: t + manifest_text({"/etc/cron.d/new": ("f", "5", "1790000999000000000", "1790000999000000000", "644", "0:0", "7" * 64)}))))
+    case("invariance, the control's journal: an entry whose UNIT is the name of a file that changed in the window does not excuse it", 1, ["**FAIL** " + V_INV_FILES, "changed /etc/fstab"], ["INVALID"],
+         mutate=both(control_of("/etc/fstab", 90.0), inv("after", row_edit("/etc/fstab", digest="9" * 64))))
+    case("invariance, the control's journal: a listening socket that opened in the window is held against the calls whatever PID 1 says of the control", 1,
+         ["**PASS** " + V_INV_UNITS, "**FAIL** " + V_INV_PORTS, "started listening tcp 0.0.0.0:8080"], ["INVALID"],
+         mutate=both(appeared(), control_of(TD, 90.0), lambda d: ledit(d, "listen-after.txt", lambda t: t + "tcp 0.0.0.0:8080\n")))
+    case("invariance, the control's journal: an entry whose UNIT is the socket's name does not excuse it", 1, ["**FAIL** " + V_INV_PORTS], ["INVALID"],
+         mutate=both(control_of("tcp 0.0.0.0:8080", 90.0), lambda d: ledit(d, "listen-after.txt", lambda t: t + "tcp 0.0.0.0:8080\n")))
+    # the report says what the control is, what it leaves out, and what it cannot see
+    case("invariance, the control's journal: the section says what the control is, how long it lasted, what PID 1's journal adds to it, and what it does not see", 0,
+         ["## What changed by itself (the control)", "(it lasted 20 s, from the marker control_start to the marker invariance_start)", "about every five minutes whatever the report does", "pid1-control.jsonl",
+          "from 2 s before the marker control_start to 1 s after the marker invariance_start", "a unit that started or stopped by itself during the control is noise wherever else it changes", "Only units are left out so, never a file or a listening socket",
+          "What this does not see: a unit that the report itself starts AND that the box also starts by itself every few minutes is hidden by that noise", "nothing the report does talks to timedate1",
+          "A file or a listening socket that changes by itself in a control of five minutes is left out of its verdict as well"], ["FAIL"])
+    case("invariance, the control's journal: the logic that placed a change by the times of the calls is gone (a time cannot tell a call's start from the box's own)", 0, [], ["outside every call", "no call of the window can have", "widened by", "left out: "])
     fails("invariance: a port that was not open is", V_INV_PORTS, lambda d: ledit(d, "listen-after.txt", lambda t: t + "tcp 0.0.0.0:8080\n"), extra=["started listening tcp 0.0.0.0:8080"])
     fails("invariance: a port that was open is not", V_INV_PORTS, lambda d: ledit(d, "listen-after.txt", lambda t: t.replace("udp 0.0.0.0:68\n", "")), extra=["stopped listening udp 0.0.0.0:68"])
     case("invariance: a port that changed by itself in the control is left out, and named", 0, ["**PASS** " + V_INV_PORTS, "- listening sockets: tcp 0.0.0.0:9999"], ["FAIL"],
@@ -1737,16 +1816,15 @@ esac
         "smartctl": "#!/bin/sh\nexit 1\n",
         "apt-get": "#!/bin/sh\necho 'apt 2.2.4 (amd64)'\n",
         "apt-cache": "#!/bin/sh\nprintf 'docker-ce:\\n  Installed: 5:28.0.4-1~debian.11~bullseye\\n  Candidate: 5:29.8.0-1~debian.11~bullseye\\n  Version table:\\n'\n",
-        # `-u <unit> -o short-precise` (the old diagnostic) says one line. `_PID=1 -o json ...` (what the report judges) says $FAKE_JOURNAL_PID1, in which @BEFORE@ is the second 30 before the --since of the call, @OUTSIDE@ the
-        # second 60 before the first call of the route and @INSIDE@ the second of the first call of the window's own (ready-inv-1): outside and inside the calls of a window that has just run; or $FAKE/journal.size bytes. It exits with $FAKE/journal.rc
+        # `-u <unit> -o short-precise` (the old diagnostic) says one line. `_PID=1 -o json ...` (what the report reads) says $FAKE_JOURNAL_PID1, in which @BEFORE@ is the second 30 before the --since of the call (outside the interval
+        # that the call asked for) and @CONTROL@ the second 2 after it (the second of the marker control_start when the call is the control's: inside the control's interval); or $FAKE/journal.size bytes. It exits with $FAKE/journal.rc
         "journalctl": r'''#!/bin/sh
 echo "journalctl $*" >>"$FAKE/calls"
 since=""; prev=""
 for a in "$@"; do [ "$prev" != --since ] || since="${a#@}"; prev="$a"; done
 case " $* " in
   *" _PID=1 "*)
-    t="$(cat "$OUT/ready-inv-1.t0" 2>/dev/null)"; t="${t%%[.,]*}"; t="${t:-0}"
-    [ -z "$FAKE_JOURNAL_PID1" ] || printf '%s\n' "$FAKE_JOURNAL_PID1" | sed "s/@BEFORE@/$((since - 30))/g; s/@INSIDE@/$t/g; s/@OUTSIDE@/$((t - 60))/g"
+    [ -z "$FAKE_JOURNAL_PID1" ] || printf '%s\n' "$FAKE_JOURNAL_PID1" | sed "s/@BEFORE@/$((since - 30))/g; s/@CONTROL@/$((since + 2))/g"
     [ ! -f "$FAKE/journal.size" ] || python3 -c "import sys; sys.stdout.write('x' * int(sys.argv[1]))" "$(cat "$FAKE/journal.size")"
     ;;
   *) echo "Oct 12 00:00:00.000000 host systemd[1]: stand-in" ;;
@@ -1794,6 +1872,7 @@ exit "$(cat "$FAKE/journal.rc" 2>/dev/null || echo 0)"
                    REBOOT_REQUIRED=j("root/run/reboot-required"), INTERNAL_SECRET_FILE=j("root/run/casaos/internal.secret"), LIBDIR=j("lib"), AUTH_DIR=j("auth"), OUT=j("out"),
                    IMAGE_UPDATES=j("root/var/lib/casaos/image_updates.json"), FIXTURES=FIXTURES.replace("\\", "/"), LEG_JSON=json.dumps(LEG),
                    INV_ROOT=j("root"), INV_TREES=j("root/etc"))
+        env.pop("CONTROL_SECONDS", None)
         return env, j
 
     PRELUDE = ('source "$1"; shift; export LC_ALL=C; FAMILY=debian; FROM_CODENAME=bullseye; TO_CODENAME=bookworm; CASA_PORT=80; PENDING_UNDO=""; '
@@ -2269,34 +2348,76 @@ esac
           no_calls=["api sysos-inv", "ready_call ready-inv-1", "lock_hold_start", "snapshot after", "ready_call ready-base"], returned=False)
     gcase("invariance: the lock is held for the third call only, and let go of before the second snapshot", INV + 'invariance', ordered=["ready_call ready-inv-3", "lock_hold_start", "ready_call ready-inv-lock", "lock_hold_stop", "snapshot after"])
     gcase("invariance: a lock that is not given back stops the run", INV + 'lock_hold_stop() { return 1; }; invariance', files={"out/aborted": "dpkg's lock was not given back\n"}, no_calls=["snapshot after"], returned=False)
-    # pid1_window: PID 1's journal of the window, which the report judges. The marker of the window is in the timeline, in seconds with a fraction
+    # pid1_window <marker> <file>: PID 1's journal of an interval that starts at a marker of the timeline, in the file that was asked for, which the report reads. The markers are in the timeline, in seconds with a fraction
     TL = 'printf "#\\t1790000100.250000\\tinvariance_start\\n" >"$OUT/timeline.tsv"; '
+    PW = 'pid1_window invariance_start pid1-window.jsonl'
+    PC = 'pid1_window control_start pid1-control.jsonl'
+    TLC = 'printf "#\\t1790000050.500000\\tcontrol_start\\n#\\t1790000100.250000\\tinvariance_start\\n" >"$OUT/timeline.tsv"; '
     ONE = '{"UNIT":"u","__REALTIME_TIMESTAMP":"@BEFORE@000000"}'
-    gcase("pid1_window: PID 1's journal as JSON, from two seconds before the window's marker to now, whole lines, in the evidence", TL + 'pid1_window',
+    gcase("pid1_window: PID 1's journal as JSON, from two seconds before the window's marker to now, whole lines, in the evidence", TL + PW,
           files={"out/pid1-window.jsonl": '{"UNIT":"u","__REALTIME_TIMESTAMP":"1790000068000000"}\n'}, prelude_env={"FAKE_JOURNAL_PID1": ONE},
           calls=["journalctl _PID=1 -o json --no-pager --quiet --since @1790000098 --until @"])
-    gcase("pid1_window: a marker whose fraction has a comma (a locale's EPOCHREALTIME) says the same", TL.replace(".25", ",25") + 'pid1_window', files={"out/pid1-window.jsonl": '{"UNIT":"u","__REALTIME_TIMESTAMP":"1790000068000000"}\n'},
+    gcase("pid1_window: a marker whose fraction has a comma (a locale's EPOCHREALTIME) says the same", TL.replace(".25", ",25") + PW, files={"out/pid1-window.jsonl": '{"UNIT":"u","__REALTIME_TIMESTAMP":"1790000068000000"}\n'},
           prelude_env={"FAKE_JOURNAL_PID1": ONE}, calls=["--since @1790000098 "])
-    gcase("pid1_window: no marker of the window in the timeline: journalctl is not asked, and no file is left (an old one is removed)", ': >"$OUT/timeline.tsv"; echo stale >"$OUT/pid1-window.jsonl"; pid1_window',
+    gcase("pid1_window: no marker of that name in the timeline: journalctl is not asked, and no file is left (an old one is removed)", ': >"$OUT/timeline.tsv"; echo stale >"$OUT/pid1-window.jsonl"; ' + PW,
           files={"out/pid1-window.jsonl": None}, no_calls=["journalctl _PID=1"], prelude_env={"FAKE_JOURNAL_PID1": ONE})
-    gcase("pid1_window: a marker that is not a time: journalctl is not asked", 'printf "#\\tsoon\\tinvariance_start\\n" >"$OUT/timeline.tsv"; pid1_window', files={"out/pid1-window.jsonl": None}, no_calls=["journalctl _PID=1"])
-    gcase("pid1_window: the marker is the one of invariance_start among the markers of the run: the others are not the window's",
-          'printf "#\\t1790000000.100000\\tprepare_start\\n#\\t1790000050.500000\\tcontrol_start\\n#\\t1790000100.250000\\tinvariance_start\\n#\\t1790000115.900000\\tinvariance_done\\n" >"$OUT/timeline.tsv"; pid1_window',
-          files={"out/pid1-window.jsonl": "*"}, prelude_env={"FAKE_JOURNAL_PID1": ONE}, calls=["--since @1790000098 "], no_calls=["--since @1790000000", "--since @1790000050", "--since @1790000113"])
-    gcase("pid1_window: the window ends now, a second on (whole seconds: the window may only be wider, never narrower than the calls)",
-          TL + 'a="${EPOCHREALTIME%%[.,]*}"; pid1_window; b="${EPOCHREALTIME%%[.,]*}"; u="$(sed -n \'s/.*--until @\\([0-9][0-9]*\\).*/\\1/p\' "$FAKE/calls")"; '
+    gcase("pid1_window: a marker that is not a time: journalctl is not asked", 'printf "#\\tsoon\\tinvariance_start\\n" >"$OUT/timeline.tsv"; ' + PW, files={"out/pid1-window.jsonl": None}, no_calls=["journalctl _PID=1"])
+    gcase("pid1_window: the marker is the one that was asked for among the markers of the run: the others are not its interval's",
+          'printf "#\\t1790000000.100000\\tprepare_start\\n#\\t1790000050.500000\\tcontrol_start\\n#\\t1790000100.250000\\tinvariance_start\\n#\\t1790000115.900000\\tinvariance_done\\n" >"$OUT/timeline.tsv"; ' + PW,
+          files={"out/pid1-window.jsonl": "*"}, prelude_env={"FAKE_JOURNAL_PID1": ONE}, calls=["--since @1790000098 "], no_calls=["--since @1790000000", "--since @1790000048", "--since @1790000113"])
+    gcase("pid1_window: the interval ends now, a second on (whole seconds: it may only be wider, never narrower than what happened)",
+          TL + 'a="${EPOCHREALTIME%%[.,]*}"; ' + PW + '; b="${EPOCHREALTIME%%[.,]*}"; u="$(sed -n \'s/.*--until @\\([0-9][0-9]*\\).*/\\1/p\' "$FAKE/calls")"; '
                 'if [ "$u" -ge $((a + 1)) ] && [ "$u" -le $((b + 1)) ]; then echo ok >"$OUT/until"; else echo "$a $u $b" >"$OUT/until"; fi', files={"out/until": "ok\n"}, prelude_env={"FAKE_JOURNAL_PID1": ONE})
-    gcase("pid1_window: a journalctl that fails leaves no file, whatever it printed, and an old file is removed", TL + 'echo stale >"$OUT/pid1-window.jsonl"; pid1_window', files={"out/pid1-window.jsonl": None},
+    gcase("pid1_window: a journalctl that fails leaves no file, whatever it printed, and an old file is removed", TL + 'echo stale >"$OUT/pid1-window.jsonl"; ' + PW, files={"out/pid1-window.jsonl": None},
           prelude_env={"FAKE_JOURNAL_PID1": ONE}, setup=lambda tmp, j: open(j("fake", "journal.rc"), "w").write("1"), calls=["journalctl _PID=1"])
     for size_, kept_ in ((2097152, True), (2097153, False)):
         gcase("pid1_window: a journal of %d bytes is %s (2 MiB at most: a file cut short would hide the entries of its end)" % (size_, "kept" if kept_ else "not kept"),
-              TL + 'pid1_window; if [ -f "$OUT/pid1-window.jsonl" ]; then wc -c <"$OUT/pid1-window.jsonl" >"$OUT/size"; fi',
+              TL + PW + '; if [ -f "$OUT/pid1-window.jsonl" ]; then wc -c <"$OUT/pid1-window.jsonl" >"$OUT/size"; fi',
               files={"out/size": "%d\n" % size_} if kept_ else {"out/size": None, "out/pid1-window.jsonl": None}, setup=lambda tmp, j, n=size_: open(j("fake", "journal.size"), "w").write(str(n)))
-    gcase("pid1_window: nothing left behind (the new file is moved into place whole)", TL + 'pid1_window', files={"out/pid1-window.jsonl.new": None}, prelude_env={"FAKE_JOURNAL_PID1": ONE})
-    gcase("diag_watch_stop: writes PID 1's journal of the window, and keeps the diagnostics it always wrote", TL + 'diag_watch_stop', files={"out/pid1-window.jsonl": '{"UNIT":"u"*', "out/timedated-journal.txt": "Oct 12 00:00:00.000000 host systemd[1]: stand-in\n"},
+    gcase("pid1_window: nothing left behind (the new file is moved into place whole)", TL + PW, files={"out/pid1-window.jsonl.new": None}, prelude_env={"FAKE_JOURNAL_PID1": ONE})
+    # the control's: from two seconds before the marker control_start, in pid1-control.jsonl, and the other file is left alone
+    gcase("pid1_window: the control's journal is asked from two seconds before the marker control_start, and is written to the file that was asked for: pid1-window.jsonl is not made", TLC + PC,
+          files={"out/pid1-control.jsonl": '{"UNIT":"u","__REALTIME_TIMESTAMP":"1790000018000000"}\n', "out/pid1-window.jsonl": None}, prelude_env={"FAKE_JOURNAL_PID1": ONE},
+          calls=["journalctl _PID=1 -o json --no-pager --quiet --since @1790000048 --until @"], no_calls=["--since @1790000098"])
+    gcase("pid1_window: the control's journal with no marker control_start (only the window's is in the timeline): journalctl is not asked, and no file is made", TL + PC, files={"out/pid1-control.jsonl": None},
+          prelude_env={"FAKE_JOURNAL_PID1": ONE}, no_calls=["journalctl _PID=1"])
+    gcase("pid1_window: the file of the other interval is not touched by this one (the control's journal leaves the window's alone)", TLC + 'echo keep >"$OUT/pid1-window.jsonl"; ' + PC, files={"out/pid1-window.jsonl": "keep\n", "out/pid1-control.jsonl": "*"},
+          prelude_env={"FAKE_JOURNAL_PID1": ONE})
+    gcase("pid1_window: a control's journalctl that fails removes the control's old file and leaves the window's", TLC + 'echo stale >"$OUT/pid1-control.jsonl"; echo keep >"$OUT/pid1-window.jsonl"; ' + PC,
+          files={"out/pid1-control.jsonl": None, "out/pid1-window.jsonl": "keep\n"}, prelude_env={"FAKE_JOURNAL_PID1": ONE}, setup=lambda tmp, j: open(j("fake", "journal.rc"), "w").write("1"))
+    gcase("pid1_window: a control's journal of more than 2 MiB is not kept", TLC + PC, files={"out/pid1-control.jsonl": None}, setup=lambda tmp, j: open(j("fake", "journal.size"), "w").write("2097153"))
+    gcase("diag_watch_stop: writes PID 1's journal of the window, and keeps the diagnostics it always wrote", TL + 'diag_watch_stop', files={"out/pid1-window.jsonl": '{"UNIT":"u"*', "out/timedated-journal.txt": "Oct 12 00:00:00.000000 host systemd[1]: stand-in\n", "out/pid1-control.jsonl": None},
           prelude_env={"FAKE_JOURNAL_PID1": ONE}, calls=["journalctl _PID=1", "journalctl -u systemd-timedated.service -o short-precise --no-pager"])
-    gcase("invariance: PID 1's journal is written down right after the second snapshot, before the answer of the unchanged box", INV + 'pid1_window() { echo pid1_window >>"$FAKE/calls"; }; invariance',
-          ordered=["lock_hold_stop", "snapshot after", "pid1_window", "ready_call ready-base"])
+    # the control: its two calls at the start, then the wait (CONTROL_SECONDS, 320 by default, through the stand-in sleep, which says what it was asked for), the second snapshot, and PID 1's journal of it right after
+    SLEEPS = 'sleep() { echo "sleep $*" >>"$FAKE/calls"; }; '
+    CONTROL_ORDER = ["snapshot ctl-a", "api ctl-core-1 /v1/sys/version/current", "api ctl-core-2 /v1/sys/version/current", "sleep %s", "snapshot ctl-b", "pid1_window control_start pid1-control.jsonl", "snapshot before",
+                     "ready_call ready-route", "api sysos-inv /v1/sys/os", "ready_call ready-inv-1", "ready_call ready-inv-2", "ready_call ready-inv-3", "lock_hold_start", "ready_call ready-inv-lock", "lock_hold_stop", "snapshot after",
+                     "pid1_window invariance_start pid1-window.jsonl", "ready_call ready-base"]
+    PIDLOG = 'pid1_window() { echo "pid1_window $*" >>"$FAKE/calls"; }; '
+    gcase("invariance: the control waits 320 s by default, after its two calls and before its second snapshot, and PID 1's journal of it is taken right after that snapshot; the window's right after the window's own",
+          INV + SLEEPS + PIDLOG + 'invariance', ordered=[s % "320" if "%s" in s else s for s in CONTROL_ORDER], no_calls=["sleep 5\n", "sleep 0"])
+    gcase("invariance: the wait is CONTROL_SECONDS: 17 says 17, and nothing else waits in the window", INV + SLEEPS + PIDLOG + 'invariance', prelude_env={"CONTROL_SECONDS": "17"}, ordered=[s % "17" if "%s" in s else s for s in CONTROL_ORDER],
+          no_calls=["sleep 320"])
+    check("the guest waits 320 s by default in its control (CONTROL_SECONDS), and says so before it waits", 'CONTROL_SECONDS="${CONTROL_SECONDS:-320}"' in guest_text and '    sleep "${CONTROL_SECONDS}"\n    inv_snapshot ctl-b\n    pid1_window control_start pid1-control.jsonl\n' in guest_text
+          and re.search(r'    log "the control waits \$\{CONTROL_SECONDS\} s[^"]*"\n    sleep "\$\{CONTROL_SECONDS\}"', guest_text) is not None, "")
+    # with CONTROL_SECONDS=0 the control still runs, in the same order, and still leaves its journal: the real markers, the real pid1_window, the stand-in journalctl
+    INV_REAL = INV.replace("marker() { :; }; ", "")
+    gcase("invariance: with CONTROL_SECONDS=0 the control still runs (its two calls, no wait, its second snapshot, its journal), the markers are in the same order, and both journals are made",
+          INV_REAL + SLEEPS + 'invariance; cut -f3 "$OUT/timeline.tsv" | tr "\\n" " " >"$OUT/markers"', prelude_env={"CONTROL_SECONDS": "0", "FAKE_JOURNAL_PID1": ONE},
+          ordered=["snapshot ctl-a", "api ctl-core-1", "api ctl-core-2", "sleep 0", "snapshot ctl-b", "journalctl _PID=1", "snapshot before", "ready_call ready-route", "snapshot after", "ready_call ready-base"], no_calls=["sleep 320"],
+          files={"out/markers": "control_start invariance_start invariance_done ", "out/pid1-control.jsonl": '{"UNIT":"u"*', "out/pid1-window.jsonl": '{"UNIT":"u"*'})
+    # the markers, the snapshots, the wait and the journal of the control, in one order (the stand-in marker says what it was asked and writes the timeline as the real one does)
+    MARKS = 'marker() { echo "marker $1" >>"$FAKE/calls"; printf "#\\t%s\\t%s\\n" "${EPOCHREALTIME}" "$1" >>"${OUT}/timeline.tsv"; }; '
+    MARK_ORDER = ["marker control_start", "snapshot ctl-a", "api ctl-core-1", "api ctl-core-2", "sleep %s", "snapshot ctl-b", "journalctl _PID=1", "marker invariance_start", "snapshot before", "ready_call ready-route",
+                  "snapshot after", "marker invariance_done", "ready_call ready-base"]
+    for secs_, env_ in (("320", {}), ("0", {"CONTROL_SECONDS": "0"})):
+        gcase("invariance: the marker control_start comes first, then the control's two snapshots with its two calls and its wait (%s s) between them, then its journal, then the marker invariance_start, then the window" % secs_,
+              INV_REAL + MARKS + SLEEPS + 'invariance', prelude_env=dict(env_, FAKE_JOURNAL_PID1=ONE), ordered=[s % secs_ if "%s" in s else s for s in MARK_ORDER],
+              files={"out/pid1-control.jsonl": '{"UNIT":"u"*', "out/pid1-window.jsonl": '{"UNIT":"u"*'})
+    gcase("invariance: with the default the control's journal is asked once the wait is over (the stand-in sleep only logs it), and is in the evidence", INV_REAL + SLEEPS + 'invariance',
+          prelude_env={"FAKE_JOURNAL_PID1": ONE}, ordered=["sleep 320", "snapshot ctl-b", "journalctl _PID=1"], files={"out/pid1-control.jsonl": '{"UNIT":"u"*'})
+    gcase("invariance: a control whose journalctl fails still runs the window, and leaves no control journal (the report then leaves no unit out)", INV_REAL + SLEEPS + 'invariance', prelude_env={"CONTROL_SECONDS": "0", "FAKE_JOURNAL_PID1": ONE},
+          setup=lambda tmp, j: open(j("fake", "journal.rc"), "w").write("1"), ordered=["snapshot ctl-b", "snapshot before", "snapshot after", "ready_call ready-base"], files={"out/pid1-control.jsonl": None, "out/pid1-window.jsonl": None})
     gcase("inv_snapshot: the files, the units and the sockets, under the tag", 'INV_TREES=("$INV_ROOT/etc"); write_manifest_tool "$LIBDIR/manifest.py"; inv_snapshot t', files={"out/inv-t.tsv": '"/etc"\td*', "out/units-t.tsv": "*", "out/listen-t.txt": "*"})
 
     # ---- the end to end: the real guest functions, the stand-in core, the real report ----
@@ -2341,21 +2462,26 @@ esac
     e2e("a core that writes a file of /etc on its FIRST call of the route only is caught by the invariance, naming the file: the first call is inside the window, and the calls that follow would never show it", 1,
         ["**FAIL** " + V_INV_FILES, "created /etc/osr-first"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "firstwrite", "FAKE_CORE_WRITE": "{root}/etc/osr-first"})
     e2e("a core that restarts a service during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "restart", "FAKE_CORE_UNIT": "casaos-gateway.service"})
-    # PID 1's journal is the stand-in's: what the real PID 1 says is what the first real run shows. The core restarts casaos-gateway.service at every call (its invocation id changes)
+    # PID 1's journal is the stand-in's: what the real PID 1 says is what the first real runs show. The core restarts casaos-gateway.service at every call (its invocation id changes). @BEFORE@ is a time 30 s before the interval
+    # that the guest asked for (outside the control's, before every call of the window), @CONTROL@ the second of the marker control_start in the call that makes the control's journal
     GW = '{"UNIT":"casaos-gateway.service","MESSAGE":"Starting casaos-gateway...","JOB_TYPE":"start","__REALTIME_TIMESTAMP":"@%s@000000"}'
     RESTART = {"FAKE_CORE_MODE": "restart", "FAKE_CORE_UNIT": "casaos-gateway.service"}
-    e2e("a service that the core restarts during the call, whose entry in PID 1's journal falls inside a call, is held against the calls, and the guest left that journal in the evidence", 1,
-        ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service went from", "PID 1's journal has it at"], ["Traceback", "left out: casaos-gateway.service"], env_extra=dict(RESTART, FAKE_JOURNAL_PID1=GW % "INSIDE"),
-        after=lambda tmp, j: [] if os.path.exists(j("out/pid1-window.jsonl")) and "casaos-gateway.service" in open(j("out/pid1-window.jsonl")).read() else ["the guest left no PID 1 journal of the window in the evidence"])
-    e2e("a service that changed in the window, whose entry in PID 1's journal falls a minute before every call, is the box's own: left out and named, and the leg passes", 0,
-        ["# OS readiness proof, d11 leg: PASS", "**PASS** " + V_INV_UNITS, "left out: casaos-gateway.service changed by itself at", "outside every call of the window"], ["Traceback", "FAIL", "INVALID"],
-        env_extra=dict(RESTART, FAKE_JOURNAL_PID1=GW % "OUTSIDE"))
-    e2e("a service that changed in the window, and a PID 1 journal that does not mention it (journalctl said nothing): held against the calls, as before, and the file of the journal is there, empty", 1,
-        ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service went from"], ["Traceback", "left out: casaos-gateway.service"], env_extra=RESTART,
-        after=lambda tmp, j: [] if os.path.exists(j("out/pid1-window.jsonl")) and open(j("out/pid1-window.jsonl")).read() == "" else ["the guest left no (empty) PID 1 journal of the window in the evidence"])
-    e2e("a service that changed in the window and a guest whose journalctl fails: no file, and the change is held against the calls, as before", 1, ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service went from"],
-        ["Traceback", "left out: casaos-gateway.service"], env_extra=dict(RESTART, FAKE_JOURNAL_PID1=GW % "OUTSIDE"), snippet=E2E.replace("guard_run;", "guard_run; journalctl() { return 1; };"),
-        after=lambda tmp, j: [] if not os.path.exists(j("out/pid1-window.jsonl")) else ["a journalctl that failed left a file"])
+    has = lambda name, word: (lambda tmp, j: [] if os.path.exists(j("out/" + name)) and word in open(j("out/" + name)).read() else ["%s is not in the evidence, or does not say %r" % (name, word)])
+    e2e("a service that the core restarts during the call, whose entry in PID 1's journal lies far outside every call of the window, is held against the calls all the same (a time cannot tell a call's start from the box's own), "
+        "and the guest left both journals in the evidence", 1,
+        ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service went from", "PID 1's journal of the window puts casaos-gateway.service at", "(before the first call)"], ["Traceback", "and left out: casaos-gateway.service"], env_extra=dict(RESTART, FAKE_JOURNAL_PID1=GW % "BEFORE"),
+        after=lambda tmp, j: has("pid1-window.jsonl", "casaos-gateway.service")(tmp, j) + has("pid1-control.jsonl", "casaos-gateway.service")(tmp, j))
+    e2e("a service that the core restarts during the call and that PID 1's journal of the CONTROL has an entry of (the box starts it by itself in the control, which is what the proof cannot tell from the core doing it too) is left out and named, "
+        "and the leg passes: the plumbing from the guest's journal to the report's verdict", 0,
+        ["# OS readiness proof, d11 leg: PASS", "**PASS** " + V_INV_UNITS, "and left out: casaos-gateway.service: started by itself at", " during the control"], ["Traceback", "FAIL", "INVALID"], env_extra=dict(RESTART, FAKE_JOURNAL_PID1=GW % "CONTROL"))
+    e2e("a service that changed in the window and a PID 1 journal that does not mention it (journalctl said nothing): held against the calls, the journal of the control is there and empty, and the report says why it left nothing out", 1,
+        ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service went from", "PID 1's journal of the control was not used: pid1-control.jsonl has no entry"], ["Traceback", "and left out: casaos-gateway.service"], env_extra=RESTART,
+        after=lambda tmp, j: [] if os.path.exists(j("out/pid1-control.jsonl")) and open(j("out/pid1-control.jsonl")).read() == "" else ["the guest left no (empty) PID 1 journal of the control in the evidence"])
+    e2e("a service that changed in the window and a guest whose journalctl fails: no journal of the control, and the change is held against the calls, as before", 1,
+        ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service went from", "PID 1's journal of the control was not used: there is no pid1-control.jsonl"], ["Traceback", "and left out: casaos-gateway.service"],
+        env_extra=dict(RESTART, FAKE_JOURNAL_PID1=GW % "CONTROL"), snippet=E2E.replace("guard_run;", "guard_run; journalctl() { return 1; };"),
+        after=lambda tmp, j: [] if not os.path.exists(j("out/pid1-control.jsonl")) and not os.path.exists(j("out/pid1-window.jsonl")) else ["a journalctl that failed left a file"])
+    e2e("the same guest with CONTROL_SECONDS=0 (the harness's own shortcut): the control still runs, and the leg of a healthy core passes", 0, ["# OS readiness proof, d11 leg: PASS"], ["FAIL", "INVALID"], env_extra={"CONTROL_SECONDS": "0"})
     e2e("a core that opens a port during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_PORTS, "started listening tcp 0.0.0.0:90"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "listen"})
     e2e("a core that blocks while another process holds dpkg's lock is caught", 1, ["**FAIL** " + V_LOCK_FAST], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang"})
     e2e("a core that never says busy is caught under the lock and by both busy steps", 1, ["**FAIL** " + V_LOCK_BUSY, "**FAIL** " + f_fires(STEP_BY_ID["busy_lock"]), "**FAIL** " + f_fires(STEP_BY_ID["busy_unit"])], ["Traceback"],
@@ -2470,10 +2596,19 @@ if not os.environ.get("REPORT_ONLY"):
           and "the releases before that change (v0.5.25 among them) warn of Docker's source, and the clean-box verdict of Docker's source fails on them" in wf_flat, "")
     check("the workflow says which calls the invariance window sees and which it does not: the five calls of the route and GET /v1/sys/os, not the answer of the unchanged box nor the other calls of the matrix",
           "the five calls of the route and GET /v1/sys/os named above" in wf_flat and "not the answer of the unchanged box that the steps are compared with, nor the other calls of the matrix" in wf_flat, "")
-    check("the workflow says what the verdict on the units means: a unit that changed and that no call of the window can have caused, by PID 1's own journal, is left out and named; a change inside a call, or one the journal cannot place, fails",
-          "A service that changed between the two snapshots and that no call of the window can have caused is left out and named too" in wf_flat and "PID 1's own journal of the window (pid1-window.jsonl" in wf_flat
-          and "outside every call of the window (each widened by 3 s on both sides) is the box's own" in wf_flat and "a change inside a call, or one that the journal cannot place (no file, no event of the unit, an event whose time cannot be read), fails" in wf_flat, "")
-    check("the guest script writes the file the workflow and the report name", "pid1-window.jsonl" in guest_text and "pid1-window.jsonl" in open(REPORT, newline="").read(), "")
+    check("the workflow says what the control is and what the verdict on the units means: a wait of about five minutes (320 s), a service that PID 1's own journal of the control has an entry of is noise wherever else it changes, "
+          "a journal that cannot be believed leaves nothing out, and what it does not see",
+          "a wait between the snapshots of about five minutes (320 s, CONTROL_SECONDS of the guest script)" in wf_flat and "A service that has an entry in PID 1's own journal of the control (pid1-control.jsonl" in wf_flat
+          and "started or stopped by itself during the control: it is noise wherever else it changes, left out of the verdict on the units and named with the time" in wf_flat
+          and "leaves nothing out: the false red may come back, never a false pass" in wf_flat and "What this does not see: a service that the report itself starts AND that the box also starts by itself every few minutes is hidden by that noise" in wf_flat
+          and "The control makes each leg about five minutes longer" in wf_flat, "")
+    check("the workflow no longer says that a change is placed by the times of the calls", "no call of the window can have" not in wf_flat and "widened by 3 s" not in wf_flat and "outside every call" not in wf_flat, "")
+    check("the guest script, the report and the workflow name the file of the control's journal, and the guest and the report the window's", all("pid1-control.jsonl" in x for x in (guest_text, open(REPORT, newline="").read(), wf_flat))
+          and "pid1-window.jsonl" in guest_text and "pid1-window.jsonl" in open(REPORT, newline="").read(), "")
+    _step = re.search(r"name: Prove it\n\s+timeout-minutes: (\d+)", wf)
+    _wait = re.search(r'^CONTROL_SECONDS="\$\{CONTROL_SECONDS:-(\d+)\}"$', guest_text, re.M)
+    check("the control's wait fits in the proof step's limit with room to spare (a run took 8 minutes without it, and the step has more than three times that with it)",
+          _step is not None and _wait is not None and int(_wait.group(1)) >= 301 and int(_step.group(1)) * 60 >= int(_wait.group(1)) + 3 * 8 * 60, (_step and _step.group(1), _wait and _wait.group(1)))
     check("the guest script ends the run with the very words the workflow says", "the release under test has no /v1/sys/os/readiness" in guest_text)
     check("the legs are chosen by the plan job from the file of the legs, which stops a run that matches none", "scripts/os-readiness-proof-legs.json" in wf_runs.get("plan:The legs this run proves", "") and 'raise SystemExit("no leg is' in wf_runs.get("plan:The legs this run proves", ""))
     artifact = re.search(r"^\s+name: (os-readiness-proof-.+)$", wf, re.M)

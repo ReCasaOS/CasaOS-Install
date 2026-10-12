@@ -14,20 +14,23 @@ FAIL of the feature. NOT TESTABLE is neutral and visible: what these guests cann
 What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud image with ReCasaOS and Docker and a few witness containers:
   - PackageKit stopped (on an Ubuntu the apt run that ends the preparation wakes it, and it leaves by itself five minutes later: in the middle of the window, a
     unit that changed), and a wait until AppManagement has made its own check of the images (it renames a new /var/lib/casaos/image_updates.json into place);
-  - a control: two snapshots of the box a few seconds apart with two calls to the core in between (GET /v1/sys/version/current, which answers the bare version
-    as text and not the envelope: it is judged on its status alone), to know what changes by itself: those paths and units are not held against the readiness
-    report, and the report names them;
+  - a control: a snapshot of the box, two calls to the core (GET /v1/sys/version/current, which answers the bare version as text and not the envelope: it is judged
+    on its status alone), a wait of about five minutes (CONTROL_SECONDS, 320 by default), and a snapshot, to know what changes by itself: those paths and units are not
+    held against the readiness report, and the report names them. The wait is as long as the cadence of what a box starts by itself (on an Ubuntu systemd-timedated,
+    about every five minutes, gone 30 s later): a control of a few seconds almost never saw it. Right after the second snapshot the guest writes PID 1's own journal of the
+    control (pid1-control.jsonl): a unit that has an entry in it, from 2 s before the control's start to 1 s after its end, started or stopped by itself during the control,
+    and is noise wherever else it changes;
   - the INVARIANCE window: a snapshot (the name, size, times, mode, owner and content hash of every file of /etc, /var/lib/dpkg, /var/lib/apt,
     /var/cache/apt, /var/lib/casaos and /var/log/casaos; every service unit with its state, main pid and invocation id; the listening ports), then
     the FIRST call of GET /v1/sys/os/readiness there is (ready-route: the one most likely to write something lazily, and the one that finds out whether the
     release has the route at all: a 404 ends the run there), GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while another process holds
     dpkg's lock, then the same snapshot. Only /var/log/casaos may differ. Nothing else is looked at: not /tmp, not /run, not /home or /root (a tool that
     writes there, as `dkms status` may in $TMPDIR, is not seen). The call under the lock has to answer 200 inside the core's budget, say `busy`, and leave
-    the lock to its holder. A unit that changed between the two snapshots is held against the calls, unless a timer starts it, it changed by itself in the control, or
-    PID 1's own journal (pid1-window.jsonl, written right after the second snapshot) puts every event of it outside every call of the window, each widened by 3 s on
-    both sides: a unit that changed and that no call of the window can have caused is the box's own (a bus-activated service that something else wakes up: on an Ubuntu
-    systemd-timedated starts about every five minutes whatever the report does), and is left out and named, with the time. A change inside a call, or one that the journal
-    cannot place (no file, no event of the unit, an event whose time cannot be read, a line that is not JSON), is held against the calls as it always was;
+    the lock to its holder. A unit that changed between the two snapshots is held against the calls, unless a timer starts it, or it changed by itself in the control (its
+    state at the control's two ends, or an entry of it in PID 1's journal of the control: a time cannot tell a call's start from the box's own, the calls of the window run
+    back to back and are most of it). A journal that cannot be believed (no file, an empty one, a line that is not a JSON object, a UNIT that is not a string, a time that is not a plausible one)
+    leaves no unit out, and the false red may come back, never a false pass. What it does not see: a unit that the report itself starts and that the box also starts by itself
+    every few minutes is hidden by that noise (the report starts none, nothing it does talks to timedate1);
   - the CLEAN box: the answers of that window (and one more) have no refuse; every warn and info is a fact of the report. A `busy` that names a unit (apt-daily)
     on the clean box is a box that a package manager was working on: the run is INVALID for it, and is not a FAIL of the feature. The box has smartctl (the
     installer puts smartmontools on every box), so `smart_failed` is never `no_smartctl` there: a virtio disk does not answer SMART, and that is `unavailable`;
@@ -48,6 +51,7 @@ an AppManagement operation in progress (none can be held open cheaply).
 """
 import fnmatch
 import json
+import math
 import os
 import re
 import sys
@@ -89,7 +93,8 @@ TEXT_MAX = 8 * 1024        # Text(report) is at most 8 KiB
 BUDGET = 20.0              # the core's budget for the whole call, in seconds
 ALLOW = 25.0               # what a call may take before it counts as having blocked
 CLOCK_SLACK = 3.0          # seconds between the guest's clock at the call and the core's checked_at
-CALL_SLACK = 3.0           # seconds a call of the invariance window counts for before and after it, when PID 1's journal says when a unit changed
+CONTROL_BEFORE = 2.0       # seconds before the marker control_start (the guest's journal of the control starts two seconds early)
+CONTROL_AFTER = 1.0        # seconds after the marker invariance_start (it ends a second late)
 CURL_TIMEOUT = 28
 NO_ANSWER = (0, 401, 403, 404, 502, 503, 504)   # the route gave no answer: the harness could not ask, or the release has no such route, or the core is not up
 EXEMPT = "/var/log/casaos"                       # the one place the readiness report may write
@@ -304,9 +309,10 @@ NEEDLES = needles()
 
 def number(name):
     try:
-        return float(read(name).strip())
+        t = float(read(name).strip())
     except ValueError:
         return None
+    return t if math.isfinite(t) else None
 
 
 def call(name, plain=False):
@@ -700,80 +706,130 @@ if m1 is not None and m2 is not None:
     verdict(V_INV_FILES, not said, few(said) if said else "%d paths looked at (these six trees only, not /tmp, /run or the rest of the machine), %d of them changed by themselves in the control and left out" % (len(m1), len(noisy_files)))
 
 
-def clock(t):
-    """HH:MM:SS.ffff (UTC) of a time in seconds since the epoch"""
-    return datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S.%f")[:-2]
+def clock(t, digits=0):
+    """HH:MM:SS (UTC), with that many digits of the second, of a time in seconds since the epoch that `plausible` says is one"""
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S.%f")[:8 + (digits + 1 if digits else 0)]
 
 
-def pid1_events():
-    """{unit: [time in seconds since the epoch of each event of PID 1's journal about it, None for one whose time cannot be read]} of pid1-window.jsonl (`journalctl _PID=1 -o json`
-    from just before the window: one JSON object a line, UNIT the unit a message is about, __REALTIME_TIMESTAMP its time in microseconds, as a string of digits). None when there is
-    no such file, or when a line of it is not a JSON object (a cut line, journalctl's own `-- No entries --`): what is said of a unit cannot then be believed of any"""
-    text = read("pid1-window.jsonl", None)
-    if text is None:
+def plausible(t):
+    """a time in seconds since the epoch that a guest of this decade can have written: not NaN, not infinite, not before 2001 and not after 2096 (and so one that `clock` can print)"""
+    return isinstance(t, (int, float)) and 1e9 <= t <= 4e9
+
+
+def journal_time(us):
+    """seconds since the epoch of the __REALTIME_TIMESTAMP of an entry of `journalctl -o json` (microseconds, as a string of digits), None for anything else and for a time that is not plausible"""
+    if not isinstance(us, str) or not re.fullmatch(r"[0-9]{1,20}", us):
         return None
-    out = {}
+    t = int(us) / 1e6
+    return t if plausible(t) else None
+
+
+def marker_time(name):
+    """the time of the marker of that name in timeline.tsv (`#`, the time in seconds with a fraction, the name, tab separated), None when it is not there exactly once or its time is not a plausible one"""
+    times = [r[1] for r in (ln.split("\t") for ln in read("timeline.tsv").splitlines()) if len(r) == 3 and r[0] == "#" and r[2] == name]
+    try:
+        t = float(times[0]) if len(times) == 1 else None
+    except ValueError:
+        return None
+    return t if plausible(t) else None
+
+
+def pid1_entries(name):
+    """([(unit, message, time or None)] of the entries about a unit in a file of `journalctl _PID=1 -o json` (one JSON object a line; an entry of PID 1 about itself has no UNIT and is about no unit),
+    why that file cannot be believed ('' when it can)): there is no such file, it has no entry, a line of it is not a JSON object (a cut line, journalctl's own `-- No entries --`), an entry has a UNIT that
+    is not a string. A time that is not a plausible one is None"""
+    text = read(name, None)
+    if text is None:
+        return [], "there is no %s" % name
+    out, seen = [], 0
     for line in text.splitlines():
         if not line.strip():
             continue
         try:
             e = json.loads(line)
-        except ValueError:
-            return None
+        except (ValueError, RecursionError):
+            return [], "a line of %s is not JSON" % name
         if not isinstance(e, dict):
-            return None
-        us = e.get("__REALTIME_TIMESTAMP")
-        if isinstance(e.get("UNIT"), str):
-            out.setdefault(e["UNIT"], []).append(int(us) / 1e6 if isinstance(us, str) and re.fullmatch(r"[0-9]{1,20}", us) else None)
-    return out
+            return [], "a line of %s is not a JSON object" % name
+        seen += 1
+        if "UNIT" in e:
+            if not isinstance(e["UNIT"], str):
+                return [], "an entry of %s has a UNIT that is not a string" % name
+            out.append((e["UNIT"], e["MESSAGE"] if isinstance(e.get("MESSAGE"), str) else "", journal_time(e.get("__REALTIME_TIMESTAMP"))))
+    return out, "" if seen else "%s has no entry" % name
 
 
-PID1 = pid1_events()
-WINDOW = [CALLS.get(n) for n in WINDOW_CALLS]   # the calls of the invariance window, the list of the section below
-WINDOW_KNOWN = all(WINDOW)                      # a call that left no record of itself (INVALID already) leaves nothing to place an event by
+def control_events():
+    """({unit: (time, message) of its first entry in PID 1's journal of the control}, why none is believed ('')): the entries whose time lies from CONTROL_BEFORE s before the marker control_start to CONTROL_AFTER s
+    after the marker invariance_start (the guest writes the file right after the control's second snapshot, and the marker is made a moment after that). FAILS CLOSED: a file that is missing or empty, a line that is not
+    a JSON object, a UNIT that is not a string, a time that is not a plausible one, markers that are not there or not in that order: no unit is believed of it, and the false red may come back, never a false pass"""
+    entries, why = pid1_entries("pid1-control.jsonl")
+    c0, c1 = marker_time("control_start"), marker_time("invariance_start")
+    if not why and (c0 is None or c1 is None or c1 < c0):
+        why = "the timeline has no marker control_start and invariance_start, in that order: the interval of the control is not known"
+    if not why and any(t is None for _, _, t in entries):
+        why = "an entry of pid1-control.jsonl has a time that is not a plausible one"
+    found = {}
+    if not why:
+        for u, msg, t in sorted(entries, key=lambda x: x[2]):
+            if c0 - CONTROL_BEFORE <= t <= c1 + CONTROL_AFTER:
+                found.setdefault(u, (t, msg))
+    return found, why
 
 
-def inside(t):
-    """the names of the calls of the window that were running at t, give or take CALL_SLACK"""
-    return [c["name"] for c in WINDOW if min(c["t0"], c["t1"]) - CALL_SLACK <= t <= max(c["t0"], c["t1"]) + CALL_SLACK]
+SELF_STARTED, SELF_WHY = control_events()   # the units that started or stopped by themselves during the control, with the first event of each
 
 
-def pid1_says(u):
-    """(the times of the events of PID 1's journal about the unit, the calls of the window they fall in), or None when it cannot place the unit: there is no journal, no window to
-    place it in, no event of the unit, or an event whose time cannot be read"""
-    ts = (PID1 or {}).get(u)
-    if not WINDOW_KNOWN or not ts or None in ts:
-        return None
-    hit = {n for t in ts for n in inside(t)}
-    return sorted(ts), [c["name"] for c in WINDOW if c["name"] in hit]
+def by_itself(u):
+    """how a unit of SELF_STARTED is named: what its first event in the control says, and when"""
+    t, msg = SELF_STARTED[u]
+    return "%s: %s by itself at %s during the control" % (u, "started" if msg.startswith("Start") else "stopped" if msg.startswith("Stop") or "Deactivated" in msg else "changed", clock(t))
 
 
-left_out = []   # what the journal of PID 1 left out of the verdict on the units: the units that changed and that no call can have caused, with the time
+WINDOW = [c for c in (CALLS.get(n) for n in WINDOW_CALLS) if c]   # the calls of the invariance window (the list of the section below) that left a record of themselves
+WINDOW_ENTRIES = {}                                                # unit -> the times (None: unreadable) of its entries in PID 1's journal of the window, for the verdict's detail
+for _u, _m, _t in pid1_entries("pid1-window.jsonl")[0]:
+    WINDOW_ENTRIES.setdefault(_u, []).append(_t)
+
+
+def where(t):
+    """where a time lies against the calls of the window"""
+    for c in WINDOW:
+        if min(c["t0"], c["t1"]) <= t <= max(c["t0"], c["t1"]):
+            return "inside " + c["name"]
+    if not WINDOW:
+        return "no call to place it by"
+    return "before the first call" if t < min(c["t0"] for c in WINDOW) else "after the last call" if t > max(c["t1"] for c in WINDOW) else "between two calls"
+
+
+def placed(u):
+    """where PID 1's journal of the window puts the entries of a unit that stays held against the calls, against the calls ('' when it has none): a diagnostic, it excuses nothing"""
+    ts = WINDOW_ENTRIES.get(u)
+    if not ts:
+        return ""
+    return "%s at %s" % (u, ", ".join(["%s (%s)" % (clock(t, 2), where(t)) for t in sorted(t for t in ts if t is not None)] + ["a time that cannot be read"] * ts.count(None)))
+
 
 if u1 is not None and u2 is not None:
-    said = []
+    said, excused, put_at = [], [], []
     for u in sorted(u1.keys() | u2.keys()):
         # a unit that a timer starts may run in the window by itself (systemd-tmpfiles-clean does, fifteen minutes after the boot)
         if u in noisy_units or u in TIMER_UNITS:
             continue
         a, b = u1.get(u), u2.get(u)
         if a is None or b is None:
-            what, verb = "%s %s" % (u, "appeared" if a is None else "disappeared"), "started" if a is None else "stopped"
+            what = "%s %s" % (u, "appeared" if a is None else "disappeared")
         elif a != b:
-            what, verb = "%s went from %s/%s (pid %s, invocation %s) to %s/%s (pid %s, invocation %s)" % (u, a[0], a[1], a[2], a[3][:8], b[0], b[1], b[2], b[3][:8]), "changed"
+            what = "%s went from %s/%s (pid %s, invocation %s) to %s/%s (pid %s, invocation %s)" % (u, a[0], a[1], a[2], a[3][:8], b[0], b[1], b[2], b[3][:8])
         else:
             continue
-        # PID 1's journal says when each unit started or stopped: a change that none of its events can be put inside a call of the window for is the box's own
-        # (every event outside every call, or the journal cannot say: that is the old verdict)
-        journal = pid1_says(u)
-        if journal is None:
-            said.append(what)
-        elif journal[1]:
-            said.append("%s (PID 1's journal has it at %s, inside %s)" % (what, few(clock(t) for t in journal[0] if inside(t)), few(journal[1])))
+        # a unit that started or stopped by itself during the control is noise wherever else it changes: the control is as long as the cadence of the units the box starts every few minutes
+        if u in SELF_STARTED:
+            excused.append(by_itself(u))
         else:
-            first, last = clock(journal[0][0]), clock(journal[0][-1])
-            left_out.append("%s %s by itself at %s, outside every call of the window (the calls ran from %s to %s, and a call counts for %d s before and after it)"
-                            % (u, verb, first if first == last else "%s to %s" % (first, last), clock(min(c["t0"] for c in WINDOW))[:-2], clock(max(c["t1"] for c in WINDOW))[:-2], CALL_SLACK))
+            said.append(what)
+            if placed(u):
+                put_at.append(placed(u))
     def diag(name, lines, tail=False):
         # what the guest wrote down to tell who started a service (timedate1's callers, its journal): printed only when the verdict fails
         text = [ln.strip() for ln in read(name).splitlines() if ln.strip()]
@@ -781,8 +837,9 @@ if u1 is not None and u2 is not None:
             return ""
         text = text[-lines:] if tail else text[:lines]
         return " | %s: %s" % (name, " / ".join(text)[:700])
-    verdict(V_INV_UNITS, not said, (few(said) + diag("timedate-monitor.txt", 14) + diag("timedated-journal.txt", 6, tail=True)) if said
-            else "%d units looked at, %d changed by themselves in the control and left out%s" % (len(u1), len(noisy_units), "; left out: " + "; ".join(cell(x, 400) for x in left_out) if left_out else ""))
+    verdict(V_INV_UNITS, not said, (few(said) + (" | left out, started or stopped by themselves during the control (PID 1's own journal): " + few(excused) if excused else "")
+                                    + (" | PID 1's journal of the window puts " + "; ".join(cell(x, 400) for x in put_at[:MAX_NAMED]) if put_at else "") + diag("timedate-monitor.txt", 14) + diag("timedated-journal.txt", 6, tail=True) + (" | PID 1's journal of the control was not used: %s" % SELF_WHY if SELF_WHY else "")) if said
+            else "%d units looked at, %d changed by themselves in the control and left out%s" % (len(u1), len(noisy_units), "; started or stopped by themselves during the control (PID 1's own journal) and left out: " + few(excused) if excused else ""))
 
 if p1 is not None and p2 is not None:
     said = ["%s %s" % ("stopped listening" if x in p1 else "started listening", x) for x in sorted((p1 ^ p2) - noisy_ports)]
@@ -814,30 +871,30 @@ P("")
 P("The first call of the route (ready-route) is made inside the invariance window, after its first snapshot, so that what only the very first call writes is seen (a cache or a state "
   "file made lazily, a service it starts, a port it opens).")
 P("")
-P("What a unit that changed in the window means: a unit that changed and that no call of the window can have caused is the box's own, and is left out and named, with the time. "
-  "PID 1's own journal (pid1-window.jsonl: `journalctl _PID=1 -o json` from just before the window) says when each unit started or stopped, to the microsecond; when the unit has events "
-  "there and every one of them lies outside every call of the window (the calls listed above, each widened by %d s on both sides), no call of the window can have started or stopped it. "
-  "A change inside a call, or one that the journal cannot place (no journal, no event of the unit, an event whose time cannot be read), fails, as it always did. "
-  "A unit that a timer starts, and one that changed by itself in the control, are left out as before." % CALL_SLACK)
-P("")
 P("Of the calls that are not inside the window, no more than this is looked at: the dirty calls of the steps %s are compared for dpkg's status, apt's lists and apt's caches (hashed "
   "or listed before and after the call), and the guest looks at docker.service after the call of %s. A file of /etc, /var/lib/casaos or anywhere else written, a service started "
   "or a port opened by any other call outside the window is not seen by this proof." % (", ".join("`%s`" % s.id for s in STEPS if s.watch), ", ".join("`%s`" % s.id for s in STEPS if s.after)))
 P("")
 P("## What changed by itself (the control)")
 P("")
-P("Two snapshots a few seconds apart with two calls of `GET /v1/sys/version/current` (which answers the bare version, as text) between them. What differs there is left out of the verdicts above, and named here.")
+c0_, c1_ = marker_time("control_start"), marker_time("invariance_start")
+P("Two snapshots, with two calls of `GET /v1/sys/version/current` (which answers the bare version, as text) at the start of the control and a wait between them%s. The wait is as long as the cadence of "
+  "what a box starts by itself: on an Ubuntu something starts systemd-timedated, a bus-activated service, about every five minutes whatever the report does, and it is gone 30 s later, so that a control of a few "
+  "seconds almost never sees it and a start that falls in the window shows as a unit that appeared. What differs between the two snapshots is left out of the verdicts above, and named here. So is every unit that PID 1's own journal of "
+  "the control (pid1-control.jsonl, `journalctl _PID=1 -o json`, taken right after the second snapshot) has an entry of from %d s before the marker control_start to %d s after the marker invariance_start: a unit that "
+  "started or stopped by itself during the control is noise wherever else it changes, and is named with the time of its first entry (UTC). Only units are left out so, never a file or a listening socket."
+  % (" (it lasted %d s, from the marker control_start to the marker invariance_start)" % round(c1_ - c0_) if c0_ is not None and c1_ is not None and c1_ >= c0_ else "", CONTROL_BEFORE, CONTROL_AFTER))
+P("")
+P("What this does not see: a unit that the report itself starts AND that the box also starts by itself every few minutes is hidden by that noise (nothing the report does talks to timedate1, which starts "
+  "systemd-timedated: the guest's `busctl monitor` of its callers and the journal of the unit stay as diagnostics, printed next to a verdict on the units that fails). A file or a listening socket that changes by "
+  "itself in a control of five minutes is left out of its verdict as well, and a call that wrote the same path or opened the same socket would be hidden by it.")
 P("")
 P("- files: %s" % (few(sorted(noisy_files)) if noisy_files else "none"))
 P("- units: %s" % (few(sorted(noisy_units)) if noisy_units else "none"))
+P("- units that started or stopped by themselves during the control, by PID 1's own journal: %s" % (few(by_itself(u) for u in sorted(SELF_STARTED)) if SELF_STARTED
+                                                                                                   else "none (pid1-control.jsonl was not used, and no unit is left out for it: %s)" % SELF_WHY if SELF_WHY else "none"))
 P("- listening sockets: %s" % (few(sorted(noisy_ports)) if noisy_ports else "none"))
 P("- units a timer starts (their invocation ids are not held against the calls): %d" % len(TIMER_UNITS))
-P("")
-P("## What PID 1's journal says of the units that changed in the window")
-P("")
-P("%s" % ("pid1-window.jsonl is there." if PID1 is not None else "There is no readable pid1-window.jsonl: no change of a unit can be placed in time, and every one is held against the calls."))
-P("")
-P("- left out: %s" % ("; ".join(cell(x, 400) for x in left_out) if left_out else "none"))
 P("")
 
 
