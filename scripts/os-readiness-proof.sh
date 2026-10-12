@@ -12,15 +12,18 @@
 #   0. PackageKit stopped (the last apt call of the preparation wakes it on an Ubuntu, and it leaves by itself five minutes later: a unit that would change in
 #      the middle of the window below), and a WAIT: until AppManagement has made its own check of the images of the apps (it does, three minutes after it starts,
 #      and ends it by renaming a new /var/lib/casaos/image_updates.json into place: a write that would fall in the window below and be taken for the report's);
-#   1. a CONTROL: a snapshot of the box, two calls of GET /v1/sys/version/current (the core answers the bare version, as text, outside the envelope), a few
-#      seconds, a snapshot: what changes by itself is known and is not held against the report;
+#   1. a CONTROL: a snapshot of the box, two calls of GET /v1/sys/version/current (the core answers the bare version, as text, outside the envelope), a wait of
+#      CONTROL_SECONDS (320 by default: as long as the cadence of what a box starts by itself, systemd-timedated of an Ubuntu about every five minutes, gone 30 s later),
+#      a snapshot, and PID 1's journal of the control (pid1-control.jsonl: a unit that has an entry in it started or stopped by itself): what changes by itself is known
+#      and is not held against the report;
 #   2. the INVARIANCE window: a snapshot (name, size, mtime, ctime, mode, owner and content hash of every file under /etc, /var/lib/dpkg, /var/lib/apt,
 #      /var/cache/apt, /var/lib/casaos and /var/log/casaos; every service unit with its state, main pid and invocation id; the listening sockets), then
 #      the FIRST call of GET /v1/sys/os/readiness there is (the one most likely to write something lazily, and the one that finds out whether the release has the
 #      route at all: a release that has none answers 404, and the run ends there), GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while
-#      ANOTHER process holds dpkg's lock (the call must neither wait for the lock nor take it), then the same snapshot, then one more call: the answer of the
-#      unchanged box that the dirty matrix is compared with (made after the window). Nothing else is hashed: not /tmp, not /run, not /home or /root; a tool
-#      that writes there (`dkms status` may, in $TMPDIR) is not seen;
+#      ANOTHER process holds dpkg's lock (the call must neither wait for the lock nor take it), then the same snapshot (and, right after it, PID 1's journal of the
+#      window, pid1-window.jsonl: it says where each entry of a unit that changed lies against the calls, for the verdict's detail only), then one more call: the answer
+#      of the unchanged box that the dirty matrix is compared with (made after the window). Nothing else is hashed: not /tmp, not /run, not /home or /root; a tool that
+#      writes there (`dkms status` may, in $TMPDIR) is not seen;
 #   3. the DIRTY MATRIX, one way of dirtying the box at a time: the dirt, a call, the undo (always: a trap runs it when the script dies in the middle of a
 #      step), a check that the undo held, a call. Every step is a trio of functions (dirty_<id>, undo_<id>, undone_<id>), each run in a subshell that stops at
 #      its first failing command, so that the status of a step says whether the box was really dirtied and really put back. A step may also look at the box once
@@ -186,6 +189,9 @@ REBOOT_REQUIRED="${REBOOT_REQUIRED:-/var/run/reboot-required}"
 INTERNAL_SECRET_FILE="${INTERNAL_SECRET_FILE:-/var/run/casaos/internal.secret}"
 # what AppManagement writes when it has checked the images of the apps (a temporary file in /var/lib/casaos, renamed over this one)
 IMAGE_UPDATES="${IMAGE_UPDATES:-/var/lib/casaos/image_updates.json}"
+# how long the control waits between its two snapshots: the cadence of what a box starts by itself (an Ubuntu starts systemd-timedated about every 301 s, and it is gone 30 s
+# later), so that the control sees it. The harness makes it 0
+CONTROL_SECONDS="${CONTROL_SECONDS:-320}"
 # the six trees of the invariance window, the first five of which may not change
 if [ -z "${INV_TREES+x}" ]; then INV_TREES=(/etc /var/lib/dpkg /var/lib/apt /var/cache/apt /var/lib/casaos /var/log/casaos); fi
 # the witnesses that start by themselves after a restart of Docker (its own rule for always and unless-stopped)
@@ -488,9 +494,30 @@ inv_snapshot() {
     listen_dump "$1"
 }
 
+# pid1_window <marker> <file>: what PID 1's journal says of its units, from two seconds before the timeline's marker of that name to now, as `journalctl -o json` writes it: one object a line, UNIT
+# the unit an entry is about, MESSAGE, JOB_TYPE and JOB_RESULT for a job, __REALTIME_TIMESTAMP in microseconds, and the rest of the entry (whole lines: they are small). It is $OUT/<file>, and the
+# report reads it: the control's (control_start, pid1-control.jsonl, taken right after the control's second snapshot) says which units started or stopped by themselves during the control, and those
+# are noise (a bus-activated service that something else wakes up, as systemd-timedated on an Ubuntu about every five minutes, is not the report's doing); the window's (invariance_start,
+# pid1-window.jsonl) is for the verdict's detail alone. Whole seconds: `@<epoch>` takes them, and a wider interval only adds entries. Bounded to 2 MiB: a journal of more than that is not kept (a file
+# cut short would hide the entries of its end), and neither is the output of a journalctl that failed or is not there. No file leaves no unit out of the verdict: never a silent pass.
+pid1_window() {
+    local f="${OUT}/$2" from to
+    rm -f "${f}" "${f}.new"
+    command -v journalctl >/dev/null 2>&1 || return 0
+    from="$(awk -F'\t' -v m="$1" '$3 == m {print $2}' "${OUT}/timeline.tsv" 2>/dev/null)" || return 0
+    from="${from%%[.,]*}"
+    to="${EPOCHREALTIME%%[.,]*}"
+    [[ "${from}" =~ ^[0-9]+$ && "${to}" =~ ^[0-9]+$ ]] || return 0
+    if journalctl _PID=1 -o json --no-pager --quiet --since "@$((from - 2))" --until "@$((to + 1))" >"${f}.new" 2>/dev/null && [ "$(wc -c <"${f}.new")" -le 2097152 ]; then
+        mv "${f}.new" "${f}"
+    else
+        rm -f "${f}.new"
+    fi
+}
+
 # diag_watch_start / diag_watch_stop: who asks systemd-timedated to start during the window (a bus-activated service that a unit snapshot sees appear). A diagnostic: nothing
 # judges these files, the report prints them next to the verdict on the units when that verdict fails. busctl monitor sees the method calls to org.freedesktop.timedate1 and their
-# sender; the list of names at the end says which process each sender is.
+# sender; the list of names at the end says which process each sender is. diag_watch_stop also writes pid1-window.jsonl, which the report only says where a unit that stays held against the calls lies in (above).
 diag_watch_start() {
     command -v busctl >/dev/null 2>&1 || return 0
     busctl --system monitor --no-pager --match "type='method_call',destination='org.freedesktop.timedate1'" >"${OUT}/timedate-monitor.txt" 2>&1 &
@@ -498,6 +525,7 @@ diag_watch_start() {
 }
 diag_watch_stop() {
     local pid
+    pid1_window invariance_start pid1-window.jsonl
     if [ -s "${AUTH_DIR}/dbuswatch.pid" ]; then
         pid="$(cat "${AUTH_DIR}/dbuswatch.pid")"
         kill "${pid}" 2>/dev/null || true
@@ -559,8 +587,11 @@ invariance() {
     inv_snapshot ctl-a
     api ctl-core-1 /v1/sys/version/current 20
     api ctl-core-2 /v1/sys/version/current 20
-    sleep 5
+    # the wait is the control: a unit that the box starts every few minutes by itself has to fall in it (the report reads PID 1's journal of it right below)
+    log "the control waits ${CONTROL_SECONDS} s: what the box starts by itself every few minutes falls in it"
+    sleep "${CONTROL_SECONDS}"
     inv_snapshot ctl-b
+    pid1_window control_start pid1-control.jsonl
     systemctl list-timers --all --no-legend --plain 2>/dev/null | awk 'NF {print $NF}' | sort -u >"${OUT}/timer-units.txt" || true
     marker invariance_start
     diag_watch_start
