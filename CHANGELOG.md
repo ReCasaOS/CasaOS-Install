@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.26] - 2026-10-12
+
+Components: CasaOS `v0.4.72`, CasaOS-UI `v0.4.86`. Unchanged from v0.5.25: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The readiness report no longer says "ready, with things to look at" on every machine because of Docker's own package source.** Docker's source is on every ReCasaOS machine and the upgrade puts it aside and rewrites it for the new release, so there is nothing for the owner to do: when it is the only source that is neither Debian's nor Ubuntu's, the report says so as a note, and the machine is plain "ready". The warning stays for any other third-party source, and now names only those; its text no longer mixes three cases in one paragraph, no longer lists the same file twice, and mentions mirrors of Debian or Ubuntu without a Release file only where it can apply.
+
 ## [0.5.25] - 2026-10-12
 
 Components: CasaOS `v0.4.71`, CasaOS-UI `v0.4.85`. Unchanged from v0.5.24: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
