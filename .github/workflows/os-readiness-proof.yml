@@ -20,8 +20,9 @@ name: os-readiness-proof
 #     place three minutes after its start and would be taken for a write of the report. On an Ubuntu the last apt call of the preparation wakes PackageKit, which
 #     leaves by itself five minutes later and would be a unit that changed in the window: it is stopped there, and what it was is written down;
 #   - the CLEAN box: a clean cloud image with ReCasaOS and Docker has no refuse, and every warning and every info is written down: they are the first data
-#     of the report on a real guest. A `busy` that names a unit of the package manager (apt-daily) on it is a box that a package manager was working on: an
-#     INVALID RUN for it, and no FAIL of the feature;
+#     of the report on a real guest. Docker's own apt source is on that box, and alone it is a note (info) that names it in docker_files and has no other_files:
+#     a source that is not Docker's is what makes `sources_third_party` a warning, and only then does it have other_files. A `busy` that names a unit of the
+#     package manager (apt-daily) on it is a box that a package manager was working on: an INVALID RUN for it, and no FAIL of the feature;
 #   - the DIRTY MATRIX: the guest is dirtied in one way at a time (a hold, an unfinished dpkg journal, a cdrom, file, alias (stable, devel), proposed and
 #     third-party source, a Default-Release of the box's own release and a pin, a foreign architecture, a reboot flag, a lock, a running package update, a
 #     PackageKit that runs (it is no package operation: `busy` stays quiet), a missing fstab device, containers that will not come back or that take the host's
@@ -49,7 +50,9 @@ name: os-readiness-proof
 # and a 404 ends the run there, as an INVALID RUN that says "the release under test has no /v1/sys/os/readiness", before the window's second snapshot and the dirty
 # matrix, which are the long part of the run.
 # Left empty, the tag is the latest published release, which carries the route only once v0.5.25 is published: until then, give the tag of the candidate (a
-# pre-release is proved by its tag before it is made the latest). By hand only; it publishes nothing and changes nothing outside the guests.
+# pre-release is proved by its tag before it is made the latest). The note on Docker's source needs the core that says it: the releases before that change (v0.5.25
+# among them) warn of Docker's source, and the clean-box verdict of Docker's source fails on them, so a release that carries the note is proved by its tag.
+# By hand only; it publishes nothing and changes nothing outside the guests.
 
 on:
   workflow_dispatch:
