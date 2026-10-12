@@ -703,7 +703,15 @@ if u1 is not None and u2 is not None:
             said.append("%s %s" % (u, "appeared" if a is None else "disappeared"))
         elif a != b:
             said.append("%s went from %s/%s (pid %s, invocation %s) to %s/%s (pid %s, invocation %s)" % (u, a[0], a[1], a[2], a[3][:8], b[0], b[1], b[2], b[3][:8]))
-    verdict(V_INV_UNITS, not said, few(said) if said else "%d units looked at, %d changed by themselves in the control and left out" % (len(u1), len(noisy_units)))
+    def diag(name, lines, tail=False):
+        # what the guest wrote down to tell who started a service (timedate1's callers, its journal): printed only when the verdict fails
+        text = [ln.strip() for ln in read(name).splitlines() if ln.strip()]
+        if not text:
+            return ""
+        text = text[-lines:] if tail else text[:lines]
+        return " | %s: %s" % (name, " / ".join(text)[:700])
+    verdict(V_INV_UNITS, not said, (few(said) + diag("timedate-monitor.txt", 14) + diag("timedated-journal.txt", 6, tail=True)) if said
+            else "%d units looked at, %d changed by themselves in the control and left out" % (len(u1), len(noisy_units)))
 
 if p1 is not None and p2 is not None:
     said = ["%s %s" % ("stopped listening" if x in p1 else "started listening", x) for x in sorted((p1 ^ p2) - noisy_ports)]

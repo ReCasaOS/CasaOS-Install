@@ -1748,7 +1748,7 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
           files={"out/rc": "0\n", "out/id": "id-p-pub53\n"})
     gcase("busy_unit: a unit that holds the package update's name, stopped by the undo", 'in_subshell dirty_busy_unit; echo "$STATUS" >"$OUT/rc1"; in_subshell undone_busy_unit; echo "$STATUS" >"$OUT/d"; in_subshell undo_busy_unit; in_subshell undone_busy_unit; echo "$STATUS" >"$OUT/u"',
           files={"out/rc1": "0\n", "out/d": "1\n", "out/u": "0\n"})
-    gcase("busy_lock: the lock is taken by another process and given back by the undo", 'in_subshell dirty_busy_lock; echo "$STATUS" >"$OUT/rc1"; lock_state >"$OUT/during"; in_subshell undone_busy_lock; echo "$STATUS" >"$OUT/d"; in_subshell undo_busy_lock; in_subshell undone_busy_lock; echo "$STATUS" >"$OUT/u"',
+    gcase("busy_lock: the lock is taken by another process and given back by the undo", 'write_lock_tools "$LIBDIR"; in_subshell dirty_busy_lock; echo "$STATUS" >"$OUT/rc1"; lock_state >"$OUT/during"; in_subshell undone_busy_lock; echo "$STATUS" >"$OUT/d"; in_subshell undo_busy_lock; in_subshell undone_busy_lock; echo "$STATUS" >"$OUT/u"',
           files={"out/rc1": "0\n", "out/during": "held\n", "out/d": "1\n", "out/u": "0\n"})
     gcase("disk_boot: a file that leaves 200 MiB free, made with fallocate and not written, and removed by the undo", 'in_subshell dirty_disk_boot; echo "$STATUS" >"$OUT/rc1"; cat "$BOOT_DIR/osr-fill" >"$OUT/size"; in_subshell undo_disk_boot; [ ! -e "$BOOT_DIR/osr-fill" ] && echo gone >"$OUT/gone"',
           files={"out/rc1": "0\n", "out/size": "27800\n", "out/gone": "gone\n", "out/step-disk_boot.note": "a file of 27800 MiB on a filesystem that had 28000 MiB free\n"})

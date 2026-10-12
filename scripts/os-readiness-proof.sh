@@ -488,6 +488,25 @@ inv_snapshot() {
     listen_dump "$1"
 }
 
+# diag_watch_start / diag_watch_stop: who asks systemd-timedated to start during the window (a bus-activated service that a unit snapshot sees appear). A diagnostic: nothing
+# judges these files, the report prints them next to the verdict on the units when that verdict fails. busctl monitor sees the method calls to org.freedesktop.timedate1 and their
+# sender; the list of names at the end says which process each sender is.
+diag_watch_start() {
+    command -v busctl >/dev/null 2>&1 || return 0
+    busctl --system monitor --no-pager --match "type='method_call',destination='org.freedesktop.timedate1'" >"${OUT}/timedate-monitor.txt" 2>&1 &
+    echo "$!" >"${AUTH_DIR}/dbuswatch.pid"
+}
+diag_watch_stop() {
+    local pid
+    if [ -s "${AUTH_DIR}/dbuswatch.pid" ]; then
+        pid="$(cat "${AUTH_DIR}/dbuswatch.pid")"
+        kill "${pid}" 2>/dev/null || true
+        : >"${AUTH_DIR}/dbuswatch.pid"
+    fi
+    if command -v busctl >/dev/null 2>&1; then busctl --system list --no-pager >"${OUT}/dbus-names.txt" 2>&1 || true; fi
+    if command -v journalctl >/dev/null 2>&1; then journalctl -u systemd-timedated.service -o short-precise --no-pager >"${OUT}/timedated-journal.txt" 2>&1 || true; fi
+}
+
 # apt_state <file>: dpkg's status and apt's caches (*.bin) by their hash, and the files of apt's lists by name, size and time (not by content: a list is megabytes, and a write
 # is a new size or a new time): what a call that wrote one of them would have changed. The file is written whole or not at all.
 apt_state() {
@@ -544,6 +563,7 @@ invariance() {
     inv_snapshot ctl-b
     systemctl list-timers --all --no-legend --plain 2>/dev/null | awk 'NF {print $NF}' | sort -u >"${OUT}/timer-units.txt" || true
     marker invariance_start
+    diag_watch_start
     inv_snapshot before
     probe_route
     api sysos-inv /v1/sys/os 30
@@ -557,6 +577,7 @@ invariance() {
     lock_state >"${OUT}/lock-probe-after"
     lock_hold_stop || abort "dpkg's lock was not given back"
     inv_snapshot after
+    diag_watch_stop
     marker invariance_done
     # the answer of the box as it is, with nothing held: what each step of the matrix is compared with
     ready_call ready-base
