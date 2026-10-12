@@ -42,6 +42,9 @@ var proofSteps = []string{
 const (
 	proofRootUUID = "1e2f3a4b-0000-4000-8000-0000000000aa"
 	witnessP53    = `{"name":"/p-pub53","image":"img","restart":"unless-stopped","network":"bridge","mounts":[],"ports":{"80/tcp":[{"HostIp":"127.0.0.2","HostPort":"53"}]}}` + "\n"
+	// what `smartctl -n standby -H /dev/vda` says on a QEMU guest with a virtio disk (smartctl 7.2), with the exit status 1
+	virtioSmartctl = "smartctl 7.2 2020-12-30 r5155 [x86_64-linux-5.10.0-35-amd64] (local build)\nCopyright (C) 2002-20, Bruce Allen, Christian Franke, www.smartmontools.org\n\n" +
+		"/dev/vda: Unable to detect device type\nPlease specify device type with the -d option.\n\nUse smartctl -h to get a usage summary\n\n"
 )
 
 func dockerPolicyFor(l proofLeg, installed, candidate string) string {
@@ -67,10 +70,13 @@ func proofBox(t *testing.T, l proofLeg, step string) *fakeProbe {
 	}
 	f.set("/etc/apt/sources.list.d/docker.list", "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/"+l.dockerOS+" "+l.codename+" stable\n")
 	f.set("/proc/uptime", "612.40 540.10\n")
-	// a fresh guest: no backup made yet, the disk is a virtio one with no smartctl, root is found by its uuid
+	// a fresh guest: no backup made yet, the disk is a virtio one, root is found by its uuid
 	f.remove("/var/lib/casaos/backups/runs.json")
 	f.set("/proc/self/mountinfo", "22 1 253:1 / / rw,relatime shared:1 - ext4 /dev/vda1 rw,errors=remount-ro\n")
 	f.on(lsblkOf("/dev/vda1:part", "/dev/vda:disk"), 0, argvLsblk("/dev/vda1")...)
+	// the guest HAS smartctl: install.sh puts smartmontools on every box (7.2-1 on Debian 11 and on Ubuntu 22.04). A virtio disk does not pass SMART on: smartctl cannot tell the
+	// type of the device and exits with status 1, which the core says is `unavailable` (an info). `no_smartctl` would be a box without the tool, which this one is not.
+	f.on(virtioSmartctl, 1, argvSmart("/dev/vda")...)
 	f.set("/etc/fstab", "UUID="+proofRootUUID+"\t/\text4\trw,discard,errors=remount-ro\t0 1\n")
 	f.set("/dev/disk/by-uuid/"+proofRootUUID, "")
 	f.remove("/dev/disk/by-label/cloudimg-rootfs")
