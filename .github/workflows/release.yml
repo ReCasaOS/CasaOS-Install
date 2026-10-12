@@ -39,6 +39,9 @@ jobs:
       - name: Check what the installer says when a dependency cannot be installed
         run: bash scripts/test-install-dependencies.sh
 
+      - name: Check the port the installer's closing banner shows
+        run: bash scripts/test-install-banner.sh
+
       - name: Check how a pre-release is told from a release
         run: bash scripts/test-release-prerelease.sh
 
