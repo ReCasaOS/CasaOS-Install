@@ -18,9 +18,10 @@
 #      /var/cache/apt, /var/lib/casaos and /var/log/casaos; every service unit with its state, main pid and invocation id; the listening sockets), then
 #      the FIRST call of GET /v1/sys/os/readiness there is (the one most likely to write something lazily, and the one that finds out whether the release has the
 #      route at all: a release that has none answers 404, and the run ends there), GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while
-#      ANOTHER process holds dpkg's lock (the call must neither wait for the lock nor take it), then the same snapshot, then one more call: the answer of the
-#      unchanged box that the dirty matrix is compared with (made after the window). Nothing else is hashed: not /tmp, not /run, not /home or /root; a tool
-#      that writes there (`dkms status` may, in $TMPDIR) is not seen;
+#      ANOTHER process holds dpkg's lock (the call must neither wait for the lock nor take it), then the same snapshot (and, right after it, PID 1's journal of the
+#      window, pid1-window.jsonl: when each unit started or stopped, which is how the report tells a unit that a call changed from one that changed by itself), then
+#      one more call: the answer of the unchanged box that the dirty matrix is compared with (made after the window). Nothing else is hashed: not /tmp, not /run,
+#      not /home or /root; a tool that writes there (`dkms status` may, in $TMPDIR) is not seen;
 #   3. the DIRTY MATRIX, one way of dirtying the box at a time: the dirt, a call, the undo (always: a trap runs it when the script dies in the middle of a
 #      step), a check that the undo held, a call. Every step is a trio of functions (dirty_<id>, undo_<id>, undone_<id>), each run in a subshell that stops at
 #      its first failing command, so that the status of a step says whether the box was really dirtied and really put back. A step may also look at the box once
@@ -488,9 +489,30 @@ inv_snapshot() {
     listen_dump "$1"
 }
 
+# pid1_window: what PID 1's journal says of its units, from two seconds before the window's marker (invariance_start) to now, as `journalctl -o json` writes it: one object a line, UNIT
+# the unit an entry is about, MESSAGE, JOB_TYPE and JOB_RESULT for a job, __REALTIME_TIMESTAMP in microseconds, and the rest of the entry (whole lines: they are small). It is $OUT/pid1-window.jsonl,
+# and the report JUDGES it: the time of every start and stop of a unit that changed in the window, next to the times of the calls (a bus-activated service that something else wakes up, as
+# systemd-timedated on an Ubuntu about every five minutes, is not the report's doing, and a start outside every call says so). Whole seconds: `@<epoch>` takes them, and a wider window only
+# adds entries. Bounded to 2 MiB: a journal of more than that is not kept (a file cut short would hide the entries of its end), and neither is the output of a journalctl that failed or is not
+# there. No file is the old verdict, a unit that changed fails: never a silent pass.
+pid1_window() {
+    local f="${OUT}/pid1-window.jsonl" from to
+    rm -f "${f}" "${f}.new"
+    command -v journalctl >/dev/null 2>&1 || return 0
+    from="$(awk -F'\t' '$3 == "invariance_start" {print $2}' "${OUT}/timeline.tsv" 2>/dev/null)" || return 0
+    from="${from%%[.,]*}"
+    to="${EPOCHREALTIME%%[.,]*}"
+    [[ "${from}" =~ ^[0-9]+$ && "${to}" =~ ^[0-9]+$ ]] || return 0
+    if journalctl _PID=1 -o json --no-pager --quiet --since "@$((from - 2))" --until "@$((to + 1))" >"${f}.new" 2>/dev/null && [ "$(wc -c <"${f}.new")" -le 2097152 ]; then
+        mv "${f}.new" "${f}"
+    else
+        rm -f "${f}.new"
+    fi
+}
+
 # diag_watch_start / diag_watch_stop: who asks systemd-timedated to start during the window (a bus-activated service that a unit snapshot sees appear). A diagnostic: nothing
 # judges these files, the report prints them next to the verdict on the units when that verdict fails. busctl monitor sees the method calls to org.freedesktop.timedate1 and their
-# sender; the list of names at the end says which process each sender is.
+# sender; the list of names at the end says which process each sender is. diag_watch_stop also writes pid1-window.jsonl, which the report does judge (above).
 diag_watch_start() {
     command -v busctl >/dev/null 2>&1 || return 0
     busctl --system monitor --no-pager --match "type='method_call',destination='org.freedesktop.timedate1'" >"${OUT}/timedate-monitor.txt" 2>&1 &
@@ -498,6 +520,7 @@ diag_watch_start() {
 }
 diag_watch_stop() {
     local pid
+    pid1_window
     if [ -s "${AUTH_DIR}/dbuswatch.pid" ]; then
         pid="$(cat "${AUTH_DIR}/dbuswatch.pid")"
         kill "${pid}" 2>/dev/null || true
