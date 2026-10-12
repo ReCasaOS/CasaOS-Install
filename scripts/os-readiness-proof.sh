@@ -10,16 +10,17 @@
 #
 # In this order:
 #   0. PackageKit stopped (the last apt call of the preparation wakes it on an Ubuntu, and it leaves by itself five minutes later: a unit that would change in
-#      the middle of the window below), the first call of the route as soon as the services answer (a release that has none answers 404, and the run ends there,
-#      before the rest), and a WAIT: until AppManagement has made its own check of the images of the apps (it does, three minutes after it starts, and ends it by
-#      renaming a new /var/lib/casaos/image_updates.json into place: a write that would fall in the window below and be taken for the report's);
-#   1. a CONTROL: a snapshot of the box, two calls of GET /v1/sys/version/current, a few seconds, a snapshot: what changes by itself is known and is not held
-#      against the report;
+#      the middle of the window below), and a WAIT: until AppManagement has made its own check of the images of the apps (it does, three minutes after it starts,
+#      and ends it by renaming a new /var/lib/casaos/image_updates.json into place: a write that would fall in the window below and be taken for the report's);
+#   1. a CONTROL: a snapshot of the box, two calls of GET /v1/sys/version/current (the core answers the bare version, as text, outside the envelope), a few
+#      seconds, a snapshot: what changes by itself is known and is not held against the report;
 #   2. the INVARIANCE window: a snapshot (name, size, mtime, ctime, mode, owner and content hash of every file under /etc, /var/lib/dpkg, /var/lib/apt,
 #      /var/cache/apt, /var/lib/casaos and /var/log/casaos; every service unit with its state, main pid and invocation id; the listening sockets), then
-#      GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while ANOTHER process holds dpkg's lock (the call must neither wait for the lock
-#      nor take it), then the same snapshot, then one more call: the answer of the unchanged box that the dirty matrix is compared with. Nothing else is
-#      hashed: not /tmp, not /run, not /home or /root; a tool that writes there (`dkms status` may, in $TMPDIR) is not seen;
+#      the FIRST call of GET /v1/sys/os/readiness there is (the one most likely to write something lazily, and the one that finds out whether the release has the
+#      route at all: a release that has none answers 404, and the run ends there), GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while
+#      ANOTHER process holds dpkg's lock (the call must neither wait for the lock nor take it), then the same snapshot, then one more call: the answer of the
+#      unchanged box that the dirty matrix is compared with (made after the window). Nothing else is hashed: not /tmp, not /run, not /home or /root; a tool
+#      that writes there (`dkms status` may, in $TMPDIR) is not seen;
 #   3. the DIRTY MATRIX, one way of dirtying the box at a time: the dirt, a call, the undo (always: a trap runs it when the script dies in the middle of a
 #      step), a check that the undo held, a call. Every step is a trio of functions (dirty_<id>, undo_<id>, undone_<id>), each run in a subshell that stops at
 #      its first failing command, so that the status of a step says whether the box was really dirtied and really put back. A step may also look at the box once
@@ -379,9 +380,9 @@ api() {
 # the call under test: longer than the core's 20 s budget, so that a call that blocks shows as one
 ready_call() { api "$1" /v1/sys/os/readiness 45; }
 
-# probe_route: the first call of the route, as soon as the services answer: a release that has none (every release before the one that carries it) answers 404 to it and to every
-# call that follows, and the run would find that out after the wait for the images, the control and the window. Recorded as ready-route, which the report judges like the
-# others. It is the one call made before the window: a write that only the very first call of the route makes is not in it.
+# probe_route: the first call of the route, the first call of the invariance window (invariance() makes it once the window's first snapshot is taken: a cache or a state file that only
+# the very first call writes lazily is then in the window, which a call made before it would have hidden). A release that has no such route (every release before the one that carries it)
+# answers 404 to it and to every call that follows: the run ends there, before the window's second snapshot and the dirty matrix. Recorded as ready-route, which the report judges like the others.
 probe_route() {
     ready_call ready-route
     [ "$(cat "${OUT}/ready-route.code")" != 404 ] || abort "the release under test has no /v1/sys/os/readiness"
@@ -430,9 +431,13 @@ box_facts() {
         echo "boot_on $(df -P "${BOOT_DIR}" | awk 'NR == 2 {print $1}') (root: $(df -P / | awk 'NR == 2 {print $1}'))"
         echo "virt $(systemd-detect-virt 2>&1 || true)"
         echo "docker $(docker version --format '{{.Server.Version}}' 2>&1)"
+        # what apt says of the Docker it has and the one it would install: the d11 leg is built so that a newer one is on offer (the report needs it to hold a held Docker against it)
+        echo "docker_offer $(apt-cache policy docker-ce 2>&1 | awk '$1 == "Installed:" {i = $2} $1 == "Candidate:" {c = $2} END {print "installed " i ", candidate " c}')"
         echo "apt $(apt-get --version 2>&1 | sed -n 1p)"
         echo "dpkg $(dpkg --version 2>&1 | sed -n 1p)"
         echo "systemd $(systemctl --version 2>&1 | sed -n 1p)"
+        # the installer puts smartmontools on every box: the report holds the core's `no_smartctl` against a box that has it, and refuses a box that has none
+        echo "smartctl $(command -v smartctl || echo none)"
         # PackageKit: what the apt run that ends the preparation left it as (active on an Ubuntu), and what it is now that it was stopped
         echo "packagekit_after_apt ${PK_AFTER_APT:-not asked}"
         echo "packagekit $(unit_state packagekit.service)"
@@ -540,6 +545,7 @@ invariance() {
     systemctl list-timers --all --no-legend --plain 2>/dev/null | awk 'NF {print $NF}' | sort -u >"${OUT}/timer-units.txt" || true
     marker invariance_start
     inv_snapshot before
+    probe_route
     api sysos-inv /v1/sys/os 30
     ready_call ready-inv-1
     ready_call ready-inv-2
@@ -876,7 +882,6 @@ main() {
     PK_AFTER_APT="$(unit_state packagekit.service)"
     quiet_packagekit || echo "packagekit.service was still there 30 s after it was stopped: it may leave in the invariance window" >>"${OUT}/prepare-notes"
     wait_services 180 || abort "the gateway, the core and AppManagement do not all answer after the installation"
-    probe_route
     timeout 120 systemctl is-system-running --wait >/dev/null 2>&1 || true
     box_facts
     leak_needles

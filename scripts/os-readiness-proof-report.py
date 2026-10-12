@@ -13,22 +13,27 @@ FAIL of the feature. NOT TESTABLE is neutral and visible: what these guests cann
 
 What the guest did (os-readiness-proof.sh), in this order, on a fresh cloud image with ReCasaOS and Docker and a few witness containers:
   - PackageKit stopped (on an Ubuntu the apt run that ends the preparation wakes it, and it leaves by itself five minutes later: in the middle of the window, a
-    unit that changed), and then the first call of the route (ready-route), as soon as the services answer: a release with no such route is found out there, and
-    not after the wait for the images, the control and the window. It is judged like every other call;
-  - a control: two snapshots of the box a few seconds apart with two calls to the core in between (GET /v1/sys/version/current), to know what changes by
-    itself: those paths and units are not held against the readiness report, and the report names them;
+    unit that changed), and a wait until AppManagement has made its own check of the images (it renames a new /var/lib/casaos/image_updates.json into place);
+  - a control: two snapshots of the box a few seconds apart with two calls to the core in between (GET /v1/sys/version/current, which answers the bare version
+    as text and not the envelope: it is judged on its status alone), to know what changes by itself: those paths and units are not held against the readiness
+    report, and the report names them;
   - the INVARIANCE window: a snapshot (the name, size, times, mode, owner and content hash of every file of /etc, /var/lib/dpkg, /var/lib/apt,
     /var/cache/apt, /var/lib/casaos and /var/log/casaos; every service unit with its state, main pid and invocation id; the listening ports), then
-    GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while another process holds dpkg's lock, then the same snapshot. Only
-    /var/log/casaos may differ. Nothing else is looked at: not /tmp, not /run, not /home or /root (a tool that writes there, as `dkms status` may in
-    $TMPDIR, is not seen). The call under the lock has to answer 200 inside the core's budget, say `busy`, and leave the lock to its holder;
+    the FIRST call of GET /v1/sys/os/readiness there is (ready-route: the one most likely to write something lazily, and the one that finds out whether the
+    release has the route at all: a 404 ends the run there), GET /v1/sys/os, GET /v1/sys/os/readiness three times, and once more while another process holds
+    dpkg's lock, then the same snapshot. Only /var/log/casaos may differ. Nothing else is looked at: not /tmp, not /run, not /home or /root (a tool that
+    writes there, as `dkms status` may in $TMPDIR, is not seen). The call under the lock has to answer 200 inside the core's budget, say `busy`, and leave
+    the lock to its holder;
   - the CLEAN box: the answers of that window (and one more) have no refuse; every warn and info is a fact of the report. A `busy` that names a unit (apt-daily)
-    on the clean box is a box that a package manager was working on: the run is INVALID for it, and is not a FAIL of the feature;
+    on the clean box is a box that a package manager was working on: the run is INVALID for it, and is not a FAIL of the feature. The box has smartctl (the
+    installer puts smartmontools on every box), so `smart_failed` is never `no_smartctl` there: a virtio disk does not answer SMART, and that is `unavailable`;
   - the DIRTY MATRIX: one way of dirtying the guest at a time (a hold, an unfinished dpkg journal, a source of each kind, a foreign architecture, a
     reboot flag, a lock, PackageKit running, a missing fstab device, a container with no restart policy, a nearly full disk, AppManagement stopped, Docker
     stopped with its socket and Docker's service stopped alone with its socket listening...), a call, the undo, a call: the exact code with the exact severity
     has to appear, nothing else may appear with it, and after the undo the answer has to be the clean one again. A step may be asked more (expect): a Docker
-    on hold with a newer one on offer is an info that says held true on d11, a Docker that is not running leaves three checks saying why not_running; and
+    on hold with a newer one on offer is an info that says held true on d11 (the d11 guest is built to have that newer Docker on offer: a clean box that does
+    not say so did not get its premise, and the run is INVALID, never a NOT TESTABLE that leaves the job green), a Docker that is not running leaves three
+    checks saying why not_running; and
     after the call (after) the guest says what it sees: docker.service is still inactive when only the service was stopped, which a report that asked the
     daemon through the listening socket would have started. The calls of the steps that watch (an unfinished journal, a Default-Release, a foreign
     architecture, Docker stopped) are also looked at for what they write: dpkg's status, apt's lists and apt's caches before and after the call, which the
@@ -94,7 +99,9 @@ class Step:
     fire (a hold on Docker is not a hold); extras: codes (patterns) that may become worse with it because the dirt has that effect too; expect: rows
     (leg, code, severity, key, value, clean) of what the dirty answer also says: the code has this severity, and its data has this value under the key (no key: the
     severity alone), on this leg (* for both); clean is the severity the same code has on the clean box, which the row needs: a clean box that says another is a
-    box on which the dirt cannot be told from what is there, NOT TESTABLE; after: what the guest saw once the call was over (after_<id> of the guest script), and
+    box on which the dirt cannot be told from what is there, NOT TESTABLE for a row of every leg (*), and an INVALID RUN for a row of ONE leg, which is that leg's
+    premise (the d11 guest is built to have a newer Docker on offer: a guest that does not is a harness that did not get what the step needs, which a job that
+    stays green would hide); after: what the guest saw once the call was over (after_<id> of the guest script), and
     after_what says what that means; watch: the guest took dpkg's status, apt's lists and apt's caches before and after the call, and the call may not have changed them"""
 
     def __init__(self, id, code, mode="fires", sev="refuse", needle="", forbid=(), extras=(), what="", see="", expect=(), after="", after_what="", watch=False):
@@ -152,6 +159,9 @@ NOT_TESTABLE = [
 ]
 INV_CALLS = ("ready-inv-1", "ready-inv-2", "ready-inv-3")
 CLEAN_CALLS = INV_CALLS + ("ready-base",)
+# the calls the guest makes between the first and the second snapshot of the invariance window, in its order: the first call of the route, GET /v1/sys/os, three more calls
+# of the route, and the one made while another process holds dpkg's lock (os-readiness-proof.sh, invariance(): the harness checks that this is the list of the guest)
+WINDOW_CALLS = ("ready-route", "sysos-inv") + INV_CALLS + ("ready-inv-lock",)
 
 lines = []
 P = lines.append
@@ -292,10 +302,11 @@ def number(name):
         return None
 
 
-def call(name):
+def call(name, plain=False):
     """what the guest kept of one call, or None when it left no usable record of itself (INVALID): dict(name, http, curl, t0, t1, secs, kind, body, data) where
     kind is '' for an answer that was read, 'timeout' (curl gave up on it: the call blocked), 'cut' (curl got a status and then an error), 'unreadable' (200 and
-    not a JSON object), 'error' (any other status of the route)"""
+    not a JSON object), 'error' (any other status of the route). plain is a call whose answer is text and not the envelope (GET /v1/sys/version/current says the
+    bare version, route/v1.go: ctx.String(200, common.VERSION)): it is read as it is, the text is its body, and it has no data"""
     code, curl = read(name + ".code").strip(), read(name + ".curl").strip()
     if not code:
         invalid("no answer was recorded for %s: that step did not run" % name)
@@ -311,13 +322,16 @@ def call(name):
     if c["http"] in NO_ANSWER:
         err = " ".join(read(name + ".err").split())[:120]
         invalid("%s got no answer of the route: curl exit %s, HTTP %s%s%s" % (name, c["curl"], c["http"], " (%s)" % err if err else "",
-                                                                             ": the release under test has no such route" if c["http"] == 404 else ""))
+                                                                             ": the release under test has no such route" if c["http"] == 404 and not plain else ""))
         return None
     if c["curl"] != 0:
         c["kind"] = "cut"
         return c
     if c["http"] != 200:
         c["kind"] = "error"
+        return c
+    if plain:
+        c["body"] = read(name + ".json")
         return c
     try:
         body = json.loads(read(name + ".json"))
@@ -361,9 +375,9 @@ CALLS = {}      # name -> call (readiness answers, the ones that left a record)
 ANSWERS = {}    # name -> call, those that were read (kind '')
 
 
-def get(name):
+def get(name, plain=False):
     if name not in CALLS:
-        CALLS[name] = call(name)
+        CALLS[name] = call(name, plain)
         if CALLS[name] and not CALLS[name]["kind"]:
             ANSWERS[name] = CALLS[name]
     return CALLS[name]
@@ -502,6 +516,7 @@ V_CLEAN_STATE = "the state of the clean box is ready or attention"
 V_CLEAN_AGREE = "the four answers on the unchanged box say the same thing (same codes, same severities)"
 V_CLEAN_DOCKER = "Docker's apt source is listed as a third-party source (warn), named"
 V_CLEAN_SNAPSHOT = "the reminder to take a snapshot is always there (snapshot_reminder, info)"
+V_CLEAN_SMART = "the clean box has smartctl, as the installer puts smartmontools on every box, and the core finds it: smart_failed is not `no_smartctl` (a virtio disk says `unavailable`, an info)"
 F_FIRES = "step %s: the dirty box makes `%s` %s"
 F_QUIET = "step %s: the dirty box leaves `%s` quiet"
 F_UNDONE = "step %s: after the undo the answer is the clean one again (the code is gone, nothing else is left)"
@@ -520,7 +535,7 @@ P("| | |")
 P("|---|---|")
 P("| system | %s |" % cell(read("os").strip() or OSREL.get("PRETTY_NAME", "?")))
 P("| leg | %s: %s %s to %s %s |" % (leg, L["family"], L["version"], L["family"], L["to_version"]))
-for k in ("kernel", "cpus", "memory_mb", "boot", "root", "boot_on", "virt", "docker", "installer", "apt", "systemd", "packagekit_after_apt", "packagekit"):
+for k in ("kernel", "cpus", "memory_mb", "boot", "root", "boot_on", "virt", "docker", "docker_offer", "installer", "apt", "systemd", "smartctl", "packagekit_after_apt", "packagekit"):
     if FACTS.get(k):
         P("| %s | %s |" % (k, cell(FACTS[k])))
 P("")
@@ -528,10 +543,13 @@ P("")
 
 # ---- the calls and the contract of the answers ---------------------------------------------------------------------------------------
 
-ctl = [get("ctl-core-%d" % i) for i in (1, 2)]
+ctl = [get("ctl-core-%d" % i, plain=True) for i in (1, 2)]
 for c in ctl:
+    # the real route answers the bare version as text: what is asked of the control is that the core answered it (status 200, something said), not the shape of the envelope
     if c and (c["kind"] or c["http"] != 200):
         invalid("%s answered HTTP %s: the control of the invariance window did not run" % (c["name"], c["http"]))
+    elif c and not c["body"].strip():
+        invalid("%s answered HTTP 200 with no text: the control of the invariance window did not run (the core says its version)" % c["name"])
 sysos = get("sysos-inv")
 for n in ("ready-route",) + INV_CALLS + ("ready-inv-lock", "ready-base"):
     get(n)
@@ -708,9 +726,22 @@ P("")
 P("The names, sizes, times, mode, owner and content of every file of %s; every service unit with its state, main pid and invocation id; the listening sockets. "
   "It does not look at /tmp, /run, /var/tmp, /home, /root, /proc or /sys, nor at anything else: what a tool writes there (`dkms status` may create and remove a file in $TMPDIR) is not seen by this proof." % ", ".join(TREES))
 P("")
+P("## Which calls the invariance window covers")
+P("")
+P("- inside the window (compared before and after, for the six trees, the units and the listening sockets): %s" % ", ".join(WINDOW_CALLS))
+P("- not inside the window: ctl-core-1 and ctl-core-2 (the control's own calls: what changed during them is what changes by itself), ready-base (the answer of the unchanged box "
+  "that the steps are compared with, made after the window), and every call of the dirty matrix, step-<id>-dirty and step-<id>-clean")
+P("")
+P("The first call of the route (ready-route) is made inside the invariance window, after its first snapshot, so that what only the very first call writes is seen (a cache or a state "
+  "file made lazily, a service it starts, a port it opens).")
+P("")
+P("Of the calls that are not inside the window, no more than this is looked at: the dirty calls of the steps %s are compared for dpkg's status, apt's lists and apt's caches (hashed "
+  "or listed before and after the call), and the guest looks at docker.service after the call of %s. A file of /etc, /var/lib/casaos or anywhere else written, a service started "
+  "or a port opened by any other call outside the window is not seen by this proof." % (", ".join("`%s`" % s.id for s in STEPS if s.watch), ", ".join("`%s`" % s.id for s in STEPS if s.after)))
+P("")
 P("## What changed by itself (the control)")
 P("")
-P("Two snapshots a few seconds apart with two calls of `GET /v1/sys/version/current` between them. What differs there is left out of the verdicts above, and named here.")
+P("Two snapshots a few seconds apart with two calls of `GET /v1/sys/version/current` (which answers the bare version, as text) between them. What differs there is left out of the verdicts above, and named here.")
 P("")
 P("- files: %s" % (few(sorted(noisy_files)) if noisy_files else "none"))
 P("- units: %s" % (few(sorted(noisy_units)) if noisy_units else "none"))
@@ -753,6 +784,16 @@ if all(clean):
             "sources_third_party is %s%s" % (third.get("severity") if third else "not in the answer", "" if not third or "docker" in json.dumps(third).lower() else ", and does not name Docker's source"))
     snap = check_of(base, "snapshot_reminder")
     verdict(V_CLEAN_SNAPSHOT, snap is not None and snap.get("severity") == "info", "snapshot_reminder is %s" % (snap.get("severity") if snap else "not in the answer"))
+    # the guest has smartctl (install.sh puts smartmontools on every box), so a core that says it has none does not find it. A box that has none is not the box the proof is for
+    if "smartctl" not in FACTS:
+        invalid("box-facts says nothing of smartctl: the guest did not say whether the box has it, and what the clean box says of the health of its disk proves nothing")
+    elif FACTS["smartctl"] in ("", "none"):
+        invalid("the guest has no smartctl: the installer puts smartmontools on every box, so this is not the box the proof is for, and what the clean box says of the health of its disk proves nothing")
+    else:
+        smart = check_of(base, "smart_failed")
+        why = (smart.get("data") or {}).get("why") if smart is not None and isinstance(smart.get("data"), dict) else None
+        verdict(V_CLEAN_SMART, smart is not None and smart.get("severity") in ("info", "ok") and why != "no_smartctl",
+                "smart_failed is %s%s" % (smart.get("severity") if smart else "not in the answer", ", why %s" % cell(why, 30) if why else ""))
 
 if base is not None:
     P("## The clean box, check by check (the first real-guest data of the report)")
@@ -858,7 +899,19 @@ for s in STEPS:
             continue
         name = F_EXPECT % (s.id, code, want, " with %s %s" % (key, json.dumps(value)) if key else "")
         if sev_map(base).get(code) != clean_sev:
-            not_testable(name, "the clean box says `%s` is %s, not %s: the dirt cannot be told from what is there" % (code, sev_map(base).get(code, "absent"), clean_sev))
+            said = sev_map(base).get(code, "absent")
+            if leg_ == "*":
+                not_testable(name, "the clean box says `%s` is %s, not %s: the dirt cannot be told from what is there" % (code, said, clean_sev))
+            else:
+                # a row of one leg is that leg's premise: the d11 guest is built to have a newer Docker on offer (28.0.4 installed, the repository's 29 as the candidate), and a box that does
+                # not say so did not get what the step needs. That is a harness that did not do its job, never a neutral result that leaves the job green
+                k0 = check_of(base, code)
+                d0 = k0.get("data") if k0 is not None and isinstance(k0.get("data"), dict) else {}
+                what = ", ".join("%s %s" % (w, cell(d0[w], 60)) for w in ("installed", "candidate") if isinstance(d0.get(w), str))
+                seen = "the guest saw: %s" % cell(FACTS["docker_offer"], 120) if code == "docker_update_pending" and FACTS.get("docker_offer") else ""
+                invalid("step %s: the %s leg is built so that its clean box says `%s` is %s, and it says `%s` is %s%s: the premise of the leg is missing (the box did not get what the step "
+                        "needs%s), and the ruling it proves was not exercised. It says nothing against the feature"
+                        % (s.id, leg_, code, clean_sev, code, said, " (%s)" % what if what else "", "; " + seen if seen else ""))
             continue
         k = check_of(dirty, code)
         d = k.get("data") if k is not None and isinstance(k.get("data"), dict) else {}
@@ -901,9 +954,6 @@ P("## What this proof did not exercise")
 P("")
 rest = sorted(set(CANONICAL) - exercised - {"uptime_long", "container", "virt_xen", "unproven_arch"})
 P("Codes of the spec's table that no step of this proof makes fire (the core's own tests are their proof; the clean box shows whether they stay quiet): %s." % few(rest, 80))
-P("")
-P("The first call of the route (ready-route) is made before the invariance window, as soon as the services answer, to find out whether the release has the route at all: a file written, "
-  "a service started or a port opened by that very first call and by none after it is not in the window. Every other call of the proof, clean or dirty, is.")
 P("")
 
 finish()

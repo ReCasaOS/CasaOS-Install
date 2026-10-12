@@ -112,6 +112,12 @@ def answer(step, leg, at, mode=""):
         for c in data["checks"]:
             if c["code"] == "busy":
                 c["data"].update(source="unit", unit=mode.split(":", 1)[1])
+    if mode == "nosmart":
+        # a core that does not find the smartctl of the box (its PATH has no /usr/sbin, say)
+        for c in data["checks"]:
+            if c["code"] == "smart_failed":
+                c["data"]["why"] = "no_smartctl"
+                c["data"].pop("disks", None)
     if mode == "apt_fails":
         # apt says no to a Default-Release that no source offers, in every command that opens its cache: the checks that run two of them could not ask
         for code in ("broken_dpkg", "docker_origin", "docker_update_pending"):
@@ -274,14 +280,19 @@ def manifest_text(rows):
     return "".join("\t".join([json.dumps(p)] + list(r)) + "\n" for p, r in sorted(rows.items()))
 
 
+# what apt says of docker-ce on the guest of each leg: the d11 guest is on 28.0.4 with a 29 on offer (the owner's box), the u22 guest has the newest
+DOCKER_OFFER = {"d11": "installed 5:28.0.4-1~debian.11~bullseye, candidate 5:29.8.0-1~debian.11~bullseye", "u22": "installed 5:29.8.0-1~ubuntu.22.04~jammy, candidate 5:29.8.0-1~ubuntu.22.04~jammy"}
+
+
 def build(d, leg):
     """the evidence of a healthy leg: the answers are the core's own (the fixtures), clean and with the dirt of each step"""
     L = LEG[leg]
     put(d, "leg", leg + "\n")
     put(d, "os", L["pretty"] + "\n")
     put(d, "os-release", 'PRETTY_NAME="%s"\nNAME="%s"\nVERSION_ID="%s"\nVERSION_CODENAME=%s\nID=%s\n' % (L["pretty"], L["family"].title(), L["version"], L["codename"], L["family"]))
-    put(d, "box-facts", "kernel 5.10.0-46-cloud-amd64\ncpus 4\nmemory_mb 5943\nboot bios\nroot ext4 /dev/vda1\nboot_on /dev/vda1 (root: /dev/vda1)\nvirt kvm\ndocker 28.0.4\n"
-                        "apt apt 2.2.4 (amd64)\npackagekit_after_apt %s\npackagekit inactive\n" % ("active" if leg == "u22" else "inactive"))
+    put(d, "box-facts", "kernel 5.10.0-46-cloud-amd64\ncpus 4\nmemory_mb 5943\nboot bios\nroot ext4 /dev/vda1\nboot_on /dev/vda1 (root: /dev/vda1)\nvirt kvm\ndocker 28.0.4\ndocker_offer %s\n"
+                        "apt apt 2.2.4 (amd64)\nsmartctl /usr/sbin/smartctl\npackagekit_after_apt %s\npackagekit inactive\n"
+                        % (DOCKER_OFFER[leg], "active" if leg == "u22" else "inactive"))
     put(d, "leak-needles.tsv", "hostname\t%s\nipv4\t%s\nipv4\t172.17.0.1\nipv6\t%s\nmac\t%s\nuser\t%s\n" % (HOST, IPV4, IPV6, MAC, USER))
     put(d, "timeline.tsv", "#\t%.6f\tprepare_start\n#\t%.6f\tinvariance_start\n" % (T0, T0 + 100))
     put(d, "finished", iso(T0 + 3000) + "\n")
@@ -304,7 +315,8 @@ def build(d, leg):
     t = at()
     api(d, "ready-route", t0=t, body=ready_body(leg, "", t + 1))
     for name in ("ctl-core-1", "ctl-core-2"):
-        api(d, name, body={"success": 200, "message": "ok", "data": "v0.5.20"}, t0=at())
+        # what the real core says to GET /v1/sys/version/current (route/v1.go: ctx.String(200, common.VERSION)): the bare version, as text, outside the envelope
+        api(d, name, raw="0.5.20\n", t0=at())
     api(d, "sysos-inv", t0=at(), body={"success": 200, "message": "ok", "data": {"id": L["family"], "version_id": L["version"], "codename": L["codename"], "pretty_name": L["pretty"],
                                                                               "arch": "amd64", "known": True, "next": {"id": L["family"], "version_id": L["to_version"], "codename": L["to_codename"], "state": "report"}}})
     for name in ("ready-inv-1", "ready-inv-2", "ready-inv-3"):
@@ -454,6 +466,13 @@ def run_report(d, leg):
     return code, buf.getvalue()
 
 
+def window_text(out):
+    """(the calls the report says are inside the invariance window, what it says of the calls that are not): read from the report's own text"""
+    m = re.search(r"^- inside the window \(compared before and after[^)]*\): (.*)$", out, re.M)
+    n = re.search(r"^- not inside the window: (.*)$", out, re.M)
+    return ([x.strip() for x in m.group(1).split(",")] if m else None), (n.group(1) if n else None)
+
+
 def case(name, want_code, must_have=(), must_not_have=(), leg="d11", mutate=None, empty=False):
     if not wanted(name):
         return
@@ -511,8 +530,9 @@ V_CLEAN_STATE = "the state of the clean box is ready or attention"
 V_CLEAN_AGREE = "the four answers on the unchanged box say the same thing (same codes, same severities)"
 V_CLEAN_DOCKER = "Docker's apt source is listed as a third-party source (warn), named"
 V_CLEAN_SNAPSHOT = "the reminder to take a snapshot is always there (snapshot_reminder, info)"
+V_CLEAN_SMART = "the clean box has smartctl, as the installer puts smartmontools on every box, and the core finds it: smart_failed is not `no_smartctl` (a virtio disk says `unavailable`, an info)"
 GLOBAL_VERDICTS = [V_ROUTE, V_SHAPE, V_COUNTS, V_HOP, V_FIELDS, V_TEXT, V_TIME, V_BUDGET, V_SYSOS, V_INV_FILES, V_INV_UNITS, V_INV_PORTS, V_LOCK_FAST, V_LOCK_BUSY, V_LOCK_KEPT,
-                   V_CLEAN_NO_REFUSE, V_CLEAN_STATE, V_CLEAN_AGREE, V_CLEAN_DOCKER, V_CLEAN_SNAPSHOT]
+                   V_CLEAN_NO_REFUSE, V_CLEAN_STATE, V_CLEAN_AGREE, V_CLEAN_DOCKER, V_CLEAN_SNAPSHOT, V_CLEAN_SMART]
 
 
 def f_fires(s):
@@ -609,7 +629,19 @@ if not os.environ.get("GUEST_ONLY"):
     invalid("a call that left no time", "ready-inv-2.curl, .code, .t0 or .t1 is missing", lambda d: remove(d, "ready-inv-2.t1"))
     invalid("the control's calls of the core that answered 500: the control did not run", "the control of the invariance window did not run", lambda d: api(d, "ctl-core-1", code=500, body={}))
 
-    # ---- the first call of the route (ready-route): the one that finds out whether the release has it, judged like the others ----
+    # ---- the control: GET /v1/sys/version/current answers a bare version, as text, outside the envelope (route/v1.go: ctx.String(200, common.VERSION)). Judged on its status and on there being an answer ----
+    case("the control answers the bare version as text, as the real core does: it is no INVALID RUN, and the leg passes", 0, ["# OS readiness proof, d11 leg: PASS"], ["INVALID", "unreadable"],
+         mutate=lambda d: [api(d, "ctl-core-1", raw="0.5.24"), api(d, "ctl-core-2", raw="0.0.0-dev\n")])
+    case("the control is judged on its status and not on its shape: a body that is JSON (a later release may say so) is as good", 0, ["# OS readiness proof, d11 leg: PASS"], ["INVALID"],
+         mutate=lambda d: api(d, "ctl-core-2", body={"success": 200, "message": "ok", "data": "v0.5.20"}))
+    invalid("the control answered 200 and nothing: it is not the core's version, and the control did not run", "ctl-core-1 answered HTTP 200 with no text", lambda d: api(d, "ctl-core-1", raw=""))
+    invalid("the control answered 200 and blanks: the same", "ctl-core-2 answered HTTP 200 with no text", lambda d: api(d, "ctl-core-2", raw=" \n"))
+    invalid("the control's second call blocked: curl gave up on it", "ctl-core-2 answered HTTP 0", lambda d: api(d, "ctl-core-2", code=0, curl=28, raw="", secs=20.0, err="timed out"))
+    invalid("the control's first call got a 404: no answer, and it is not said that the release has no readiness route (it is the version route)", "ctl-core-1 got no answer of the route", lambda d: api(d, "ctl-core-1", code=404, raw="404 page not found"),
+            lacks=["the release under test has no such route"])
+    invalid("the control left no record of itself", "no answer was recorded for ctl-core-2", lambda d: remove(d, "ctl-core-2.code"))
+
+    # ---- the first call of the route (ready-route): the first call of the invariance window, which finds out whether the release has the route at all, judged like the others ----
     invalid("the first call of the route that left no record", "no answer was recorded for ready-route", lambda d: remove(d, "ready-route.code"), silent=[V_ROUTE])
     invalid("the first call of the route that is 404: the release has no route, by name", "ready-route got no answer of the route", lambda d: api(d, "ready-route", code=404, body={"message": "no"}),
             has=["the release under test has no such route"], silent=[V_ROUTE, V_SHAPE])
@@ -894,7 +926,8 @@ if not os.environ.get("GUEST_ONLY"):
           lambda d: [set_sev(d, "ready-base", "smart_failed", "refuse"), jdata(d, "ready-base", lambda x: [c["data"].update(unknown=True) for c in x["checks"] if c["code"] == "smart_failed"])])
     fails("clean: a state that is not ready or attention", V_CLEAN_STATE, lambda d: jdata(d, "ready-inv-1", lambda x: x.update(state="unsupported")))
     fails("clean: the four answers do not agree (a warning that comes and goes)", V_CLEAN_AGREE, lambda d: drop_check(d, "ready-inv-3", "backup_age"), extra=["backup_age"])
-    fails("clean: the four answers do not agree (a severity that changed)", V_CLEAN_AGREE, lambda d: set_sev(d, "ready-base", "docker_update_pending", "info"), extra=["docker_update_pending"])
+    # on u22: the d11 guest is built to have the newer Docker that makes docker_update_pending a warning, and a clean box that does not say so is an INVALID RUN of its own (below)
+    fails("clean: the four answers do not agree (a severity that changed)", V_CLEAN_AGREE, lambda d: set_sev(d, "ready-base", "docker_update_pending", "info"), leg="u22", extra=["docker_update_pending"])
     fails("clean: the four answers do not agree (a warning that is an info in one of them)", V_CLEAN_AGREE, lambda d: set_sev(d, "ready-inv-2", "backup_age", "info"), extra=["backup_age"])
     fails("clean: Docker's source is not named in the third-party warning", V_CLEAN_DOCKER,
           lambda d: [jdata(d, n, lambda x: [c.update(title="Third-party sources", detail="one file", data={"unknown": False, "files": ["x.list"]}) for c in x["checks"] if c["code"] == "sources_third_party"]) for n in ("ready-base",)])
@@ -903,6 +936,37 @@ if not os.environ.get("GUEST_ONLY"):
     fails("clean: no reminder to take a snapshot", V_CLEAN_SNAPSHOT, lambda d: drop_check(d, "ready-base", "snapshot_reminder"))
     fails("clean: the reminder to take a snapshot is ok (it must always be said)", V_CLEAN_SNAPSHOT, lambda d: set_sev(d, "ready-base", "snapshot_reminder", "ok"))
     case("clean: a box with warnings is attention, and is clean", 0, ["**PASS** " + V_CLEAN_STATE, "State **attention**"], ["FAIL"])
+
+    # the guest has smartctl (install.sh puts smartmontools on every box): a virtio disk does not answer SMART, so smart_failed is an info that says `unavailable`, and never `no_smartctl`
+    def smart_why(d, why, call="ready-base"):
+        jdata(d, call, lambda x: [c["data"].update(why=why) for c in x["checks"] if c["code"] == "smart_failed"])
+
+    def smart_passed(d):
+        """the disk of the box passed SMART: smart_failed is ok in every answer (the severity of a check of the clean box is the same in all of them)"""
+        def fn(x):
+            for c in x["checks"]:
+                if c["code"] == "smart_failed":
+                    c["data"].pop("why", None)
+                    c["data"].pop("checked", None)
+                    c["severity"] = "ok"
+            recount(x)
+        for n in all_calls(d):
+            jdata(d, n, fn)
+
+    case("clean: smart_failed is the info the core says of a virtio disk (unavailable), on a guest that has smartctl", 0, ["**PASS** " + V_CLEAN_SMART, "smart_failed is info, why unavailable"], ["FAIL", "INVALID"])
+    fails("clean: smart_failed says `no_smartctl` on a guest that has smartctl (the core does not find the tool, or the installer did not put it there)", V_CLEAN_SMART, lambda d: smart_why(d, "no_smartctl"),
+          extra=["smart_failed is info, why no_smartctl"])
+    for why_ in ("standby", "partial", "no_disk"):
+        case("clean: smart_failed that says %s is a fact and no failure: the core did find smartctl" % why_, 0, ["**PASS** " + V_CLEAN_SMART, "why " + why_], ["FAIL"], mutate=lambda d, w=why_: smart_why(d, w))
+    case("clean: a disk that passed SMART (smart_failed ok) is fine", 0, ["**PASS** " + V_CLEAN_SMART, "smart_failed is ok"], ["FAIL"], mutate=smart_passed)
+    fails("clean: no smart_failed in the answer of the clean box", V_CLEAN_SMART, lambda d: drop_check(d, "ready-base", "smart_failed"), extra=["smart_failed is not in the answer"])
+    fails("clean: smart_failed that refuses on the clean box (it could not find out)", V_CLEAN_SMART,
+          lambda d: [set_sev(d, "ready-base", "smart_failed", "refuse"), jdata(d, "ready-base", lambda x: [c["data"].update(unknown=True) for c in x["checks"] if c["code"] == "smart_failed"])], extra=["smart_failed is refuse"])
+    for fact_, what_, reason_ in (("smartctl none\n", "the guest says there is no smartctl", "the guest has no smartctl"), ("", "the guest says nothing of smartctl", "box-facts says nothing of smartctl")):
+        invalid("clean: %s: the box is not the one the proof is for, an invalid run, and no verdict made up on the core's `why`" % what_, reason_, lambda d, f=fact_: ledit(d, "box-facts", lambda t: t.replace("smartctl /usr/sbin/smartctl\n", f)),
+                silent=[V_CLEAN_SMART], lacks=["**PASS** " + V_CLEAN_SMART])
+    case("clean: the table of the box says where smartctl is", 0, ["| smartctl | /usr/sbin/smartctl |"], ["FAIL"])
+    case("the table of the box says what apt has of Docker and has on offer", 0, ["| docker_offer | " + DOCKER_OFFER["d11"] + " |"], ["FAIL"])
 
     # a clean box that a package manager is working on is the box of the harness, and not the feature: INVALID, with its reason, and no FAIL of the verdicts that need a quiet box
     def busy_of(unit, names):
@@ -926,9 +990,26 @@ if not os.environ.get("GUEST_ONLY"):
     case("clean: a busy that names a unit and is only a warning is not the box of the harness: a FAIL of the verdicts that see it", 1, ["**FAIL** " + V_CLEAN_AGREE], ["INVALID"],
          mutate=lambda d: [make(d, "ready-inv-2", "busy", "warn"), jdata(d, "ready-inv-2", lambda x: [c["data"].update(source="unit", unit="apt-daily.service") for c in x["checks"] if c["code"] == "busy"])])
 
+    # ---- the report says exactly which calls are inside the invariance window and which are not ----
+    if wanted("the report names the calls inside the invariance window, the first call of the route among them, and says which calls are not"):
+        count[0] += 1
+        d_ = VDir()
+        build(d_, "d11")
+        code_, out_ = run_report(d_, "d11")
+        inside_, outside_ = window_text(out_)
+        ok_ = (code_ == 0 and inside_ == ["ready-route", "sysos-inv", "ready-inv-1", "ready-inv-2", "ready-inv-3", "ready-inv-lock"] and outside_ is not None
+               and all(x in outside_ for x in ("ctl-core-1", "ctl-core-2", "ready-base", "step-<id>-dirty", "step-<id>-clean"))
+               and "Every other call of the proof, clean or dirty, is." not in out_ and "is made before the invariance window" not in out_)
+        if ok_:
+            print("ok: the report names the calls inside the invariance window, the first call of the route among them, and says which calls are not")
+        else:
+            failures.append("the report names the calls inside the invariance window: exit %d, inside %r, outside %r" % (code_, inside_, outside_))
+    case("the report says what is looked at of the calls that are not in the window: the four watched steps (dpkg's status, apt's lists and caches) and docker.service after the step that stops only the service", 0,
+         ["`broken_dpkg`, `sources_pin`, `foreign_arch`, `docker_down`", "dpkg's status, apt's lists and apt's caches", "`docker_down_service`", "docker.service"], ["FAIL"])
+    case("the report says that the first call of the route is inside the window: what only a first call writes is seen", 0,
+         ["The first call of the route (ready-route) is made inside the invariance window, after its first snapshot", "what only the very first call writes is seen"], ["FAIL", "made before the invariance window"])
+
     # PackageKit: what it was after the last apt call and what it is, in the table of the box
-    case("the report says what the window does not see: the first call of the route, made before it, as soon as the services answer", 0,
-         ["The first call of the route (ready-route) is made before the invariance window, as soon as the services answer", "a port opened by that very first call and by none after it is not in the window"], ["FAIL"])
     case("the table of the box says what PackageKit was after the last apt call and what it is", 0, ["| packagekit_after_apt | inactive |", "| packagekit | inactive |"], ["FAIL"])
     case("the table of the box says PackageKit was awake after the last apt call on an Ubuntu", 0, ["| packagekit_after_apt | active |", "| packagekit | inactive |"], ["FAIL"], leg="u22")
 
@@ -973,8 +1054,23 @@ if not os.environ.get("GUEST_ONLY"):
                         fails("step %s: %s has %s as a number and not a boolean %s" % (sid, rcode, rkey, tag), name_,
                               lambda d, D=D, c=rcode, k=rkey, v=rvalue: jdata(d, D, lambda x: [cc["data"].update({k: int(v)}) for cc in x["checks"] if cc["code"] == c]), leg=leg_)
                 # the clean box says another severity of the code: the dirt cannot be told from what is there (the clean box is not the one the row is for)
-                case("step %s: a clean box that says %s is %s, not %s, cannot show the dirt: NOT TESTABLE %s" % (sid, rcode, other_clean, rclean, tag), 1, ["**NOT TESTABLE** " + name_], ["Traceback"], leg=leg_,
-                     mutate=lambda d, c=rcode, o=other_clean: make(d, "ready-base", c, o))
+                if row[0] == "*":
+                    # a row for every leg is no premise of the leg: a clean box that says otherwise cannot show the dirt, NOT TESTABLE
+                    case("step %s: a clean box that says %s is %s, not %s, cannot show the dirt: NOT TESTABLE %s" % (sid, rcode, other_clean, rclean, tag), 1, ["**NOT TESTABLE** " + name_], ["Traceback"], leg=leg_,
+                         mutate=lambda d, c=rcode, o=other_clean: make(d, "ready-base", c, o))
+                else:
+                    # a row for ONE leg is that leg's premise (the d11 guest is built to have a newer Docker on offer): a clean box that lacks it is a harness that did not get its premise, an INVALID RUN with its reason,
+                    # never a NOT TESTABLE that leaves the job green
+                    for clean_now in (other_clean, "ok", "info"):
+                        if clean_now == rclean:
+                            continue
+                        invalid("step %s: the %s leg is built so that its clean box says %s is %s: a clean box that says %s is an INVALID RUN, never NOT TESTABLE %s" % (sid, row[0], rcode, rclean, clean_now, tag),
+                                "step %s: the %s leg is built so that its clean box says `%s` is %s, and it says `%s` is %s" % (sid, row[0], rcode, rclean, rcode, clean_now), lambda d, c=rcode, o=clean_now: make(d, "ready-base", c, o),
+                                leg=leg_, silent=[name_], has=["the premise of the leg is missing", "the ruling it proves was not exercised", "the guest saw: " + DOCKER_OFFER[leg_]], lacks=["**NOT TESTABLE** " + name_, "**PASS** " + name_])
+                    invalid("step %s: a clean box that has no %s at all is an INVALID RUN with its reason too %s" % (sid, rcode, tag), "and it says `%s` is absent" % rcode, lambda d, c=rcode: drop_check(d, "ready-base", c), leg=leg_,
+                            has=["the premise of the leg is missing"], lacks=["**NOT TESTABLE** " + name_])
+                    invalid("step %s: a clean box that lacks its premise and a guest that said nothing of Docker: the reason does not make a sentence up %s" % (sid, tag), "the premise of the leg is missing",
+                            lambda d, c=rcode: (make(d, "ready-base", c, "ok"), ledit(d, "box-facts", lambda t: "".join(ln + "\n" for ln in t.splitlines() if not ln.startswith("docker_offer")))), leg=leg_, lacks=["the guest saw: "])
             if s["after"]:
                 for bad_ in ("active", "activating", "failed"):
                     fails("step %s: after the call the guest saw %s %s" % (sid, bad_, tag), f_after(s), lambda d, sid=sid, b=bad_: put(d, "step-%s.after" % sid, b + "\n"), leg=leg_)
@@ -1123,9 +1219,39 @@ check("the guest skips no step: every step of the matrix exists on both systems"
 check("the guest waits for AppManagement's own check of the images, and says why when it did not come, before the control and the window",
       re.search(r'    wait_image_check 240 \|\| not_proven "[^"]*IMAGE_UPDATES[^"]*"\n    marker prepare_done\n[^\n]*\n    sleep 20\n\n    invariance\n', guest_text) is not None, "")
 check("the file the wait looks for is the one AppManagement renames into /var/lib/casaos", 'IMAGE_UPDATES="${IMAGE_UPDATES:-/var/lib/casaos/image_updates.json}"' in guest_text, "")
-check("the guest stops PackageKit as soon as the last apt call is over, and probes the route as soon as the services answer: both before the wait for the images, the control and the window",
-      re.search(r'    "\$\{APT\[@\]\}" update -qq\n    PK_AFTER_APT="\$\(unit_state packagekit\.service\)"\n    quiet_packagekit \|\| [^\n]*\n    wait_services 180 \|\| abort "[^"]*"\n    probe_route\n[^\n]*\n    box_facts\n', guest_text) is not None, "")
+guest_main = re.search(r"^main\(\) \{\n.*?^\}\n", guest_text, re.M | re.S)
+guest_main = guest_main.group(0) if guest_main else ""
+check("the guest stops PackageKit as soon as the last apt call is over and waits for the services, and does not call the readiness route there: the first call of the route is not made before the window",
+      re.search(r'    "\$\{APT\[@\]\}" update -qq\n    PK_AFTER_APT="\$\(unit_state packagekit\.service\)"\n    quiet_packagekit \|\| [^\n]*\n    wait_services 180 \|\| abort "[^"]*"\n    timeout 120 systemctl is-system-running --wait[^\n]*\n    box_facts\n', guest_text) is not None
+      and "probe_route" not in guest_main and "ready_call" not in guest_main, "")
 check("the first call of the route is the readiness route, kept as ready-route, and a 404 is the one answer that ends the run", re.search(r'probe_route\(\) \{\n    ready_call ready-route\n    \[ "\$\(cat "\$\{OUT\}/ready-route\.code"\)" != 404 \] \|\| abort "the release under test has no /v1/sys/os/readiness"\n\}', guest_text) is not None, "")
+guest_inv = re.search(r"^invariance\(\) \{\n(.*?)^\}\n", guest_text, re.M | re.S)
+guest_inv = guest_inv.group(1) if guest_inv else ""
+guest_window = guest_inv.split("    inv_snapshot before\n", 1)[1].split("    inv_snapshot after\n", 1)[0] if "    inv_snapshot before\n" in guest_inv and "    inv_snapshot after\n" in guest_inv else None
+check("the first call of the route is the first thing the window does once its first snapshot is taken, it is made nowhere else, and it is not made before that snapshot",
+      guest_window is not None and guest_window.startswith("    probe_route\n") and len(re.findall(r"^\s+probe_route$", guest_text, re.M)) == 1 and "probe_route" not in guest_inv.split("    inv_snapshot before\n", 1)[0], guest_window)
+
+
+def guest_window_calls():
+    """the calls the guest makes between the first and the second snapshot of the window, in order (probe_route is the readiness route's first call, ready-route)"""
+    out = []
+    for ln in (guest_window or "").splitlines():
+        m = re.match(r"^\s+(?:api|ready_call) (\S+)", ln)
+        if m:
+            out.append(m.group(1))
+        elif ln.strip() == "probe_route":
+            out.append("ready-route")
+    return out
+
+
+def report_window_calls():
+    d_ = VDir()
+    build(d_, "d11")
+    return window_text(run_report(d_, "d11")[1])[0]
+
+
+check("the calls the report says are inside the invariance window are exactly those the guest makes between the first and the second snapshot, in the same order",
+      guest_window_calls() == report_window_calls() and guest_window_calls()[:2] == ["ready-route", "sysos-inv"], (guest_window_calls(), report_window_calls()))
 guest_watch = re.search(r"^WATCH_STEPS=\(([^)]*)\)", guest_text, re.M)
 guest_watch = guest_watch.group(1).split() if guest_watch else []
 check("the guest takes the snapshots of dpkg and apt around the calls of the steps the report judges them for", guest_watch == [s["id"] for s in STEPS if s["watch"]], (guest_watch, [s["id"] for s in STEPS if s["watch"]]))
@@ -1168,7 +1294,8 @@ mode = os.environ.get("FAKE_CORE_MODE", "")
 if path == "/":
     reply(200 if active("casaos-gateway.service") else 0, "<html></html>", 0 if active("casaos-gateway.service") else 7)
 if path == "/v1/sys/version/current":
-    reply(200, {"success": 200, "message": "ok", "data": "v0.5.99"})
+    # the real core: ctx.String(200, common.VERSION), the bare version as text, outside the envelope
+    reply(200, "0.5.99\n")
 if path == "/v2/app_management/categories":
     reply(200, {"success": 200, "data": []}) if active("casaos-app-management.service") else reply(0, "", 7)
 if path == "/v1/sys/os":
@@ -1242,20 +1369,24 @@ at = datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:
 w = os.environ.get("FAKE_CORE_WRITE")
 if w and mode == "write":
     open(w, "a").write("x")
+# a core that writes on the very FIRST call of the route only (a cache, a state file made lazily): nothing is written by the calls that follow
+if w and mode == "firstwrite" and not os.path.exists(os.path.join(F, "first.done")):
+    open(w, "a").write("x")
+    open(os.path.join(F, "first.done"), "w").close()
 # a core that writes only when the box is dirty and the dirty matrix has begun (the calls of the invariance window, the one under dpkg's lock too, do not see it)
 if w and mode == "dirtywrite" and steps and os.path.exists(os.path.join(os.environ["OUT"], "steps.list")):
     open(w, "a").write("x")
 if mode == "restart":
     open(os.path.join(F, "inv", os.environ["FAKE_CORE_UNIT"]), "w").write("restarted-%d" % time.time())
 if mode == "listen":
-    # a port of its own at each call: the first one is the call that finds out whether the release has the route, which is made before the window
+    # a port of its own at each call, the first one included (it is the first call of the window)
     n_ = len([l for l in lines(os.path.join(F, "ports")) if l.startswith("tcp 0.0.0.0:9")])
     open(os.path.join(F, "ports"), "a").write("tcp 0.0.0.0:%d\n" % (9000 + n_))
 if mode == "hang" and lock:
     reply(0, "", 28)
 if mode == "hang500":
     reply(500, {"success": 500, "message": "boom"})
-wrong = "extra:" + os.environ["FAKE_CORE_CODE"] if mode == "extra" and steps else "nobusy" if mode == "nobusy" else ""
+wrong = "extra:" + os.environ["FAKE_CORE_CODE"] if mode == "extra" and steps else "nobusy" if mode == "nobusy" else "nosmart" if mode == "nosmart" else ""
 # a core that asks PackageKit, and one that is told by a box that a package manager works on (the clean box of a guest that did not wait for apt-daily)
 if mode == "packagekit" and steps == ["busy_packagekit"]:
     wrong = "unit:packagekit.service"
@@ -1421,7 +1552,9 @@ esac
         "systemd-detect-virt": "#!/bin/sh\necho kvm\n",
         "nproc": "#!/bin/sh\necho 4\n",
         "uname": "#!/bin/sh\necho 5.10.0-46-cloud-amd64\n",
+        "smartctl": "#!/bin/sh\nexit 1\n",
         "apt-get": "#!/bin/sh\necho 'apt 2.2.4 (amd64)'\n",
+        "apt-cache": "#!/bin/sh\nprintf 'docker-ce:\\n  Installed: 5:28.0.4-1~debian.11~bullseye\\n  Candidate: 5:29.8.0-1~debian.11~bullseye\\n  Version table:\\n'\n",
     }
     HAVE_FCNTL = subprocess.run([sys.executable, "-c", "import fcntl"], capture_output=True).returncode == 0
 
@@ -1767,6 +1900,10 @@ awk 'BEGIN { for (i = 0; i < 2500; i++) printf " containerd.io | 1.%s.%d-1 | htt
 
     gcase("box_facts: what PackageKit was after the last apt call, and what it is now", 'PK_AFTER_APT=active; systemctl start packagekit.service; box_facts; grep packagekit "$OUT/box-facts" >"$OUT/pk"', files={"out/pk": "packagekit_after_apt active\npackagekit active\n"})
     gcase("box_facts: a box that was not asked about PackageKit says so, and PackageKit that is not there is inactive", 'box_facts; grep packagekit "$OUT/box-facts" >"$OUT/pk"', files={"out/pk": "packagekit_after_apt not asked\npackagekit inactive\n"})
+    gcase("box_facts: says where smartctl is (the installer puts smartmontools on every box), for the report to hold the core's `no_smartctl` against it", 'box_facts; grep "^smartctl " "$OUT/box-facts" >"$OUT/sm"', files={"out/sm": "smartctl /*"})
+    gcase("box_facts: says what apt has of Docker and what it would install, for the report to say what the d11 guest saw when the newer Docker it is built for is not on offer", 'box_facts; grep "^docker_offer " "$OUT/box-facts" >"$OUT/do"',
+          files={"out/do": "docker_offer installed 5:28.0.4-1~debian.11~bullseye, candidate 5:29.8.0-1~debian.11~bullseye\n"})
+    gcase("box_facts: says `smartctl none` for a box that has none", 'command() { if [ "$1" = -v ] && [ "$2" = smartctl ]; then return 1; fi; builtin command "$@"; }; box_facts; grep "^smartctl " "$OUT/box-facts" >"$OUT/sm"', files={"out/sm": "smartctl none\n"})
 
     # ---- api(): what a call leaves ----
     gcase("api: the body, the status, the time before and after, and how curl ended (written last)", 'api probe /v1/sys/os 30; cat "$OUT/probe.code" "$OUT/probe.curl" >"$OUT/both"; [ -s "$OUT/probe.t0" ] && [ -s "$OUT/probe.t1" ] && echo times >"$OUT/t"',
@@ -1924,17 +2061,21 @@ esac
     # ---- invariance(): the order of what it does ----
     INV = ('inv_snapshot() { echo "snapshot $1" >>"$FAKE/calls"; }; api() { echo "api $1 $2" >>"$FAKE/calls"; }; ready_call() { echo "ready_call $1" >>"$FAKE/calls"; }; marker() { :; }; '
            'lock_hold_start() { echo lock_hold_start >>"$FAKE/calls"; }; lock_hold_stop() { echo lock_hold_stop >>"$FAKE/calls"; }; lock_state() { n=$(cat "$FAKE/n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$FAKE/n"; echo "lock_state $n" >>"$FAKE/calls"; echo held; }; ')
-    gcase("invariance: the control, then the window (snapshot, GET /v1/sys/os, three calls, one under the lock, snapshot), then the clean answer, in that order", INV + 'invariance',
-          ordered=["snapshot ctl-a", "api ctl-core-1 /v1/sys/version/current", "api ctl-core-2 /v1/sys/version/current", "snapshot ctl-b", "snapshot before", "api sysos-inv /v1/sys/os", "ready_call ready-inv-1", "ready_call ready-inv-2",
-                   "ready_call ready-inv-3", "lock_hold_start", "lock_state 1", "ready_call ready-inv-lock", "lock_state 2", "lock_hold_stop", "snapshot after", "ready_call ready-base"],
+    gcase("invariance: the control, then the window (snapshot, the first call of the route, GET /v1/sys/os, three calls, one under the lock, snapshot), then the clean answer, in that order", INV + 'invariance',
+          ordered=["snapshot ctl-a", "api ctl-core-1 /v1/sys/version/current", "api ctl-core-2 /v1/sys/version/current", "snapshot ctl-b", "snapshot before", "ready_call ready-route", "api sysos-inv /v1/sys/os", "ready_call ready-inv-1",
+                   "ready_call ready-inv-2", "ready_call ready-inv-3", "lock_hold_start", "lock_state 1", "ready_call ready-inv-lock", "lock_state 2", "lock_hold_stop", "snapshot after", "ready_call ready-base"],
           files={"out/lock-probe-during": "held\n", "out/lock-probe-after": "held\n", "out/timer-units.txt": "logrotate.service\n"})
+    gcase("invariance: a 404 on the first call of the route ends the run there, inside the window: nothing else is called, and the second snapshot is never taken",
+          INV + 'ready_call() { echo "ready_call $1" >>"$FAKE/calls"; if [ "$1" = ready-route ]; then echo 404 >"$OUT/ready-route.code"; fi; }; invariance',
+          files={"out/aborted": "the release under test has no /v1/sys/os/readiness\n"}, calls=["snapshot before", "ready_call ready-route"],
+          no_calls=["api sysos-inv", "ready_call ready-inv-1", "lock_hold_start", "snapshot after", "ready_call ready-base"], returned=False)
     gcase("invariance: the lock is held for the third call only, and let go of before the second snapshot", INV + 'invariance', ordered=["ready_call ready-inv-3", "lock_hold_start", "ready_call ready-inv-lock", "lock_hold_stop", "snapshot after"])
     gcase("invariance: a lock that is not given back stops the run", INV + 'lock_hold_stop() { return 1; }; invariance', files={"out/aborted": "dpkg's lock was not given back\n"}, no_calls=["snapshot after"], returned=False)
     gcase("inv_snapshot: the files, the units and the sockets, under the tag", 'INV_TREES=("$INV_ROOT/etc"); write_manifest_tool "$LIBDIR/manifest.py"; inv_snapshot t', files={"out/inv-t.tsv": '"/etc"\td*', "out/units-t.tsv": "*", "out/listen-t.txt": "*"})
 
     # ---- the end to end: the real guest functions, the stand-in core, the real report ----
     E2E = ('write_manifest_tool "$LIBDIR/manifest.py"; write_lock_tools "$LIBDIR"; INV_TREES=("$INV_ROOT/etc" "$INV_ROOT/var/lib/dpkg" "$INV_ROOT/var/lib/apt" "$INV_ROOT/var/cache/apt" "$INV_ROOT/var/lib/casaos" "$INV_ROOT/var/log/casaos"); '
-           'HOST_NAME=' + HOST + '; SUDO_USER=casa; guard_run; : >"$OUT/timeline.tsv"; echo "$LEG" >"$OUT/leg"; echo "$PRETTY_NAME" >"$OUT/os"; PK_AFTER_APT=active; quiet_packagekit; probe_route; box_facts; leak_needles; marker prepare_start; invariance; for id in "${STEP_IDS[@]}"; do run_step "$id"; done; date -u +%FT%TZ >"$OUT/finished"')
+           'HOST_NAME=' + HOST + '; SUDO_USER=casa; guard_run; : >"$OUT/timeline.tsv"; echo "$LEG" >"$OUT/leg"; echo "$PRETTY_NAME" >"$OUT/os"; PK_AFTER_APT=active; quiet_packagekit; box_facts; leak_needles; marker prepare_start; invariance; for id in "${STEP_IDS[@]}"; do run_step "$id"; done; date -u +%FT%TZ >"$OUT/finished"')
 
     def e2e(label, want_code, must_have=(), must_not_have=(), env_extra=None, snippet=E2E, leg="d11", after=None):
         """the real guest functions, the stand-in tools and core, the real report: the report's verdict on what the guest left. after(tmp, j) says what else is wrong with the box"""
@@ -1971,6 +2112,8 @@ esac
     e2e("the same on Ubuntu 22.04: every step runs, the alias step with `devel`, and the leg passes with every verdict", 0, ["# OS readiness proof, u22 leg: PASS"] + ["**PASS** " + v for v in healthy_verdicts("u22")], ["FAIL", "INVALID"], leg="u22")
     e2e("a core that writes a file of /etc during the call is caught by the invariance, naming the file", 1, ["**FAIL** " + V_INV_FILES, "/etc/osr-written"], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "write", "FAKE_CORE_WRITE": "{root}/etc/osr-written"}, snippet=E2E)
+    e2e("a core that writes a file of /etc on its FIRST call of the route only is caught by the invariance, naming the file: the first call is inside the window, and the calls that follow would never show it", 1,
+        ["**FAIL** " + V_INV_FILES, "created /etc/osr-first"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "firstwrite", "FAKE_CORE_WRITE": "{root}/etc/osr-first"})
     e2e("a core that restarts a service during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_UNITS, "casaos-gateway.service"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "restart", "FAKE_CORE_UNIT": "casaos-gateway.service"})
     e2e("a core that opens a port during the call is caught by the invariance", 1, ["**FAIL** " + V_INV_PORTS, "started listening tcp 0.0.0.0:90"], ["Traceback"], env_extra={"FAKE_CORE_MODE": "listen"})
     e2e("a core that blocks while another process holds dpkg's lock is caught", 1, ["**FAIL** " + V_LOCK_FAST], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang"})
@@ -1979,7 +2122,15 @@ esac
     e2e("a core that leaks the box's name in the text is caught", 1, ["**FAIL** " + V_TEXT, HOST], ["Traceback"], env_extra={"FAKE_CORE_MODE": "leak"})
     e2e("a core that has no such route is found out by the first call, and the run stops there: an invalid run, by name", 1,
         ["INVALID RUN", "the guest stopped early: the release under test has no /v1/sys/os/readiness", "ready-route got no answer of the route", "the release under test has no such route"], ["Traceback"],
-        env_extra={"FAKE_CORE_MODE": "route404"}, after=lambda tmp, j: [] if not os.path.exists(j("out/inv-before.tsv")) else ["the run went on to the invariance window after the first call said 404"])
+        env_extra={"FAKE_CORE_MODE": "route404"},
+        after=lambda tmp, j: [m for m, bad in (("the run did not take the first snapshot of the window before the first call", not os.path.exists(j("out/inv-before.tsv"))),
+                                               ("the run went on to the second snapshot of the window after the first call said 404", os.path.exists(j("out/inv-after.tsv"))),
+                                               ("the run went on to the dirty matrix after the first call said 404", os.path.exists(j("out/steps.list"))),
+                                               ("the run called the readiness route again after the first call said 404", os.path.exists(j("out/ready-inv-1.code")))) if bad])
+    e2e("a core that does not find the smartctl the guest has (smart_failed says no_smartctl on the clean box) is caught by name", 1, ["**FAIL** " + V_CLEAN_SMART, "smart_failed is info, why no_smartctl"], ["Traceback", "INVALID"],
+        env_extra={"FAKE_CORE_MODE": "nosmart"})
+    e2e("a guest that has no smartctl is not the box the proof is for: an invalid run, and no verdict on the core's `why`", 1, ["INVALID RUN", "the guest has no smartctl"], ["Traceback", "**FAIL** " + V_CLEAN_SMART, "**PASS** " + V_CLEAN_SMART],
+        snippet=E2E.replace("guard_run;", 'guard_run; command() { if [ "$1" = -v ] && [ "$2" = smartctl ]; then return 1; fi; builtin command "$@"; };'))
     e2e("a core that fires a check nobody expected with every dirt is caught step by step", 1, ["**FAIL** " + f_alone(STEP_BY_ID["held"]), "also fires: network_uplink"], ["Traceback"],
         env_extra={"FAKE_CORE_MODE": "extra", "FAKE_CORE_CODE": "network_uplink"})
     e2e("a core that answers 500 is caught as a route that fails", 1, ["**FAIL** " + V_ROUTE], ["Traceback"], env_extra={"FAKE_CORE_MODE": "hang500"})
@@ -2069,6 +2220,12 @@ if not os.environ.get("REPORT_ONLY"):
     check("the tag is the input, and nothing else", "TAG: ${{ inputs.tag }}" in wf and "EVENT" not in wf)
     check("the workflow says that the release under test has to carry the route (v0.5.25 is the first), what the guest does when it does not, and that an empty tag is the latest release",
           "v0.5.25 is the first one" in wf and "once v0.5.25 is published" in wf and "the release under test has no /v1/sys/os/readiness" in wf and "Left empty, the tag is the latest published release" in wf and "until then, give the tag of the candidate" in wf)
+    wf_flat = re.sub(r"\n#\s*", " ", wf)   # the comment lines of the header, joined into sentences
+    check("the workflow says that the first call of the route is the first call of the invariance window and that a 404 there ends the run, and no more that the guest calls the route as soon as the services answer",
+          "The first call of the route is the first call of the invariance window" in wf_flat and "a 404 ends the run there" in wf_flat
+          and "as soon as the gateway, the core and AppManagement answer" not in wf_flat and "the first call of GET /v1/sys/os/readiness there is" in wf_flat, "")
+    check("the workflow says which calls the invariance window sees and which it does not: the five calls of the route and GET /v1/sys/os, not the answer of the unchanged box nor the other calls of the matrix",
+          "the five calls of the route and GET /v1/sys/os named above" in wf_flat and "not the answer of the unchanged box that the steps are compared with, nor the other calls of the matrix" in wf_flat, "")
     check("the guest script ends the run with the very words the workflow says", "the release under test has no /v1/sys/os/readiness" in guest_text)
     check("the legs are chosen by the plan job from the file of the legs, which stops a run that matches none", "scripts/os-readiness-proof-legs.json" in wf_runs.get("plan:The legs this run proves", "") and 'raise SystemExit("no leg is' in wf_runs.get("plan:The legs this run proves", ""))
     artifact = re.search(r"^\s+name: (os-readiness-proof-.+)$", wf, re.M)
