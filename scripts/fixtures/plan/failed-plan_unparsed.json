@@ -1,0 +1,46 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "parse",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "plan_unparsed",
+      "phase": "parse",
+      "detail": "apt's summary and its lists disagree: upgraded",
+      "data": {
+        "apt_conf_left_out": [
+          {
+            "file": "01autoremove",
+            "reason": "not_simple"
+          },
+          {
+            "file": "01autoremove-kernels",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20auto-upgrades",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20listchanges",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50unattended-upgrades",
+            "reason": "not_simple"
+          },
+          {
+            "file": "70debconf",
+            "reason": "not_simple"
+          }
+        ],
+        "reason": "summary_mismatch",
+        "section": "upgraded"
+      }
+    }
+  }
+}

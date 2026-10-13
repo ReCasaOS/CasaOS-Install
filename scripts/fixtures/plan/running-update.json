@@ -1,0 +1,10 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "running",
+    "phase": "update",
+    "started_at": "2026-10-12T09:29:00Z"
+  }
+}

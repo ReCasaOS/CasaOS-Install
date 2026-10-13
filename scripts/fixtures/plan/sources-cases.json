@@ -1,0 +1,408 @@
+[
+  {
+    "name": "the measured box",
+    "files": {
+      "sources.list": "deb http://deb.debian.org/debian bullseye main\ndeb-src http://deb.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian-security bullseye-security main\ndeb-src http://archive.debian.org/debian-security bullseye-security main\ndeb http://deb.debian.org/debian bullseye-updates main\ndeb-src http://deb.debian.org/debian bullseye-updates main\n",
+      "sources.list.d/docker.list": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable\n"
+    },
+    "files_out": [
+      {
+        "file": "sources.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb http://deb.debian.org/debian bullseye main",
+            "after": "deb http://deb.debian.org/debian bookworm main",
+            "why": "suite"
+          },
+          {
+            "n": 2,
+            "before": "deb-src http://deb.debian.org/debian bullseye main",
+            "after": "deb-src http://deb.debian.org/debian bookworm main",
+            "why": "suite"
+          },
+          {
+            "n": 3,
+            "before": "deb http://archive.debian.org/debian-security bullseye-security main",
+            "after": "deb http://deb.debian.org/debian-security bookworm-security main",
+            "why": "suite,host"
+          },
+          {
+            "n": 4,
+            "before": "deb-src http://archive.debian.org/debian-security bullseye-security main",
+            "after": "deb-src http://deb.debian.org/debian-security bookworm-security main",
+            "why": "suite,host"
+          },
+          {
+            "n": 5,
+            "before": "deb http://deb.debian.org/debian bullseye-updates main",
+            "after": "deb http://deb.debian.org/debian bookworm-updates main",
+            "why": "suite"
+          },
+          {
+            "n": 6,
+            "before": "deb-src http://deb.debian.org/debian bullseye-updates main",
+            "after": "deb-src http://deb.debian.org/debian bookworm-updates main",
+            "why": "suite"
+          }
+        ]
+      },
+      {
+        "file": "docker.list",
+        "action": "paused",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable",
+            "after": "",
+            "why": "paused"
+          }
+        ]
+      }
+    ],
+    "paused": [
+      {
+        "file": "docker.list",
+        "hosts": [
+          "https://download.docker.com"
+        ],
+        "docker": true
+      }
+    ],
+    "tree": {
+      "sources.list": "deb http://deb.debian.org/debian bookworm main\ndeb-src http://deb.debian.org/debian bookworm main\ndeb http://deb.debian.org/debian-security bookworm-security main\ndeb-src http://deb.debian.org/debian-security bookworm-security main\ndeb http://deb.debian.org/debian bookworm-updates main\ndeb-src http://deb.debian.org/debian bookworm-updates main\n"
+    },
+    "dropped_backports": 0,
+    "firmware_added": 0,
+    "hash_current": "35d17f59fd0705980471e5e52dcf6f54e2292d8b14e245051b88f45539ebcb8a",
+    "hash_generated": "b5112f83e29b14e258b0c60275b06ec2c6212a7c0fab519289ac9ba3f2624d0a"
+  },
+  {
+    "name": "comments, blank lines, trailing blanks and a comment after a line",
+    "files": {
+      "sources.list": "# the distribution\n\ndeb http://deb.debian.org/debian bullseye main contrib  # the main one\n  deb-src http://deb.debian.org/debian bullseye main   \n\t\n# deb http://deb.debian.org/debian bullseye-backports main\n\tdeb http://security.debian.org/debian-security bullseye-security main",
+      "sources.list.d/docker.list": "# Docker's\ndeb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable\n"
+    },
+    "files_out": [
+      {
+        "file": "sources.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 3,
+            "before": "deb http://deb.debian.org/debian bullseye main contrib  # the main one",
+            "after": "deb http://deb.debian.org/debian bookworm main contrib # the main one",
+            "why": "suite"
+          },
+          {
+            "n": 4,
+            "before": "deb-src http://deb.debian.org/debian bullseye main",
+            "after": "deb-src http://deb.debian.org/debian bookworm main",
+            "why": "suite"
+          },
+          {
+            "n": 7,
+            "before": "deb http://security.debian.org/debian-security bullseye-security main",
+            "after": "deb http://security.debian.org/debian-security bookworm-security main",
+            "why": "suite"
+          }
+        ]
+      },
+      {
+        "file": "docker.list",
+        "action": "paused",
+        "lines": [
+          {
+            "n": 2,
+            "before": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable",
+            "after": "",
+            "why": "paused"
+          }
+        ]
+      }
+    ],
+    "paused": [
+      {
+        "file": "docker.list",
+        "hosts": [
+          "https://download.docker.com"
+        ],
+        "docker": true
+      }
+    ],
+    "tree": {
+      "sources.list": "# the distribution\n\ndeb http://deb.debian.org/debian bookworm main contrib # the main one\ndeb-src http://deb.debian.org/debian bookworm main\n\n# deb http://deb.debian.org/debian bullseye-backports main\ndeb http://security.debian.org/debian-security bookworm-security main\n"
+    },
+    "dropped_backports": 0,
+    "firmware_added": 0,
+    "hash_current": "daa27bf2dde53128d3a5894dcb021874f12e7738320cefc810e0725a536fc097",
+    "hash_generated": "434b2ea61138511f192c379e64d75399bb7da3c4538bde4d10d2828b22aa2a23"
+  },
+  {
+    "name": "backports, the archive's host and non-free",
+    "files": {
+      "sources.list": "deb http://deb.debian.org/debian bullseye main contrib non-free\ndeb http://archive.debian.org/debian bullseye-backports main\ndeb http://deb.debian.org/debian bullseye-backports-sloppy main\ndeb http://archive.debian.org/debian-security bullseye-security main non-free\ndeb http://deb.debian.org/debian bullseye-updates main non-free non-free-firmware\ndeb http://deb.debian.org/debian bullseye-proposed-updates main\ndeb http://security.debian.org bullseye/updates main\n"
+    },
+    "files_out": [
+      {
+        "file": "sources.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb http://deb.debian.org/debian bullseye main contrib non-free",
+            "after": "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware",
+            "why": "suite,firmware"
+          },
+          {
+            "n": 2,
+            "before": "deb http://archive.debian.org/debian bullseye-backports main",
+            "after": "# casaos-dropped: deb http://archive.debian.org/debian bullseye-backports main",
+            "why": "dropped"
+          },
+          {
+            "n": 3,
+            "before": "deb http://deb.debian.org/debian bullseye-backports-sloppy main",
+            "after": "# casaos-dropped: deb http://deb.debian.org/debian bullseye-backports-sloppy main",
+            "why": "dropped"
+          },
+          {
+            "n": 4,
+            "before": "deb http://archive.debian.org/debian-security bullseye-security main non-free",
+            "after": "deb http://deb.debian.org/debian-security bookworm-security main non-free non-free-firmware",
+            "why": "suite,host,firmware"
+          },
+          {
+            "n": 5,
+            "before": "deb http://deb.debian.org/debian bullseye-updates main non-free non-free-firmware",
+            "after": "deb http://deb.debian.org/debian bookworm-updates main non-free non-free-firmware",
+            "why": "suite"
+          },
+          {
+            "n": 6,
+            "before": "deb http://deb.debian.org/debian bullseye-proposed-updates main",
+            "after": "# casaos-dropped: deb http://deb.debian.org/debian bullseye-proposed-updates main",
+            "why": "dropped"
+          },
+          {
+            "n": 7,
+            "before": "deb http://security.debian.org bullseye/updates main",
+            "after": "# casaos-dropped: deb http://security.debian.org bullseye/updates main",
+            "why": "dropped"
+          }
+        ]
+      }
+    ],
+    "paused": [],
+    "tree": {
+      "sources.list": "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware\n# casaos-dropped: deb http://archive.debian.org/debian bullseye-backports main\n# casaos-dropped: deb http://deb.debian.org/debian bullseye-backports-sloppy main\ndeb http://deb.debian.org/debian-security bookworm-security main non-free non-free-firmware\ndeb http://deb.debian.org/debian bookworm-updates main non-free non-free-firmware\n# casaos-dropped: deb http://deb.debian.org/debian bullseye-proposed-updates main\n# casaos-dropped: deb http://security.debian.org bullseye/updates main\n"
+    },
+    "dropped_backports": 4,
+    "firmware_added": 2,
+    "hash_current": "34d18c5c122d2dca482e44d3de8abe9588bc9e7c71a9fca77e4cf90a26285ecd",
+    "hash_generated": "4a640f9d72d4283554187474b42000ead72099817f0776daa022d823004664b9"
+  },
+  {
+    "name": "options on a line of the distribution, and a line of Docker's inside sources.list",
+    "files": {
+      "sources.list": "deb [arch=amd64] http://deb.debian.org/debian bullseye main\ndeb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable\ndeb http://deb.debian.org/debian bullseye-updates main\n"
+    },
+    "files_out": [
+      {
+        "file": "sources.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb [arch=amd64] http://deb.debian.org/debian bullseye main",
+            "after": "deb [arch=amd64] http://deb.debian.org/debian bookworm main",
+            "why": "suite"
+          },
+          {
+            "n": 2,
+            "before": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable",
+            "after": "# casaos-paused: deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable",
+            "why": "paused"
+          },
+          {
+            "n": 3,
+            "before": "deb http://deb.debian.org/debian bullseye-updates main",
+            "after": "deb http://deb.debian.org/debian bookworm-updates main",
+            "why": "suite"
+          }
+        ]
+      }
+    ],
+    "paused": [
+      {
+        "file": "sources.list",
+        "line": 2,
+        "hosts": [
+          "https://download.docker.com"
+        ],
+        "docker": true
+      }
+    ],
+    "tree": {
+      "sources.list": "deb [arch=amd64] http://deb.debian.org/debian bookworm main\n# casaos-paused: deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable\ndeb http://deb.debian.org/debian bookworm-updates main\n"
+    },
+    "dropped_backports": 0,
+    "firmware_added": 0,
+    "hash_current": "f0316d4b019f05c27c816d7063994d21478cbc675bd4d815ee531fd61403ce7d",
+    "hash_generated": "ac2ef2f22abac2b8e5e54e0d21cd478031a738aaf10541201df6c0d2fa38da36"
+  },
+  {
+    "name": "files of sources.list.d: the distribution's, comments only, Docker's with two lines",
+    "files": {
+      "sources.list": "# nothing here\n",
+      "sources.list.d/a-debian.list": "deb http://deb.debian.org/debian bullseye main\ndeb http://deb.debian.org/debian bullseye-updates main\n",
+      "sources.list.d/b-comments.list": "# only a comment\n",
+      "sources.list.d/c-docker.list": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable\ndeb-src [arch=amd64] https://download.docker.com/linux/debian bullseye stable\n"
+    },
+    "files_out": [
+      {
+        "file": "sources.list",
+        "action": "unchanged",
+        "lines": []
+      },
+      {
+        "file": "a-debian.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb http://deb.debian.org/debian bullseye main",
+            "after": "deb http://deb.debian.org/debian bookworm main",
+            "why": "suite"
+          },
+          {
+            "n": 2,
+            "before": "deb http://deb.debian.org/debian bullseye-updates main",
+            "after": "deb http://deb.debian.org/debian bookworm-updates main",
+            "why": "suite"
+          }
+        ]
+      },
+      {
+        "file": "b-comments.list",
+        "action": "unchanged",
+        "lines": []
+      },
+      {
+        "file": "c-docker.list",
+        "action": "paused",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable",
+            "after": "",
+            "why": "paused"
+          },
+          {
+            "n": 2,
+            "before": "deb-src [arch=amd64] https://download.docker.com/linux/debian bullseye stable",
+            "after": "",
+            "why": "paused"
+          }
+        ]
+      }
+    ],
+    "paused": [
+      {
+        "file": "c-docker.list",
+        "hosts": [
+          "https://download.docker.com"
+        ],
+        "docker": true
+      }
+    ],
+    "tree": {
+      "parts/a-debian.list": "deb http://deb.debian.org/debian bookworm main\ndeb http://deb.debian.org/debian bookworm-updates main\n",
+      "parts/b-comments.list": "# only a comment\n",
+      "sources.list": "# nothing here\n"
+    },
+    "dropped_backports": 0,
+    "firmware_added": 0,
+    "hash_current": "4bc3417120adca94a795593cf8c0ec3bb89bc2fad6f82b9d8c090248f94a3f46",
+    "hash_generated": "f2464a408f1af86585c19cf7e7793f64ab26a90cd8eab30ce4cff19d6411baab"
+  },
+  {
+    "name": "an empty sources.list and a file of the distribution",
+    "files": {
+      "sources.list": "",
+      "sources.list.d/a-debian.list": "deb http://deb.debian.org/debian bullseye main\n"
+    },
+    "files_out": [
+      {
+        "file": "sources.list",
+        "action": "unchanged",
+        "lines": []
+      },
+      {
+        "file": "a-debian.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb http://deb.debian.org/debian bullseye main",
+            "after": "deb http://deb.debian.org/debian bookworm main",
+            "why": "suite"
+          }
+        ]
+      }
+    ],
+    "paused": [],
+    "tree": {
+      "parts/a-debian.list": "deb http://deb.debian.org/debian bookworm main\n",
+      "sources.list": ""
+    },
+    "dropped_backports": 0,
+    "firmware_added": 0,
+    "hash_current": "15f4df6ee74740f3b1386e5527a22a66710aefd30d4ade9dfdb3fe657304bfd0",
+    "hash_generated": "6c3637efb9dd974a7bd6675c077989053175a67d0123d05f440edb53416f3827"
+  },
+  {
+    "name": "no sources.list at all, and a file that is backports only",
+    "files": {
+      "sources.list.d/a-debian.list": "deb http://deb.debian.org/debian bullseye main\n",
+      "sources.list.d/b-backports.list": "deb http://deb.debian.org/debian bullseye-backports main\n"
+    },
+    "files_out": [
+      {
+        "file": "a-debian.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb http://deb.debian.org/debian bullseye main",
+            "after": "deb http://deb.debian.org/debian bookworm main",
+            "why": "suite"
+          }
+        ]
+      },
+      {
+        "file": "b-backports.list",
+        "action": "rewritten",
+        "lines": [
+          {
+            "n": 1,
+            "before": "deb http://deb.debian.org/debian bullseye-backports main",
+            "after": "# casaos-dropped: deb http://deb.debian.org/debian bullseye-backports main",
+            "why": "dropped"
+          }
+        ]
+      }
+    ],
+    "paused": [],
+    "tree": {
+      "parts/a-debian.list": "deb http://deb.debian.org/debian bookworm main\n",
+      "parts/b-backports.list": "# casaos-dropped: deb http://deb.debian.org/debian bullseye-backports main\n",
+      "sources.list": ""
+    },
+    "dropped_backports": 1,
+    "firmware_added": 0,
+    "hash_current": "84a35f7416a3a1462c46915f34d3afdbe802ae77408d6a2df1dfd5f5ae49de20",
+    "hash_generated": "112ff04f98426de9cb8bd292badd26d4129e1ae776078f6ac9130df917b6254c"
+  }
+]

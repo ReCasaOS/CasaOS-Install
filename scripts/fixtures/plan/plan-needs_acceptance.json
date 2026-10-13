@@ -1,0 +1,295 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "done",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "expires_at": "2026-10-13T09:30:16Z",
+    "plan": {
+      "plan_id": "p1-5787acb2f81006785a3076312615ae6c",
+      "hop": "debian-11-12",
+      "made_at": "2026-10-12T09:30:16Z",
+      "expires_at": "2026-10-13T09:30:16Z",
+      "verdict": "needs_acceptance",
+      "problems": [
+        {
+          "code": "removal_manual",
+          "severity": "needs_acceptance",
+          "data": {
+            "name": "fuse",
+            "version": "2.9.9-5"
+          }
+        }
+      ],
+      "counts": {
+        "dist_upgrade": {
+          "upgraded": 384,
+          "new": 75,
+          "removed": 2,
+          "kept_back": 0
+        },
+        "upgrade": {
+          "upgraded": 274,
+          "new": 0,
+          "removed": 0,
+          "kept_back": 111
+        }
+      },
+      "removals": [
+        {
+          "name": "fuse",
+          "version": "2.9.9-5",
+          "manual": true,
+          "protected": false,
+          "essential": false
+        },
+        {
+          "name": "libsemanage1",
+          "version": "3.1-1+b2",
+          "manual": false,
+          "protected": false,
+          "essential": false
+        }
+      ],
+      "new_packages": [
+        "cron-daemon-common",
+        "dbus-bin",
+        "dbus-daemon",
+        "dbus-session-bus-common",
+        "dbus-system-bus-common",
+        "firmware-linux-free",
+        "fuse3",
+        "gcc-12-base",
+        "libbpf1",
+        "libcbor0.8",
+        "libduktape207",
+        "libffi8",
+        "libfile-find-rule-perl",
+        "libfmt9",
+        "libfuse3-3",
+        "libicu72",
+        "libiscsi7",
+        "libjemalloc2",
+        "libldap-2.5-0",
+        "libldap-common",
+        "libnfs13",
+        "libntfs-3g89",
+        "libnuma1",
+        "libnumber-compare-perl",
+        "libperl5.36",
+        "libproc2-0",
+        "libpython3.11",
+        "libpython3.11-minimal",
+        "libpython3.11-stdlib",
+        "librbd1",
+        "libsemanage2",
+        "libsepol2",
+        "libsodium23",
+        "libssh-4",
+        "libssl3",
+        "libsystemd-shared",
+        "libtext-glob-perl",
+        "liburing2",
+        "linux-image-6.1.0-53-cloud-amd64",
+        "perl-modules-5.36",
+        "pkexec",
+        "polkitd",
+        "polkitd-pkla",
+        "python-babel-localedata",
+        "python3-anyio",
+        "python3-babel",
+        "python3-charset-normalizer",
+        "python3-click",
+        "python3-colorama",
+        "python3-h11",
+        "python3-h2",
+        "python3-hpack",
+        "python3-httpcore",
+        "python3-httpx",
+        "python3-hyperframe",
+        "python3-markdown-it",
+        "python3-mdurl",
+        "python3-netifaces",
+        "python3-rfc3986",
+        "python3-rfc3987",
+        "python3-rich",
+        "python3-serial",
+        "python3-sniffio",
+        "python3-tz",
+        "python3-uritemplate",
+        "python3-webcolors",
+        "python3.11",
+        "python3.11-minimal",
+        "qemu-block-extra",
+        "samba-ad-provision",
+        "sgml-base",
+        "usrmerge",
+        "util-linux-extra",
+        "xml-core",
+        "zstd"
+      ],
+      "kept_back": [],
+      "autoremovable": [
+        "libbpf0",
+        "libcbor0",
+        "libdns-export1110",
+        "libicu67",
+        "libisc-export1105",
+        "libldap-2.4-2",
+        "libmpdec3",
+        "libntfs-3g883",
+        "libperl5.32",
+        "libprocps8",
+        "libpython3.9",
+        "libpython3.9-minimal",
+        "libpython3.9-stdlib",
+        "liburing1",
+        "net-tools",
+        "perl-modules-5.32",
+        "python3.9",
+        "python3.9-minimal"
+      ],
+      "sources": {
+        "files": [
+          {
+            "file": "sources.list",
+            "action": "rewritten",
+            "lines": [
+              {
+                "n": 1,
+                "before": "deb http://deb.debian.org/debian bullseye main",
+                "after": "deb http://deb.debian.org/debian bookworm main",
+                "why": "suite"
+              },
+              {
+                "n": 2,
+                "before": "deb-src http://deb.debian.org/debian bullseye main",
+                "after": "deb-src http://deb.debian.org/debian bookworm main",
+                "why": "suite"
+              },
+              {
+                "n": 3,
+                "before": "deb http://archive.debian.org/debian-security bullseye-security main",
+                "after": "deb http://deb.debian.org/debian-security bookworm-security main",
+                "why": "suite,host"
+              },
+              {
+                "n": 4,
+                "before": "deb-src http://archive.debian.org/debian-security bullseye-security main",
+                "after": "deb-src http://deb.debian.org/debian-security bookworm-security main",
+                "why": "suite,host"
+              },
+              {
+                "n": 5,
+                "before": "deb http://deb.debian.org/debian bullseye-updates main",
+                "after": "deb http://deb.debian.org/debian bookworm-updates main",
+                "why": "suite"
+              },
+              {
+                "n": 6,
+                "before": "deb-src http://deb.debian.org/debian bullseye-updates main",
+                "after": "deb-src http://deb.debian.org/debian bookworm-updates main",
+                "why": "suite"
+              }
+            ]
+          },
+          {
+            "file": "docker.list",
+            "action": "paused",
+            "lines": [
+              {
+                "n": 1,
+                "before": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable",
+                "after": "",
+                "why": "paused"
+              }
+            ]
+          }
+        ],
+        "hash_current": "35d17f59fd0705980471e5e52dcf6f54e2292d8b14e245051b88f45539ebcb8a",
+        "hash_generated": "b5112f83e29b14e258b0c60275b06ec2c6212a7c0fab519289ac9ba3f2624d0a",
+        "dropped_backports": 0,
+        "firmware_added": 0
+      },
+      "paused": [
+        {
+          "file": "docker.list",
+          "hosts": [
+            "https://download.docker.com"
+          ],
+          "docker": true
+        }
+      ],
+      "holds": [],
+      "docker": {
+        "present": true,
+        "source_paused": true,
+        "packages_held": []
+      },
+      "estimates": {
+        "known": true,
+        "download_bytes": 140000000,
+        "extra_bytes": 300000000
+      },
+      "disk": [
+        {
+          "path": "/var/cache/apt/archives",
+          "need": 690870912,
+          "free": 8589934592,
+          "ok": true
+        },
+        {
+          "path": "/usr",
+          "need": 1523741824,
+          "free": 8589934592,
+          "ok": true
+        },
+        {
+          "path": "/",
+          "need": 536870912,
+          "free": 21474836480,
+          "ok": true
+        }
+      ],
+      "sandbox": {
+        "bytes": 487,
+        "seconds_by_phase": {
+          "dist-upgrade": 2,
+          "estimate": 2,
+          "parse": 2,
+          "sources": 6,
+          "update": 2,
+          "upgrade": 2
+        }
+      },
+      "apt_conf_left_out": [
+        {
+          "file": "01autoremove",
+          "reason": "not_simple"
+        },
+        {
+          "file": "01autoremove-kernels",
+          "reason": "not_allowed_setting"
+        },
+        {
+          "file": "20auto-upgrades",
+          "reason": "not_allowed_setting"
+        },
+        {
+          "file": "20listchanges",
+          "reason": "not_simple"
+        },
+        {
+          "file": "50unattended-upgrades",
+          "reason": "not_simple"
+        },
+        {
+          "file": "70debconf",
+          "reason": "not_simple"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "done",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "expires_at": "2026-10-13T09:30:16Z",
+    "plan": {
+      "plan_id": "p1-c49643c8a099471b804008e777018dbe",
+      "hop": "debian-11-12",
+      "made_at": "2026-10-12T09:30:16Z",
+      "expires_at": "2026-10-13T09:30:16Z",
+      "verdict": "blocked",
+      "problems": [
+        {
+          "code": "dist_kept_back",
+          "severity": "blocked",
+          "data": {
+            "names": [],
+            "unlisted": 1
+          }
+        }
+      ],
+      "counts": {
+        "dist_upgrade": {
+          "upgraded": 0,
+          "new": 0,
+          "removed": 0,
+          "kept_back": 1
+        },
+        "upgrade": {
+          "upgraded": 0,
+          "new": 0,
+          "removed": 0,
+          "kept_back": 1
+        }
+      },
+      "removals": [],
+      "new_packages": [],
+      "kept_back": [],
+      "autoremovable": [],
+      "sources": {
+        "files": [
+          {
+            "file": "sources.list",
+            "action": "rewritten",
+            "lines": [
+              {
+                "n": 1,
+                "before": "deb http://deb.debian.org/debian bullseye main",
+                "after": "deb http://deb.debian.org/debian bookworm main",
+                "why": "suite"
+              },
+              {
+                "n": 2,
+                "before": "deb-src http://deb.debian.org/debian bullseye main",
+                "after": "deb-src http://deb.debian.org/debian bookworm main",
+                "why": "suite"
+              },
+              {
+                "n": 3,
+                "before": "deb http://archive.debian.org/debian-security bullseye-security main",
+                "after": "deb http://deb.debian.org/debian-security bookworm-security main",
+                "why": "suite,host"
+              },
+              {
+                "n": 4,
+                "before": "deb-src http://archive.debian.org/debian-security bullseye-security main",
+                "after": "deb-src http://deb.debian.org/debian-security bookworm-security main",
+                "why": "suite,host"
+              },
+              {
+                "n": 5,
+                "before": "deb http://deb.debian.org/debian bullseye-updates main",
+                "after": "deb http://deb.debian.org/debian bookworm-updates main",
+                "why": "suite"
+              },
+              {
+                "n": 6,
+                "before": "deb-src http://deb.debian.org/debian bullseye-updates main",
+                "after": "deb-src http://deb.debian.org/debian bookworm-updates main",
+                "why": "suite"
+              }
+            ]
+          },
+          {
+            "file": "docker.list",
+            "action": "paused",
+            "lines": [
+              {
+                "n": 1,
+                "before": "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bullseye stable",
+                "after": "",
+                "why": "paused"
+              }
+            ]
+          }
+        ],
+        "hash_current": "35d17f59fd0705980471e5e52dcf6f54e2292d8b14e245051b88f45539ebcb8a",
+        "hash_generated": "b5112f83e29b14e258b0c60275b06ec2c6212a7c0fab519289ac9ba3f2624d0a",
+        "dropped_backports": 0,
+        "firmware_added": 0
+      },
+      "paused": [
+        {
+          "file": "docker.list",
+          "hosts": [
+            "https://download.docker.com"
+          ],
+          "docker": true
+        }
+      ],
+      "holds": [],
+      "docker": {
+        "present": true,
+        "source_paused": true,
+        "packages_held": []
+      },
+      "estimates": {
+        "known": false
+      },
+      "disk": [],
+      "disk_note": "estimates_unknown",
+      "sandbox": {
+        "bytes": 487,
+        "seconds_by_phase": {
+          "dist-upgrade": 2,
+          "estimate": 2,
+          "parse": 2,
+          "sources": 6,
+          "update": 2,
+          "upgrade": 2
+        }
+      },
+      "apt_conf_left_out": [
+        {
+          "file": "01autoremove",
+          "reason": "not_simple"
+        },
+        {
+          "file": "01autoremove-kernels",
+          "reason": "not_allowed_setting"
+        },
+        {
+          "file": "20auto-upgrades",
+          "reason": "not_allowed_setting"
+        },
+        {
+          "file": "20listchanges",
+          "reason": "not_simple"
+        },
+        {
+          "file": "50unattended-upgrades",
+          "reason": "not_simple"
+        },
+        {
+          "file": "70debconf",
+          "reason": "not_simple"
+        }
+      ]
+    }
+  }
+}
