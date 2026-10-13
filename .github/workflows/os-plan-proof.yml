@@ -1,0 +1,240 @@
+name: os-plan-proof
+
+# Proof that the PLAN of an operating system upgrade (POST and GET /v1/sys/os/upgrade/plan and GET /v1/sys/os/upgrade/runbook, the third rung of the OS upgrade work) changes
+# nothing on the machine, says what apt would do, and refuses what it should, on a real guest. The plan is read-only by contract: it rewrites the box's apt sources to the next
+# release in a temporary tree of /var/tmp, lets apt plan the upgrade there (a real `apt-get update` of the target's package lists, a simulated transaction), judges what apt says
+# and writes the runbook with which to do the hop by hand. Nothing under /etc, /var/lib/apt (the lists, the `periodic` stamp), /var/lib/dpkg, /var/cache/apt or /var/lib/casaos
+# may change, no service may be started or stopped, no port opened, and the sandbox directory has to be gone when the job ends. It is the plan the owner reads before he does the
+# first hop of his own Debian 11 box, so the contract is proved on a machine that is not his.
+#
+# One leg for now, a QEMU guest booted with KVM from the Debian 11 cloud image (the way install-check.yml, docker-update-proof.yml, os-upgrade-measure.yml and
+# os-readiness-proof.yml boot theirs). scripts/os-plan-proof.sh installs Docker 28.0.4 (the owner's box, with a 29 on offer) and the published ReCasaOS release on it with the
+# installer's --use-debian-archive, starts the witness containers, and then, through the gateway with the loopback secret:
+#   - a CONTROL of five minutes (CONTROL_SECONDS, 320 by default) between two snapshots, with PID 1's own journal of it, as the readiness proof has it: what the box changes by
+#     itself is left out of the verdicts and named, a service that has an entry in the journal of the control is noise wherever else it changes, and a journal that cannot be
+#     believed leaves nothing out (the false red may come back, never a false pass);
+#   - the WINDOW: a snapshot (names, sizes, times, mode, owner and content hash of every file of /etc, /var/lib/dpkg, /var/lib/apt with its lists and its periodic stamp,
+#     /var/cache/apt, /var/lib/casaos, /var/log/apt and /var/log/casaos; the service units with their invocation ids; the listening sockets; the listing of /var/tmp; the start
+#     times of the witness containers), GET of the plan before any plan (the first call: a release that has no such route answers 404, and the run ends there), GET of the runbook
+#     before any plan, POST, a second POST at once (it has to answer the running job, with its start time), GET every second until the job is done (15 minutes at most), and the
+#     same snapshot. Only /var/log/casaos may differ, and /var/tmp has to list the same (/var/log/apt is looked at because the planner of apt writes its log of a simulated
+#     transaction there, which the sandbox's apt-config turns off). The stamp that the box's own hooks touch when an `apt-get update` ends is the named expected catch where the
+#     box has one: the plan neutralises the hooks of /etc/apt/apt.conf.d in its sandbox, and names what it left out of apt's configuration, each file with its reason
+#     (apt_conf_left_out, at most 200 with a flag that says it is cut: a file is kept only when every line of it is a comment or one statement of the core's allow-list, the proxy, the time
+#     to wait, the tries, the languages and the two Install settings, each for the download methods whose program reads it; a failed update carries the same list);
+#   - the PLAN: its verdict (ok or needs_acceptance: a blocked plan is a failure, with its problems printed), its removals against the measured ones (fuse, libsemanage1: another
+#     removal is a finding, and a failure only when the plan says it is protected), its counts against the measured 384 upgraded, 75 new, 2 removed, 0 kept back and 274, 0, 0, 111
+#     (within 15 %), apt's sizes, the disk, the sandbox, and its sources against what the report computes itself from the guest's own files (the archive's security line becomes
+#     deb.debian.org/debian-security, docker.list is put aside and flagged as Docker's);
+#   - the RUNBOOK of that plan: its blocks read by `sh -n` on the guest (never run), its tree equal to what the report computes, its plan_id the plan's, its text no more than 256 KiB;
+#   - the plan_id: the same for a second plan at once, another for a plan with base-files on hold (which apt keeps back: blocked by dist_kept_back, and no runbook), and the
+#     first one again after everything below has been undone;
+#   - the DIRTY matrix, one change at a time (a .sources file, a cdrom line, an alias, a line already at bookworm, a mixed file, a country mirror of Debian's own list that does not exist (ftp9.zz.debian.org),
+#     dpkg's lock held, a small tmpfs over /var/tmp): each asks for a plan, asserts the exact code (sources_format, sources_cdrom, sources_alias, sources_target,
+#     sources_mixed_file, sandbox_update_failed of the kind network, busy, no_room), undoes the dirt (a trap runs the undo when the script dies in the middle), and looks for a
+#     sandbox directory left in /var/tmp; a failed job has no runbook. Three of its steps are CANARIES, which prove that the hooks and the options of the box do not run in the sandbox
+#     (the image has none of its own): a fragment of apt's configuration that holds a real hook of `apt-get update` (APT::Update::Post-Invoke-Success, which touches a file) in a form
+#     that a filter of the text does not see, since apt reads its configuration as a language: a comment spliced into the key (`Post-In/**/voke-Success`), and an #include of a
+#     file that holds the hook; and a fragment with the option of the gpgv that apt runs as _apt (Acquire::gpgv::Options::0, `--log-file=/var/lib/apt/lists/partial/osp-canary`),
+#     which makes gpgv write that file in the box's own lists of apt when it is kept. The plan has to leave the fragment out and name it with its reason (not_simple, has_directive,
+#     not_allowed_setting), and the file that the hook touches (or that gpgv writes) must not be there when the plan is done (on a box with no sandbox, the two hooks make their file:
+#     the guest's author tried it on apt 2.2.4; the third fragment is what the sandbox's own `apt-get update` does with the box's fragment kept, tried in a Debian 11 chroot: a plain
+#     `apt-get update` of the box cleans partial of what it does not know).
+# scripts/os-plan-proof-report.py judges what the guest recorded (PASS, FAIL, NOT TESTABLE with its reason, or INVALID RUN), and fails the job for a FAIL and for an INVALID RUN
+# alike. Nothing is judged in the guest. A step whose undo failed is an INVALID RUN, never a FAIL of the feature. What the guest cannot do is NOT TESTABLE with the reason
+# (not_root: the core runs as root; a protected package removed: a clean image removes none; the codes that nothing here can make apt say).
+#
+#   d11  Debian 11, to Debian 12 (the installer's --use-debian-archive, Docker 28.0.4)
+# `legs` chooses the cells (scripts/os-plan-proof-legs.json): all of them or one. The answers the harness judges are the real core's own, dumped from it
+# (scripts/fixtures/plan): what the real tools say on a real guest is what this leg shows, and the numbers it prints (the sandbox's size, the seconds of each phase, apt's
+# download and room taken, the counts) are the first real-guest data of the rung, which re-tare the floors of the disk and of /var/tmp.
+#
+# It needs a release that carries the routes: the first release of the core that has /v1/sys/os/upgrade/plan. Left empty, the tag is the latest published release, which has
+# them only once such a release is published: until then, give the tag of the candidate (a pre-release is proved by its tag before it is made the latest). The first call of
+# the guest is the first call of the window, and a 404 ends the run there as an INVALID RUN that says "the release under test has no /v1/sys/os/upgrade/plan".
+# The guest needs the network: the mirrors of Debian 11 (deb.debian.org, archive.debian.org for its security line) and of Debian 12.
+# By hand only; it publishes nothing and changes nothing outside the guests.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The installer release to install, a tag of this repository (a pre-release when it is a candidate); empty for the latest published release
+        required: false
+        default: ''
+        type: string
+      legs:
+        description: Which legs to run, all of them or one (d11 is Debian 11)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - d11
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: The legs of this run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    env:
+      LEGS: ${{ inputs.legs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The legs this run proves
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >>"${GITHUB_OUTPUT}"
+          import json
+          import os
+          want = os.environ["LEGS"]
+          chosen = [c for c in json.load(open("scripts/os-plan-proof-legs.json")) if want == "all" or c["leg"] == want]
+          if not chosen:
+              raise SystemExit("no leg is %r" % want)
+          print("matrix=" + json.dumps({"include": chosen}, separators=(",", ":")))
+          PY
+          echo "legs of this run: ${LEGS}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  vm:
+    name: ${{ matrix.name }}, ${{ matrix.label }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      PYTHONDONTWRITEBYTECODE: "1"
+      TAG: ${{ inputs.tag }}
+      LEG: ${{ matrix.leg }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      INSTALLER_ARGS: ${{ matrix.args }}
+      DOCKER_FROM: ${{ matrix.docker_from }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The proof can say no
+        run: |
+          set -euo pipefail
+          python3 scripts/test-os-plan-proof.py
+          bash -n scripts/os-plan-proof.sh
+          bash -n scripts/os-readiness-proof.sh
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG}" ]; then
+            TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          fi
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
+          # a candidate is a pre-release: GitHub does not call it the latest release, so nothing installs it by itself
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
+          mkdir published
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          # The runner's apt sometimes stalls without a word (it has taken a whole job
+          # before): a few bounded tries, for that and for nothing else.
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize disk.img 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      # The values reach the guest through the environment of this step, which the matrix of this file sets; none of them is typed by whoever dispatches the run
+      # (the tag is checked against the shape of a release tag before it is used, and reaches nothing but gh).
+      - name: Prove it
+        timeout-minutes: 75
+        run: |
+          set -euo pipefail
+          scp -F ssh_config published/install.sh scripts/os-readiness-proof.sh scripts/os-plan-proof.sh vm:
+          ssh -F ssh_config vm "sudo env PLAN_DISPOSABLE=1 INSTALLER_ARGS='${INSTALLER_ARGS}' DOCKER_FROM='${DOCKER_FROM}' OUT=/home/casa/osp-out bash os-plan-proof.sh ${LEG}"
+
+      # Red for a verdict that fails and for a run that proves nothing alike.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ssh -F ssh_config vm 'sudo tar -C /home/casa/osp-out -cf - .' | tar -xf - -C out || true
+          test -s out/timeline.tsv || { { echo "the run left no evidence: nothing to report"; cat out/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"; exit 1; }
+          python3 scripts/os-plan-proof-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: What the machine says when it is not well
+        if: always()
+        run: |
+          ssh -F ssh_config vm 'systemctl --failed --no-pager; ls -la /var/tmp; sudo journalctl -u casaos.service -u casaos-app-management.service -u docker.service --no-pager -o short-iso | tail -150' || true
+          tail -30 serial.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: os-plan-proof-${{ matrix.leg }}
+          path: |
+            out
+            serial.log
+          if-no-files-found: ignore

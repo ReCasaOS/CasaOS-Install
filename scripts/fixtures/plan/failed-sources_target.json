@@ -1,0 +1,21 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "sources",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "sources_target",
+      "phase": "sources",
+      "detail": "osp-target.list line 1: the source is already at the target release or past it (if an earlier try of the upgrade by hand rewrote the sources, the folder of that plan in /var/backups, casaos-os-upgrade-\u003cplan id\u003e, has restore-sources.sh: run it with sh; when that folder has begun-upgrade the upgrade has begun and only goes forward)",
+      "data": {
+        "file": "osp-target.list",
+        "line": 1,
+        "reason": "target"
+      }
+    }
+  }
+}

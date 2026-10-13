@@ -1,0 +1,823 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "update",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "sandbox_update_failed",
+      "phase": "update",
+      "detail": "Err:5 http://ftp9.zz.debian.org bookworm InRelease\nCould not resolve 'ftp9.zz.debian.org'\nW: Failed to fetch http://ftp9.zz.debian.org  Could not resolve 'ftp9.zz.debian.org'\nW: Some index files failed to download. They have been ignored, or old ones used instead.",
+      "data": {
+        "apt_conf_left_out": [
+          {
+            "file": "01autoremove",
+            "reason": "not_simple"
+          },
+          {
+            "file": "01autoremove-kernels",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20auto-upgrades",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20listchanges",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1000",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1001",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1002",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1003",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1004",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1005",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1006",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1007",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1008",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1009",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1010",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1011",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1012",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1013",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1014",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1015",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1016",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1017",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1018",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1019",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1020",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1021",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1022",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1023",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1024",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1025",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1026",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1027",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1028",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1029",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1030",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1031",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1032",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1033",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1034",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1035",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1036",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1037",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1038",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1039",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1040",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1041",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1042",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1043",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1044",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1045",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1046",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1047",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1048",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1049",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1050",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1051",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1052",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1053",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1054",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1055",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1056",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1057",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1058",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1059",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1060",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1061",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1062",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1063",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1064",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1065",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1066",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1067",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1068",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1069",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1070",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1071",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1072",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1073",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1074",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1075",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1076",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1077",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1078",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1079",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1080",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1081",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1082",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1083",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1084",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1085",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1086",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1087",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1088",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1089",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1090",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1091",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1092",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1093",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1094",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1095",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1096",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1097",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1098",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1099",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1100",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1101",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1102",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1103",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1104",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1105",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1106",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1107",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1108",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1109",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1110",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1111",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1112",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1113",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1114",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1115",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1116",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1117",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1118",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1119",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1120",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1121",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1122",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1123",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1124",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1125",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1126",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1127",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1128",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1129",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1130",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1131",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1132",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1133",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1134",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1135",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1136",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1137",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1138",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1139",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1140",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1141",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1142",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1143",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1144",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1145",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1146",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1147",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1148",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1149",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1150",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1151",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1152",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1153",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1154",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1155",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1156",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1157",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1158",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1159",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1160",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1161",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1162",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1163",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1164",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1165",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1166",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1167",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1168",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1169",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1170",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1171",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1172",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1173",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1174",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1175",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1176",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1177",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1178",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1179",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1180",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1181",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1182",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1183",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1184",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1185",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1186",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1187",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1188",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1189",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1190",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1191",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1192",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1193",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1194",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50f1195",
+            "reason": "not_simple"
+          }
+        ],
+        "apt_conf_left_out_truncated": true,
+        "exit": 100,
+        "kind": "network"
+      }
+    }
+  }
+}

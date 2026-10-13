@@ -1,0 +1,21 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "sources",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "sources_cdrom",
+      "phase": "sources",
+      "detail": "osp-cdrom.list line 1: a disc or a local directory cannot be upgraded from",
+      "data": {
+        "file": "osp-cdrom.list",
+        "line": 1,
+        "reason": "cdrom"
+      }
+    }
+  }
+}

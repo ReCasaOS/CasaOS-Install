@@ -1,0 +1,46 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "update",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "sandbox_update_failed",
+      "phase": "update",
+      "detail": "Err:5 http://ftp9.zz.debian.org bookworm InRelease\nCould not resolve 'ftp9.zz.debian.org'\nW: Failed to fetch http://ftp9.zz.debian.org  Could not resolve 'ftp9.zz.debian.org'\nW: Some index files failed to download. They have been ignored, or old ones used instead.",
+      "data": {
+        "apt_conf_left_out": [
+          {
+            "file": "01autoremove",
+            "reason": "not_simple"
+          },
+          {
+            "file": "01autoremove-kernels",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20auto-upgrades",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20listchanges",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50unattended-upgrades",
+            "reason": "not_simple"
+          },
+          {
+            "file": "70debconf",
+            "reason": "not_simple"
+          }
+        ],
+        "exit": 100,
+        "kind": "network"
+      }
+    }
+  }
+}

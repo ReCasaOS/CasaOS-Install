@@ -1,0 +1,20 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "sources",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "sources_format",
+      "phase": "sources",
+      "detail": "osp-deb822.sources: a .sources file (deb822) is not read by this plan",
+      "data": {
+        "file": "osp-deb822.sources",
+        "reason": "deb822"
+      }
+    }
+  }
+}

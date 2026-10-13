@@ -1,0 +1,43 @@
+{
+  "per_method": {
+    "ftp": [
+      "Proxy",
+      "Timeout"
+    ],
+    "http": [
+      "Proxy",
+      "Timeout",
+      "Pipeline-Depth",
+      "Dl-Limit",
+      "Max-Age",
+      "No-Cache",
+      "AllowRedirect"
+    ],
+    "https": [
+      "Proxy",
+      "Timeout",
+      "Pipeline-Depth",
+      "Dl-Limit",
+      "Max-Age",
+      "No-Cache",
+      "AllowRedirect"
+    ]
+  },
+  "per_host": [
+    "Proxy"
+  ],
+  "top": [
+    "Retries",
+    "Languages",
+    "PDiffs",
+    "By-Hash",
+    "Check-Valid-Until",
+    "ForceIPv4",
+    "ForceIPv6",
+    "Queue-Mode"
+  ],
+  "other": [
+    "APT::Install-Recommends",
+    "APT::Install-Suggests"
+  ]
+}

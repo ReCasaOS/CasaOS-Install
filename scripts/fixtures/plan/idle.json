@@ -1,0 +1,8 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "idle"
+  }
+}

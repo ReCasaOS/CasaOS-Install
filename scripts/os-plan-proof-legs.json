@@ -1,0 +1,3 @@
+[
+  {"leg": "d11", "name": "Debian 11", "label": "plan of the owner's box, Docker 28.0.4, to Debian 12", "id": "debian", "version": "11", "base": "https://cloud.debian.org/images/cloud/bullseye/latest", "image": "debian-11-genericcloud-amd64.qcow2", "sums": "SHA512SUMS", "algo": "sha512sum", "args": "--use-debian-archive", "docker_from": "28.0.4"}
+]

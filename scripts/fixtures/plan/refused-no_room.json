@@ -1,0 +1,13 @@
+{
+  "success": 409,
+  "message": "there is not room for the sandbox in /var/tmp",
+  "data": {
+    "error_code": "no_room",
+    "error": "there is not room for the sandbox in /var/tmp",
+    "data": {
+      "free": 67108864,
+      "need": 671088640,
+      "path": "/var/tmp"
+    }
+  }
+}

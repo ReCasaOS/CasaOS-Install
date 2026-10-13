@@ -1,0 +1,8 @@
+{
+  "success": 409,
+  "message": "another package manager is at work: dpkg's lock is held by another process",
+  "data": {
+    "error_code": "busy",
+    "error": "another package manager is at work: dpkg's lock is held by another process"
+  }
+}

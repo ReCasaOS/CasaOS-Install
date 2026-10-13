@@ -1,0 +1,19 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "sources",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "sources_mixed_file",
+      "phase": "sources",
+      "detail": "osp-mixed.list has repositories of the distribution and of others: it cannot be put aside as a file and rewritten as a file",
+      "data": {
+        "file": "osp-mixed.list"
+      }
+    }
+  }
+}

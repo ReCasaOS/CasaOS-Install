@@ -1,0 +1,45 @@
+{
+  "success": 200,
+  "message": "ok",
+  "data": {
+    "plannable": true,
+    "state": "failed",
+    "phase": "upgrade",
+    "started_at": "2026-10-12T09:29:00Z",
+    "finished_at": "2026-10-12T09:31:00Z",
+    "error": {
+      "code": "sandbox_solver_failed",
+      "phase": "upgrade",
+      "detail": "E: Unable to correct problems, you have held broken packages.",
+      "data": {
+        "apt_conf_left_out": [
+          {
+            "file": "01autoremove",
+            "reason": "not_simple"
+          },
+          {
+            "file": "01autoremove-kernels",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20auto-upgrades",
+            "reason": "not_allowed_setting"
+          },
+          {
+            "file": "20listchanges",
+            "reason": "not_simple"
+          },
+          {
+            "file": "50unattended-upgrades",
+            "reason": "not_simple"
+          },
+          {
+            "file": "70debconf",
+            "reason": "not_simple"
+          }
+        ],
+        "exit": 100
+      }
+    }
+  }
+}
