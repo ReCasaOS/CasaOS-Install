@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.27] - 2026-10-13
+
+Components: CasaOS `v0.4.73`, CasaOS-UI `v0.4.87`. Unchanged from v0.5.26: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The dashboard can show what an upgrade to the next Debian release would do on your machine, before anything is touched.** In the *Operating system* window, a new *Plan* section (Debian 11 to 12 for now) asks apt to plan the upgrade in a private sandbox against the real mirrors: the sources it would write (the suites moved, the backports lines dropped, third-party sources such as Docker's put aside), the packages upgraded, added, removed and kept back, the disk room it needs and the download, and the packages the upgrade must never remove. The machine is not changed: the only thing written is the sandbox folder, removed afterwards. When the plan is not blocked it also writes, for the owner who wants to do the upgrade by hand with a snapshot and a console, a step-by-step runbook for exactly this machine, with stop lines, a point of no return and a way back before it. ReCasaOS still does not upgrade the system for you.
+- **A new proof, `os-plan-proof`**, boots a Debian 11 guest, makes the plan, and checks that the machine did not change, that the plan matches the guest's own sources and that the runbook is sound, with a matrix of things made wrong on purpose (an unreadable source, a dead mirror, no room, a held lock, apt configuration that tries to run hooks).
+
+### Fixed
+
+- **The *System packages* window no longer hides its update button behind an older successful run.** After an update had succeeded once, reopening the window showed that old result and no button until the check was run again.
+
+### Documentation
+
+- CasaOS-UI now carries the Apache-2.0 `LICENSE` that IceWhale added upstream, with a NOTICE that says whose code is whose.
+
 ## [0.5.26] - 2026-10-12
 
 Components: CasaOS `v0.4.72`, CasaOS-UI `v0.4.86`. Unchanged from v0.5.25: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
