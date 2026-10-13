@@ -1,0 +1,51 @@
+name: attribution
+
+# The commits of a pull request and its description say who wrote the change, and nothing else:
+# no "Co-Authored-By" line naming an AI assistant and no "Generated with ..." footer.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  no-ai-attribution:
+    name: No AI attribution in the commits and the description
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Look for the attribution lines
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -u
+          pattern='(co-authored-by:.*(claude|anthropic|copilot|chatgpt|openai|gemini)|generated (with|by) .*(claude|copilot|chatgpt|gemini)|noreply@anthropic\.com)'
+          found=0
+
+          if printf '%s\n' "${PR_BODY}" | grep -i -E -q "${pattern}"; then
+            echo "::error::The description of the pull request carries an attribution line:"
+            printf '%s\n' "${PR_BODY}" | grep -i -E -n "${pattern}" | sed 's/^/    /'
+            found=1
+          fi
+
+          for commit in $(git rev-list "${BASE_SHA}..${HEAD_SHA}"); do
+            if git log -1 --format=%B "${commit}" | grep -i -E -q "${pattern}"; then
+              echo "::error::Commit ${commit} carries an attribution line:"
+              git log -1 --format=%B "${commit}" | grep -i -E -n "${pattern}" | sed 's/^/    /'
+              found=1
+            fi
+          done
+
+          if [ "${found}" -ne 0 ]; then
+            echo "Remove the lines (git commit --amend, or a rebase for older commits, then push again; edit the description)."
+            exit 1
+          fi
+          echo "No attribution line in the description or in the ${BASE_SHA:0:7}..${HEAD_SHA:0:7} commits."
