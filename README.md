@@ -104,6 +104,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.28
+
+**A page for virtual machines**, for boxes that have the opt-in virtualization module: list, actions, console, disks, network, creation from an ISO. Plus two small fixes: a broken app icon in the *App updates* list falls back to the default one, and the upgrade runbook's block titles are in French in a French window.
+
 ## What is in v0.5.27
 
 **The dashboard can show what an upgrade to the next Debian release would do on your machine**, without touching it: the sources it would write, the packages it would upgrade, add, remove or keep back, the room and the download it needs, and a step-by-step runbook for doing it by hand. Debian 11 to 12 for now; ReCasaOS does not upgrade the system for you yet. Also fixed: the update button of the *System packages* window no longer disappears behind an older successful run.

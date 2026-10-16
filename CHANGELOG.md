@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.28] - 2026-10-16
+
+Components: CasaOS `v0.4.73` (unchanged), CasaOS-UI `v0.4.88`. Unchanged from v0.5.27: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The virtual machine page**, behind the *Virtual Machines* card that appears when the opt-in virtualization module is installed ([CasaOS-VirtManagement](https://github.com/Vinz2168/CasaOS-VirtManagement), contributed by Vinz2168): the list of machines (drag to reorder, state, IP with a copy button), and for the one selected its actions, a console (noVNC, loaded only when a console is opened), CPU and memory, disks, CD-ROM, network and USB devices; creating a machine from an ISO or a disk image, deleting it, and the default storage folder. A box without the module never downloads the page. In English, Italian and French. Force off and Force reset ask for a confirmation, and Escape closes only the dialog on top.
+
+### Fixed
+
+- **An app whose icon address does not load no longer shows a broken image in the *App updates* list**: it gets the same default icon as the app grid.
+- **The titles of the blocks of the upgrade runbook are said in French** in a French window (the plan section of the *Operating system* window).
+
+### Documentation
+
+- The CasaOS-UI README said the dashboard is a Vue 2.7 application; it is Vue 3.
+
 ## [0.5.27] - 2026-10-13
 
 Components: CasaOS `v0.4.73`, CasaOS-UI `v0.4.87`. Unchanged from v0.5.26: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
