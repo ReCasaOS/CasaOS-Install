@@ -34,7 +34,7 @@ This page is the contract between a module and ReCasaOS, and what ReCasaOS does 
 | Field | Meaning |
 |---|---|
 | `schema` | The version of this format; the reader refuses a schema it does not know. |
-| `name` | Lower case letters, digits and `-`, at most 32 characters: the module's id on the box (`/etc/casaos/modules/<name>.json`, `casaos-module install <name>`). |
+| `name` | Lower case letters, digits and `-`, at most 32 characters: the module's id on the box (`/etc/casaos/modules/<name>.json`, `casaos module install <name>`). |
 | `title`, `description` | What the dashboard shows. English; the dashboard translates what it knows. |
 | `component` | The repository (under `github.com/ReCasaOS`) the archive comes from. |
 | `unit` | The systemd unit the install enables and starts, and the remove stops. |
@@ -70,21 +70,21 @@ ReCasaOS does not discover modules on the network. Each ReCasaOS release carries
 
 It is installed with the release at `/usr/share/casaos/modules/catalogue.json`. `tier` is `core` (maintained here and proven on a real guest) or `community` (CI against a test double; the dashboard says so before the install). A new module version reaches boxes by being added to the catalogue of a ReCasaOS release, after its own CI is green: nothing a module author publishes reaches a box by itself.
 
-## `casaos-module`, the one place the install lives *(not built yet)*
+## `casaos module`, the one place the install lives *(not built yet)*
 
-A small shell tool shipped with the core release at `/usr/bin/casaos-module`. The installer's `--module <name>` option and the dashboard both end in it, so there is one implementation.
+A subcommand of the core binary (`/usr/bin/casaos`), not a script: the sha256 check, the rules for what an archive may write, and the reading of manifests and catalogues are Go code with tests, and nothing on the box needs `jq`. The installer's `--module <name>` option and the dashboard both end in it, so there is one implementation.
 
-- `casaos-module list`: the catalogue and what is installed, as JSON.
-- `casaos-module plan <name>`: what an install would do, as JSON and read-only: the checks (system supported, architecture, ReCasaOS version, nothing else changing the packages, no operating-system upgrade open, disk room), the packages apt would install or upgrade (`apt-get -s`), the size to download.
-- `casaos-module install <name>`: the steps, each with a marker line in the log: apt install of the packages; download of the archive; its sha256 compared with the catalogue (a mismatch removes the file and stops); unpack of `build/sysroot/` over `/`, recording each file in `/var/lib/casaos/modules/<name>.files`; `daemon-reload`; the manifest copied to `/etc/casaos/modules/<name>.json`; `enable --now` of the unit; a wait until the gateway answers on the route. A failure stops the unit, removes the recorded files and the manifest, keeps the apt packages (said in the last line), and exits non-zero.
-- `casaos-module remove <name>`: stops and disables the unit, removes the recorded files and the manifest. It never purges packages and never touches the module's data (for `virt`: `/DATA/VM`, the libvirt network and pool, the machines); the last lines say how to purge them by hand.
-- `casaos-module status [name]`: installed or not, version, whether the unit is active and the route answers.
+- `casaos module list`: the catalogue and what is installed, as JSON.
+- `casaos module plan <name>`: what an install would do, as JSON and read-only: the checks (system supported, architecture, ReCasaOS version, nothing else changing the packages, no operating-system upgrade open, disk room), the packages apt would install or upgrade (`apt-get -s`), the size to download.
+- `casaos module install <name>`: the steps, each with a marker line in the log: apt install of the packages; download of the archive; its sha256 compared with the catalogue (a mismatch removes the file and stops); unpack of `build/sysroot/` over `/`, recording each file in `/var/lib/casaos/modules/<name>.files`; `daemon-reload`; the manifest copied to `/etc/casaos/modules/<name>.json`; `enable --now` of the unit; a wait until the gateway answers on the route. A failure stops the unit, removes the recorded files and the manifest, keeps the apt packages (said in the last line), and exits non-zero.
+- `casaos module remove <name>`: stops and disables the unit, removes the recorded files and the manifest. It never purges packages and never touches the module's data (for `virt`: `/DATA/VM`, the libvirt network and pool, the machines); the last lines say how to purge them by hand.
+- `casaos module status [name]`: installed or not, version, whether the unit is active and the route answers.
 
 Nothing from the network runs as code: only distribution packages through apt and the archive whose sha256 the catalogue pins. The module's service runs as root like the other ReCasaOS services; that is why the `community` tier is said out loud.
 
 ## What the installer does *(not built yet)*
 
-`install.sh --module <name>` (repeatable) runs `casaos-module install <name>` after ReCasaOS itself is installed and running. Off by default. A failed module install prints why and leaves ReCasaOS installed and the exit status of the installer unchanged.
+`install.sh --module <name>` (repeatable) runs `casaos module install <name>` after ReCasaOS itself is installed and running. Off by default. A failed module install prints why and leaves ReCasaOS installed and the exit status of the installer unchanged.
 
 ## What the core and the dashboard do *(not built yet)*
 
@@ -94,7 +94,7 @@ Nothing from the network runs as code: only distribution packages through apt an
 ## Order of work
 
 1. This page, and the move of CasaOS-VirtManagement to the `ReCasaOS` organisation.
-2. `casaos-module`, the catalogue in the release build, `install.sh --module`, and a QEMU proof that installs and removes `virt` on Debian 12 and Ubuntu 24.04 against libvirt's test driver (no KVM) and checks that the rest of ReCasaOS did not change.
+2. `casaos module`, the catalogue in the release build, `install.sh --module`, and a QEMU proof that installs and removes `virt` on Debian 12 and Ubuntu 24.04 against libvirt's test driver (no KVM) and checks that the rest of ReCasaOS did not change.
 3. The core's API.
 4. The dashboard page.
 5. `os_upgrade`, with the first module release that needs it.
