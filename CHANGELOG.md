@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.29] - 2026-10-17
+
+Components: CasaOS `v0.4.74`. Unchanged from v0.5.28: CasaOS-UI `v0.4.88`, CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **An upgrade of the operating system from Debian 11 to Debian 12, as a beta that is off by default and has no page yet: it is driven over the API.** It is switched on by a file, `/etc/casaos/os-upgrade.beta`, or by `POST /v1/sys/os/upgrade/beta`; a machine that never switches it on is unchanged. It follows the procedure that Debian documents, in a transient systemd unit that the core starts: first a refresh of Debian 11 to its last state, then a rehearsal that stops short of the point of no return and puts the machine back, then the hop. Before the point of no return, whatever stops is undone: the sources and the timers of apt are put back. After it nothing is undone and the repair is a click of yours (*go on*), or the run's own text to follow by hand. The restart is always your click, and is refused while something that stands before it is not well (an `/etc/fstab` mount whose disk is not there). After the restart the core checks the machine and judges it against the notes it took before. **Take a snapshot first, and be at the console when it restarts: there is no way back from the point of no return except that snapshot.** The guide is `docs/os-upgrade-beta.md` in the CasaOS repository; it says what is proven (the commands were measured on a guest that booted, the machinery around them was not) and what each state means.
+- **The core reads the manifest of a module** (`/etc/casaos/modules/<name>.json`), and the readiness report of the upgrade refuses a machine that has a module installed, naming it. Nothing installs a module yet.
+
+### Changed
+
+- While an upgrade of the operating system works on the machine, the restart and the shutdown of the dashboard are refused (`os_upgrade_open`), the alerts about the apps' containers are kept quiet, and the automatic updates, the update button and the update of Docker say that the machine is busy. Backups and the automatic work of git apps are held the same way only once the matching change of CasaOS-AppManagement is installed; it is not in this release, so switch them off yourself before an upgrade.
+- The `systemd-run` of the package and Docker updates now has a limit of 30 seconds.
+
 ## [0.5.28] - 2026-10-16
 
 Components: CasaOS `v0.4.73` (unchanged), CasaOS-UI `v0.4.88`. Unchanged from v0.5.27: CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
