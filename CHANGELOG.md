@@ -4,7 +4,7 @@ All notable changes to the CasaOS fork installer are documented here.
 
 ## [0.5.29] - 2026-10-17
 
-Components: CasaOS `v0.4.74`. Unchanged from v0.5.28: CasaOS-UI `v0.4.88`, CasaOS-AppManagement `v0.4.68`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+Components: CasaOS `v0.4.74`, CasaOS-AppManagement `v0.4.69`. Unchanged from v0.5.28: CasaOS-UI `v0.4.88`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
 
 ### Added
 
@@ -13,7 +13,7 @@ Components: CasaOS `v0.4.74`. Unchanged from v0.5.28: CasaOS-UI `v0.4.88`, CasaO
 
 ### Changed
 
-- While an upgrade of the operating system works on the machine, the restart and the shutdown of the dashboard are refused (`os_upgrade_open`), the alerts about the apps' containers are kept quiet, and the automatic updates, the update button and the update of Docker say that the machine is busy. Backups and the automatic work of git apps are held the same way only once the matching change of CasaOS-AppManagement is installed; it is not in this release, so switch them off yourself before an upgrade.
+- While an upgrade of the operating system works on the machine, the restart and the shutdown of the dashboard are refused (`os_upgrade_open`), the alerts about the apps' containers are kept quiet, and the automatic updates, the update button and the update of Docker say that the machine is busy. Backups and the automatic work of git apps are held the same way: CasaOS-AppManagement `v0.4.69` looks at the flag file `/var/lib/casaos/os-upgrade/busy`, and while it is there the scheduled backups and the five-minute check of git apps wait, and a push from a forge is answered `202` held; what you click yourself (a backup, a restore, a deployment) is not held. A folder it cannot read counts as an upgrade that is open.
 - The `systemd-run` of the package and Docker updates now has a limit of 30 seconds.
 
 ## [0.5.28] - 2026-10-16

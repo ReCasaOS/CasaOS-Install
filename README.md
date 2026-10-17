@@ -106,7 +106,7 @@ Any one of these; an upgrade never turns them back on.
 
 ## What is in v0.5.29
 
-**The engine that upgrades Debian 11 to Debian 12**, as a beta that is off by default and is driven over the API for now (no page yet): a refresh, a rehearsal that can be undone, the hop in a systemd unit, a restart that is only your click, and a check afterwards. It needs a snapshot, and the guide says what is proven and what is not. Plus the reading of the manifest of a module.
+**The engine that upgrades Debian 11 to Debian 12**, as a beta that is off by default and is driven over the API for now (no page yet): a refresh, a rehearsal that can be undone, the hop in a systemd unit, a restart that is only your click, and a check afterwards. It needs a snapshot, and the guide says what is proven and what is not. With it, AppManagement holds the scheduled backups and the automatic work of git apps while an upgrade is open. Plus the reading of the manifest of a module.
 
 ## What is in v0.5.28
 
