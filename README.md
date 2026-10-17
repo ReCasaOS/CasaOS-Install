@@ -104,6 +104,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.29
+
+**The engine that upgrades Debian 11 to Debian 12**, as a beta that is off by default and is driven over the API for now (no page yet): a refresh, a rehearsal that can be undone, the hop in a systemd unit, a restart that is only your click, and a check afterwards. It needs a snapshot, and the guide says what is proven and what is not. With it, AppManagement holds the scheduled backups and the automatic work of git apps while an upgrade is open. Plus the reading of the manifest of a module.
+
 ## What is in v0.5.28
 
 **A page for virtual machines**, for boxes that have the opt-in virtualization module: list, actions, console, disks, network, creation from an ISO. Plus two small fixes: a broken app icon in the *App updates* list falls back to the default one, and the upgrade runbook's block titles are in French in a French window.
