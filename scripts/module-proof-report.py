@@ -690,7 +690,7 @@ try:
     PKGS = list(kit.get("packages", []))
     UNIT = kit.get("unit", "")
     TAGV = kit.get("tag", "")
-    NOISE_NAME = re.compile(r"/session-[0-9a-z]+\.scope")
+    NOISE_NAME = re.compile(r"/session-[0-9a-z]+\.scope|^/var/tmp/systemd-private-")   # (those of the services are named by the boot, which M10 changes)
 
     def gate(cid, title):
         """whether the case ran to its end and is to be judged; a case that did not run says so, with the reason the run stopped"""
@@ -1100,8 +1100,10 @@ try:
         others = lambda s: {k: v for k, v in s.ulist.items() if k != UNIT}
         c.check(bool(before.ulist) and others(before) == others(after), "the list of the units of ReCasaOS (casaos*, rclone) is what it was, the module's own unit apart", few("%s=%s" % kv for kv in sorted(others(before).items()))[:200],
                 few("%s=%s" % kv for kv in sorted(others(after).items()))[:200])
-        keep = {p: h for p, h in before.etccasaos.items() if not p.endswith(".sample") and "/modules/" not in p}
-        c.check({p: h for p, h in after.etccasaos.items() if not p.endswith(".sample") and "/modules/" not in p} == keep and not any(p.endswith(".sample") or "/modules/" in p for p in after.etccasaos),
+        # the module's own files in /etc/casaos: its manifest and the sample of its configuration (the configuration itself stays); the samples of the others are the others'
+        mine = lambda p: "/modules/" in p or p.endswith("/virt-management.conf.sample")
+        keep = {p: h for p, h in before.etccasaos.items() if not mine(p)}
+        c.check({p: h for p, h in after.etccasaos.items() if not mine(p)} == keep and not any(mine(p) for p in after.etccasaos),
                 "every file of /etc/casaos other than the module's is as it was", "the same hashes", few(sorted(set(before.etccasaos.items()) ^ set(after.etccasaos.items()))))
         c.done()
         t = [r for r in rs if r.answered() and r.state == "succeeded"]
@@ -1513,7 +1515,10 @@ try:
         c = Case(title)
         within, why = True, ""
         if "noproc" in w:
-            invalid("%s: %s" % (title, w["noproc"]))
+            if final is not None and final.state == "succeeded":
+                not_testable(title, "the install was over when the watcher went for the assistant (it saw the step begin, and no process was left to signal): the step is shorter than the watcher's look")
+            else:
+                invalid("%s: %s" % (title, w["noproc"]))
             return
         if "never" in w:
             if final is not None and final.state == "succeeded":
@@ -1679,6 +1684,17 @@ try:
         if not own:
             invalid("M11: dpkg lists no file of the module's packages (%s)" % cell(owned.err, 100))
             return
+        # what the proof's own `apt-get remove` (the cases that put the module's packages out of the way) took along with them: their dependents (qemu-utils: cloud-image-utils and what hangs on it);
+        # it is the proof's doing, not the install's, and says so in the output of those removals
+        unseated = set()
+        for f in sorted(os.listdir(out_dir)):
+            if f.endswith("-unseat.out"):
+                for ln in read(f).split("\n"):
+                    if ln.startswith("will_remove "):
+                        unseated |= set(ln.split()[1:])
+        own |= set(x for x in Gx("m11-unseated").out.split("\n") if x.startswith("/"))
+        # dpkg lists the files of a merged /usr by the old names (/bin/machinectl), the walk of the file system by the real ones
+        own |= {"/usr" + x for x in own if re.match(r"^/(bin|sbin|lib|lib32|lib64|libx32)/", x)}
         # /etc/casaos: nothing changes but what the control shows changing by itself
         c = Case("M11 /etc/casaos")
         noise_ec = {p for p in set(a.etccasaos) | set(b.etccasaos) if a.etccasaos.get(p) != b.etccasaos.get(p)}
@@ -1688,7 +1704,7 @@ try:
         c.done()
         c = Case("M11 dpkg")
         ia, ie = a.installed(), e.installed()
-        removed = sorted(n for n in ia if n not in ie)
+        removed = sorted(n for n in ia if n not in ie and n not in unseated)
         changed = sorted(n for n in ia if n in ie and ia[n] != ie[n])
         added = sorted(n for n in ie if n not in ia)
         noise_pk = {n for n in set(a.dpkg) | set(b.dpkg) if a.dpkg.get(n) != b.dpkg.get(n)}
@@ -1697,6 +1713,8 @@ try:
         c.check(set(added) - noise_pk <= planned, "the packages that are new are the ones the plan said it would install", few(sorted(planned)[:6]), few(sorted(set(added) - noise_pk - planned)))
         c.check(set(PKGS) <= set(ie), "the packages of the manifest are installed", few(PKGS), few(sorted(set(PKGS) - set(ie))))
         c.note("%d new packages, %d upgraded" % (len(added), len(changed)))
+        if unseated & set(ia):
+            c.note("the proof's own removals took along: %s" % few(sorted(unseated & set(ia))))
         c.done()
         c = Case("M11 /etc")
         noise_hash = {p for p in set(a.etc) | set(b.etc) if a.etc.get(p) != b.etc.get(p)}
@@ -1715,7 +1733,9 @@ try:
         c.check(not unexplained, "every name that is new or gone is a file of the packages, the module's data or what the assistant keeps", "none unexplained", few(sorted(unexplained)))
         if core_own:
             c.note("%d names of the core's own state (/var/lib/casaos, /var/log/casaos) differ and are not judged here" % len(core_own))
-        c.check({n for n in a.names if n.startswith("/var/tmp/")} == {n for n in e.names if n.startswith("/var/tmp/")}, "/var/tmp holds what it held", "the same", few(sorted({n for n in a.names ^ e.names if n.startswith("/var/tmp/")})))
+        # (the private directories of the services are named by the boot: a restart of the machine renames all of them)
+        tmp_of = lambda s: {n for n in s if n.startswith("/var/tmp/") and not n.startswith("/var/tmp/systemd-private-")}
+        c.check(tmp_of(a.names) == tmp_of(e.names), "/var/tmp holds what it held", "the same", few(sorted(tmp_of(a.names) ^ tmp_of(e.names))))
         left = sorted(n for n in e.names if n.startswith("/var/lib/casaos/modules"))
         c.note("the assistant keeps: %s" % few(left, 4))
         c.done()

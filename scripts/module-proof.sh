@@ -776,10 +776,29 @@ canary_state() {
     if [ -e "$MP/canary" ]; then printf 'canary %s %s %s\n' "$(sha256sum <"$MP/canary" | cut -d' ' -f1)" "$(stat -c %a "$MP/canary")" "$(stat -c %Y "$MP/canary")"; else echo "canary missing"; fi
 }
 
-pkg_unseat() { DEBIAN_FRONTEND=noninteractive apt-get remove -y -q "$@" >"$MP/pkg.out" 2>&1; echo "rc=$?"; tail -n 3 "$MP/pkg.out"; }
+# pkg_unseat <packages>: apt-get remove takes what depends on them along (qemu-utils: cloud-image-utils, which the guest image carries): the proof's own doing, so it says what went (will_remove)
+# and keeps the files those packages owned (unseat.owned), for the comparison of the end
+pkg_unseat() {
+    gone="$(apt-get -s remove "$@" 2>/dev/null | awk '$1 == "Remv" { printf "%s ", $2 }')"
+    for p in $gone; do dpkg-query -L "$p" 2>/dev/null; done >>"$MP/unseat.owned"
+    DEBIAN_FRONTEND=noninteractive apt-get remove -y -q "$@" >"$MP/pkg.out" 2>&1
+    echo "rc=$?"
+    tail -n 3 "$MP/pkg.out"
+    echo "will_remove $gone"
+}
+unseat_owned() { sort -u "$MP/unseat.owned" 2>/dev/null; echo done; }
 pkg_unseat_all() { pkg_unseat $(cat "$KIT/packages.list"); }
 pkg_reseat() { DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$@" >"$MP/pkg.out" 2>&1; echo "rc=$?"; tail -n 3 "$MP/pkg.out"; }
-hold_on() { echo "$1 hold" | dpkg --set-selections && echo "held $(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)"; }
+# dpkg takes a hold on a package that is not installed only when it knows the package: its available file is told of it first (apt-mark hold is the second try)
+hold_on() {
+    f="$(mktemp)"
+    apt-cache show --no-all-versions "$1" >"$f" 2>/dev/null
+    dpkg --merge-avail "$f" >/dev/null 2>&1
+    rm -f "$f"
+    echo "$1 hold" | dpkg --set-selections
+    case "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" in hold\ ok*) ;; *) apt-mark hold "$1" >/dev/null 2>&1 ;; esac
+    echo "held $(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)"
+}
 hold_off() { echo "$1 install" | dpkg --set-selections && echo "unheld $(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)"; }
 auto_on() { apt-mark auto "$1" >/dev/null 2>&1; echo "auto $(apt-mark showauto "$1" 2>/dev/null)"; }
 auto_off() { apt-mark manual "$1" >/dev/null 2>&1; echo "manual auto=$(apt-mark showauto "$1" 2>/dev/null)"; }
@@ -789,7 +808,8 @@ auto_off() { apt-mark manual "$1" >/dev/null 2>&1; echo "manual auto=$(apt-mark 
 aptsim() {
     d="$(mktemp -d /var/tmp/mp-aptsim.XXXXXX)"
     mkdir -p "$d/cache/archives/partial"
-    : >"$d/extended_states"
+    # the list of the automatically installed packages is the box's own, copied: apt says `set to manually installed` for those and for no other
+    cp /var/lib/apt/extended_states "$d/extended_states" 2>/dev/null || : >"$d/extended_states"
     opts="-o Dir::Cache=$d/cache -o Debug::NoLocking=true -o Dir::Log::Planner= -o Dir::State::extended_states=$d/extended_states"
     # shellcheck disable=SC2086
     apt-get $opts -s install --no-install-recommends "$@" >"$d/sim" 2>&1
@@ -879,13 +899,9 @@ wait_clean() {
     done
 }
 
+# dummy_start <n>: the unit number n (one call, one unit: a second call for 1 and 2 would meet the first and fail)
 dummy_start() {
-    n="$1"
-    i=1
-    while [ "$i" -le "$n" ]; do
-        systemd-run --quiet --no-block --collect "--unit=casaos-module-mpdummy$i.service" --property=Type=exec /bin/sleep 900 || return 1
-        i=$((i + 1))
-    done
+    systemd-run --quiet --no-block --collect "--unit=casaos-module-mpdummy$1.service" --property=Type=exec /bin/sleep 900 || return 1
     sleep 1
     systemctl list-units --all --plain --no-legend 'casaos-module-*'
 }
@@ -988,6 +1004,7 @@ symlink_off) symlink_off ;;
 canary_state) canary_state ;;
 pkg_unseat) pkg_unseat "$@" ;;
 pkg_unseat_all) pkg_unseat_all ;;
+unseat_owned) unseat_owned ;;
 pkg_reseat) pkg_reseat "$@" ;;
 hold_on) hold_on "$@" ;;
 hold_off) hold_off "$@" ;;
@@ -1460,7 +1477,8 @@ case_m4() {
     modrun m4-list good root list
     host_call m4-host 120 || true
     CALL_NOAUTH=1 call m4-host-noauth GET "${MODULE_ROUTE}/host" "" 30
-    call m4-ghost GET "${MODULE_ROUTE}_ghost/host" "" 30
+    # the gateway matches the start of the path: a name that begins with the route would reach the module (and its 400); this one begins with no route
+    call m4-ghost GET "${MODULE_ROUTE%/*}/ghost_${MODULE_ROUTE##*/}/host" "" 30
     marker case_M4_done
 }
 
@@ -1857,6 +1875,7 @@ case_m11() {
     # the files of the packages the plan said it would install and upgrade: what they own is theirs, not the module's doing
     # shellcheck disable=SC2046
     gx m11-owned pkg_files $(py plan_packages "${OUT}/m3-plan-root.out" 2>/dev/null)
+    gx m11-unseated unseat_owned
     snap m11-end full || return 1
     marker case_M11_done
 }
