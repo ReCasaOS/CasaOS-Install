@@ -45,6 +45,12 @@ jobs:
       - name: Check how a pre-release is told from a release
         run: bash scripts/test-release-prerelease.sh
 
+      - name: Check the module catalogue builder
+        run: python3 scripts/test-build-modules-catalogue.py
+
+      - name: Check what the installer does with a module
+        run: sh scripts/test-install-modules.sh
+
       - name: Load component pins
         run: |
           set -euo pipefail
@@ -117,6 +123,15 @@ jobs:
             '(.published_at | fromdateiso8601) as $p | .version == $t and $p <= now and $p > now - 3600' \
             dist/version.json
 
+      # The module catalogue is an asset only when release/modules.env lists a
+      # module; fail_on_unmatched_files would refuse a pattern with no file.
+      - name: Is there a module catalogue
+        id: modules
+        run: |
+          set -euo pipefail
+          files="$(ls dist/modules-catalogue-*.json 2>/dev/null || true)"
+          { echo "files<<END"; echo "${files}"; echo "END"; } >> "$GITHUB_OUTPUT"
+
       # The release is published as a pre-release while release/PRERELEASE
       # exists in the tagged commit. Boxes (the in-app updater) and the
       # one-line install command read releases/latest, which GitHub works out
@@ -143,6 +158,7 @@ jobs:
             dist/version.json
             dist/components.lock
             dist/checksums.txt
+            ${{ steps.modules.outputs.files }}
           draft: false
           prerelease: ${{ steps.pre.outputs.value == 'true' }}
           fail_on_unmatched_files: true
