@@ -700,7 +700,7 @@ class World:
 
     def plan(self, name, env_test, variant, user, expect=None):
         cat = self.catalogue(env_test, variant)
-        order = ["catalogue", "os", "arch", "recasaos", "already_installed", "foreign_unit", "busy", "disk", "apt"]
+        order = ["catalogue", "os", "arch", "recasaos", "already_installed", "foreign_unit", "busy", "dpkg_state", "disk", "apt"]
         if name != "virt" or cat is None:
             checks = [dict(code="catalogue", ok=False, detail="not_in_catalogue")] + [dict(code=c, ok=False, detail="not_checked") for c in order[1:]]
             return dict(name=name, tag="", tier="", checks=checks, refused="catalogue", packages=dict(to_install=[], to_upgrade=[], download_bytes=0, extra_bytes=0, known=False), archive=dict(url=""), plan_id="")
@@ -720,6 +720,7 @@ class World:
             checks.append(dict(code="busy", ok=False, detail="package_manager"))
         else:
             checks.append(dict(code="busy", ok=True, detail=""))
+        checks.append(dict(code="dpkg_state", ok=True, detail=""))
         standing = all(c["ok"] or c["detail"].startswith("not_checked") for c in checks)
         refusal = {}
         for c in checks:

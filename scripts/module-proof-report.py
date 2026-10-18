@@ -46,7 +46,7 @@ out_dir, leg = sys.argv[1], sys.argv[2]
 
 MIN_CORE = (0, 4, 75)                         # the first core that has `casaos module`
 LEGS = {"d12": ("debian", "12"), "u24": ("ubuntu", "24.04")}
-CHECKS = ("catalogue", "os", "arch", "recasaos", "already_installed", "foreign_unit", "busy", "disk", "apt")
+CHECKS = ("catalogue", "os", "arch", "recasaos", "already_installed", "foreign_unit", "busy", "dpkg_state", "disk", "apt")
 INSTALL_STEPS = ("packages", "download", "verify", "unpack", "units", "manifest", "start", "route")
 REMOVE_STEPS = ("stop", "files", "manifest", "reload")
 ROLLBACK_STEPS = tuple("rollback_" + s for s in REMOVE_STEPS)
