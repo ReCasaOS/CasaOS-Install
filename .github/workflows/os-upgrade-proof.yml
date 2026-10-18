@@ -27,12 +27,13 @@ name: os-upgrade-proof
 #                            succeeded_with_findings (the findings are printed), the close: Debian 12, a newer kernel, sshd and the ReCasaOS services, the witness containers, the timers
 #                            of apt, no unit failed that was not failed before, the backup folder moved into the run's folder; and the first real numbers of the engine (seconds per
 #                            block, bytes downloaded, free space, the kernels, the time the guest was away, the time from the restart to the verdict)
-#   faults  only after core is green (a failing core leg cancels it), each fault from a snapshot of the whole guest (memory included, so the plan is still live) taken after C4:
+#   faults  only after core is green (a failing core leg cancels it), each fault from a snapshot of the whole guest (memory included, so the plan is still live) taken after C4, with the clock of the
+#           restored guest set from the runner's (it is the snapshot's, behind the Release files of the mirrors) before anything else is asked of it:
 #           F1 the unit killed in block 3 or 4: interrupted, the core puts the machine back by itself, failed, the machine as before
-#           F2 the unit killed after the point of no return: interrupted, NO repair by itself (the shipped setting allows none), resume, awaiting_reboot, the restart, succeeded
+#           F2 the unit killed after the point of no return, once dpkg is seen at work: interrupted, NO repair by itself (the shipped setting allows none), resume, awaiting_reboot, the restart, succeeded
 #           F3 the network cut after the point of no return: stopped_at_waypoint of the class network, the network back, resume, awaiting_reboot, the restart, succeeded
-#           F4 a power cut (the QEMU monitor's reset) in block 6: interrupted (power), half upgraded, resume: success, or the precise class it stops at (printed: nobody has seen this)
-# A fault whose precondition the guest cannot reach is NOT TESTABLE with the reason, never skipped silently.
+#           F4 a power cut (the QEMU monitor's reset) in block 6, once dpkg is seen at work: interrupted (power), half upgraded, resume: success, or the precise class it stops at (printed: nobody has seen this)
+# A fault whose precondition the guest cannot reach (dpkg never seen at work, the hop over before the fault is due) is NOT TESTABLE with the reason, never skipped silently.
 #
 # It needs a release whose core has the engine (v0.5.29 or later): a 404 on /v1/sys/os/upgrade/status is an INVALID RUN that says so. `tag` is the installer release under test (a
 # pre-release is proved by its tag; empty for the latest published release). The guest needs the network: the mirrors of Debian 11 (deb.debian.org, archive.debian.org for its security
@@ -111,7 +112,6 @@ jobs:
       INSTALLER_ARGS: ${{ matrix.args }}
       DOCKER_FROM: ${{ matrix.docker_from }}
       OUT: ${{ github.workspace }}/out
-      WORK: ${{ runner.temp }}/oup-work
       SSH_CONFIG: ssh_config
       GW_PORT: "8080"
       MON_SOCK: mon.sock
@@ -123,6 +123,8 @@ jobs:
       - name: The proof can say no
         run: |
           set -euo pipefail
+          # the test reads this workflow with PyYAML, to hold every expression of it to the places where GitHub has its contexts
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
           python3 scripts/test-os-upgrade-proof.py
           bash -n scripts/os-upgrade-proof.sh
           bash -n scripts/os-readiness-proof.sh
