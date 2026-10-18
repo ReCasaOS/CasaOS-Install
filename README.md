@@ -118,6 +118,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.34
+
+**Virtual machines, as an optional module**: `virt` is in the catalogue of this release. Install it from the Modules window or with `casaos module install virt`; a box that does not ask for it downloads and runs none of it.
+
 ## What is in v0.5.33
 
 **A wizard for the upgrade of the operating system**: six steps, one next action, and the page does the closing and the re-planning that the engine requires, so the upgrade from Debian 11 reads as one path.
