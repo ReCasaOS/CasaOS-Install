@@ -24,9 +24,10 @@ box's own, and with the guest asked for what only it can say (snapshots of the m
     C7  the hop: the blocks in their order, awaiting_reboot with its checks green, the restart, resuming, verifying, the verdict, the close: Debian 12, a newer kernel, the services, the witnesses
   leg faults (each from a snapshot of the whole guest taken after C4)
     F1  the unit killed in block 3 or 4: interrupted, the core unwinds by itself, failed, the machine as before
-    F2  the unit killed after the point of no return: interrupted, no repair by itself, resume, awaiting_reboot, the restart, succeeded
+    F2  the unit killed after the point of no return, with dpkg at work: interrupted, no repair by itself, resume, awaiting_reboot, the restart, succeeded
     F3  the network cut after it: stopped_at_waypoint of the class network, the network back, resume, awaiting_reboot, the restart, succeeded
-    F4  a power cut (the QEMU monitor's reset) in block 6: interrupted (power), half upgraded, resume, and then what nobody has seen: printed
+    F4  a power cut (the QEMU monitor's reset) in block 6, with dpkg at work: interrupted (power), half upgraded, resume, and then what nobody has seen: printed
+        (each fault starts with the clock of the restored guest set from the runner's; a fault that was not delivered in the middle of dpkg is NOT TESTABLE)
 
 A verdict fails with what was expected and what was recorded. What a verdict cannot be silent about: a case that did not run says so (NOT TESTABLE, with the reason the run stopped), a verdict
 that depends on evidence that is missing is no verdict and makes the run INVALID, and any exception of this script, on evidence it did not expect, ends as an INVALID RUN that names it.
@@ -59,7 +60,7 @@ TIMERS = ("apt-daily.timer", "apt-daily-upgrade.timer", "unattended-upgrades.ser
 WITNESSES = ("p-always", "p-db", "p-unless-stopped", "p-web")
 REHEARSAL_TTL = 30 * 60               # RehearsalTTL of pkg/osrun/timing.go
 FLAG_WITHIN = 120                     # the core lets go of the busy flag at its next look, every 30 s (SettleEvery): the proof waits this long
-OBSERVE_MIN = 90                      # a stopped hop is looked at for this long (3 looks of the core) before it is said that nothing repairs it by itself
+OBSERVE_MIN = 170                     # a stopped hop is looked at for this long (more than the 2 minutes of backoff of a repair that is allowed) before it is said that nothing repairs it by itself
 CLOCK_SLACK = 5.0
 ROW_FIELDS = 19
 BK_GLOB = "casaos-os-upgrade-"
@@ -312,8 +313,16 @@ class Snap:
             if len(parts) == 2:
                 self.apt[parts[0]] = parts[1]
         self.names = set(ln for ln in read("snap-%s.names" % tag).splitlines() if ln)
-        self.units = [ln for ln in read("snap-%s.units" % tag).splitlines() if ln.strip()]
-        self.pid1 = [ln for ln in read("snap-%s.pid1" % tag).splitlines() if ln.strip()]
+        # the sections that are empty when all is well say that they were asked ("# asked", "# lines <n>"): an empty section that nothing wrote is no evidence
+        units = [ln for ln in read("snap-%s.units" % tag).splitlines() if ln.strip()]
+        self.units_asked = "# asked" in units
+        self.units = [ln for ln in units if not ln.startswith("# ")]
+        pid1 = [ln for ln in read("snap-%s.pid1" % tag).splitlines() if ln.strip()]
+        n = next((re.fullmatch(r"# lines (\d+)", ln) for ln in pid1 if ln.startswith("# lines ")), None)
+        self.pid1_lines = int(n.group(1)) if n else 0
+        self.pid1 = [ln for ln in pid1 if not ln.startswith("# ")]
+        # the kept runs: (run id, the folder of its backup or -, whether it is still there, where it was moved: bk-done, bk-aborted or -)
+        self.runs = [tuple(ln.split("\t")) for ln in read("snap-%s.runs" % tag).splitlines() if len(ln.split("\t")) == 4]
 
     def installed(self):
         return {n: v for n, (v, st) in self.dpkg.items() if st.startswith("ii")}
@@ -348,6 +357,10 @@ def snap(tag, why=""):
     s = Snap(tag)
     if not s.f.get("boot_id") or not s.f.get("uname") or not s.dpkg or not s.apt or len(s.timers) != len(TIMERS):
         invalid("the snapshot %s%s is not a whole one (boot id, kernel, packages, apt files or timers are missing)" % (tag, " (" + why + ")" if why else ""))
+        return None
+    empty = [w for w, ok in (("the names of the file system", bool(s.names)), ("the units of the engine (systemd was not asked)", s.units_asked), ("the journal of PID 1 (it was not read)", s.pid1_lines > 0)) if not ok]
+    if empty:
+        invalid("the snapshot %s%s is not a whole one: %s missing, and a section that is empty because it was not asked proves nothing" % (tag, " (" + why + ")" if why else "", " and ".join(empty)))
         return None
     return s
 
@@ -576,9 +589,29 @@ try:
     def dict_str(d):
         return ", ".join("%s=%s/%s" % (k, v[0], v[1]) for k, v in sorted(d.items()))
 
-    def bk_put_away(c, after, which, label):
+    def run_id_of(rs):
+        return next((r.run for r in rs if r.answered() and r.run not in ("-", "")), None)
+
+    def bk_left(c, after, label):
+        """no kept run has its backup folder still in /var/backups: each one's is moved into its run folder or is not there"""
         c.check(not after.bk_dirs(), "%sno backup folder is left in /var/backups" % label, "none", few(after.bk_dirs()))
-        c.check(any(d.endswith(which) for d in after.run_bk()), "%sthe backup folder was moved into the run's folder (%s)" % (label, which), "a %s folder under /var/lib/casaos/os-upgrade" % which, few(after.run_bk()) or "none")
+        stay = [r[0] for r in after.runs if r[2] == "yes"]
+        c.check(not stay, "%seach kept run's backup folder is moved into its run folder or is not there" % label, "no run with its folder still in /var/backups", "still there for the runs " + few(stay))
+
+    def bk_put_away(c, after, which, label, run_id):
+        """the backup folder of the run that was judged was moved into its own run folder (bk-done or bk-aborted), whatever was moved of the runs before it"""
+        bk_left(c, after, label)
+        mine = [r for r in after.runs if r[0] == run_id]
+        c.check(bool(mine) and mine[0][3] == which, "%sthe backup folder of this run was moved into its run folder (%s)" % (label, which), "run %s: %s" % (run_id, which),
+                "run %s: %s" % (run_id, mine[0][3]) if mine else "run %s is not among the kept runs (%s)" % (run_id, few(r[0] for r in after.runs) or "none"))
+
+    def request_body(name):
+        parts = read(name + ".req").split("\n", 1)
+        try:
+            body = json.loads(parts[1]) if len(parts) > 1 and parts[1].strip() else {}
+        except ValueError:
+            body = {}
+        return body if isinstance(body, dict) else {}
 
     # the plan of C4, for the cases that need it
     def plan_state():
@@ -708,7 +741,7 @@ try:
         removed, added, changed = dpkg_diff(before, after)
         c.check(not removed, "no package was removed", "none", few(removed))
         c.check(not after.f.get("timers_state_file") == "yes", "the file of the timers' state is gone", "absent", "present")
-        c.check(not after.bk_dirs(), "no backup folder is left in /var/backups", "none", few(after.bk_dirs()))
+        bk_left(c, after, "")
         ack, closed = call("c3-ack"), call("c3-status-closed")
         if ack and closed:
             c.check(ack.code == 200, "acknowledge is accepted", "HTTP 200", ack.shown())
@@ -747,6 +780,7 @@ try:
             c.check(False, "POST start {rehearsal:true} is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
             return
+        c.check(request_body("c4-start").get("safety_net") == "", "the rehearsal is started the way the page starts one (an empty safety net)", "safety_net empty", "safety_net %r" % request_body("c4-start").get("safety_net"))
         if stopped_for_network("c4-run", "C4"):
             return
         rs = reached(c, "c4-run", ("rehearsed",), "the rehearsal ends rehearsed", ("rehearsing", "rehearsed", "idle"))
@@ -786,7 +820,7 @@ try:
         machine_as_before(c, before, after)
         removed, added, changed = dpkg_diff(before, after)
         c.check(not (removed or added or changed), "no package was installed, removed or changed", "none", few(removed + added + changed))
-        bk_put_away(c, after, "bk-aborted", "")
+        bk_put_away(c, after, "bk-aborted", "", run_id_of(rs))
         ack, closed = call("c4-ack"), call("c4-status-closed")
         if ack and closed:
             c.check(ack.code == 200, "acknowledge is accepted", "HTTP 200", ack.shown())
@@ -849,13 +883,13 @@ try:
                 checks = lock.detail.get("checks") if isinstance(lock.detail.get("checks"), list) else []
                 busy_check = any(isinstance(x, dict) and x.get("code") == "busy" for x in checks)
                 ok = lock.code == 409 and (lock.error_code in ("busy", "dpkg_locked") or (lock.error_code == "readiness_refuses" and busy_check))
-                during = read("c5-lock.during").strip()
-                c.check(during == "held", "the proof held dpkg's lock while it asked", "held", during or "no sample")
+                during = read("c5-lock.during").split()
+                c.check("held" in during, "the proof held dpkg's lock while it asked", "held", " ".join(during) or "no sample")
                 c.check(ok, "a start while dpkg's lock is held is refused (busy, dpkg_locked, or readiness_refuses with the check busy)", "HTTP 409 and one of those",
                         "%s, error_code %s%s" % (lock.shown(), lock.error_code, ", checks " + few(x.get("code") for x in checks if isinstance(x, dict)) if checks else ""))
                 c.note("the core said %s" % (lock.error_code or lock.shown()))
-                if read("c5-lock.undone").strip() != "free":
-                    invalid("C5: dpkg's lock was not given back (%s)" % (read("c5-lock.undone").strip() or "no sample"))
+                if "free" not in read("c5-lock.undone").split():
+                    invalid("C5: dpkg's lock was not given back (%s)" % (" ".join(read("c5-lock.undone").split()) or "no sample"))
                 c.done()
         else:
             invalid("C5: the lock case left no call: dpkg's lock could not be held, or the case did not get there")
@@ -872,6 +906,8 @@ try:
                 not_testable("C5 os_upgrade_open", "the unit was not known to work when the restart was asked (%s)" % (op.shown() if op.code != 202 else before2.field("state")))
             else:
                 c = Case("C5 run_open")
+                c.check(request_body("c5-open").get("safety_net") == "snapshot" and request_body("c5-open").get("rehearsal") is True, "the rehearsal that holds the run open is started with the safety net of a hop",
+                        "a rehearsal with safety_net snapshot", "%s, safety_net %r" % (request_body("c5-open").get("rehearsal"), request_body("c5-open").get("safety_net")))
                 c.check(second.code == 409 and second.error_code == "run_open", "a second start while a run is open is refused", "HTTP 409, error_code run_open",
                         "%s, error_code %s" % (second.shown(), second.error_code))
                 c.check(second.detail.get("state") in WORK_STATES + ("rehearsed",), "the refusal says in which state the open run is", "a state of the open run", cell(second.detail.get("state")))
@@ -894,7 +930,7 @@ try:
         machine_as_before(c, before, after, label="")
         removed, added, changed = dpkg_diff(before, after)
         c.check(not (removed or added or changed), "no package was installed, removed or changed", "none", few(removed + added + changed))
-        c.check(not after.bk_dirs(), "no backup folder is left in /var/backups", "none", few(after.bk_dirs()))
+        bk_left(c, after, "")
         for n in ("c5-open", "c5-lock"):
             if exists(n + ".closed"):
                 c.check(read(n + ".closed").strip() == "idle", "the run that %s opened is closed" % n, "idle", read(n + ".closed").strip())
@@ -918,6 +954,8 @@ try:
             c.check(False, "POST start (the hop) is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
             return
+        c.check(request_body("c6-start").get("safety_net") == "snapshot" and request_body("c6-start").get("rehearsal") is False, "the hop is started with the safety net snapshot", "a hop with safety_net snapshot",
+                "rehearsal %s, safety_net %r" % (request_body("c6-start").get("rehearsal"), request_body("c6-start").get("safety_net")))
         run = rows("c6-run")
         early = [r for r in run if r.answered() and r.state == "running" and r.bid in EARLY_BLOCKS]
         if not early:
@@ -949,7 +987,7 @@ try:
         machine_as_before(c, before, after)
         removed, added, changed = dpkg_diff(before, after)
         c.check(not (removed or added or changed), "no package was installed, removed or changed", "none", few(removed + added + changed))
-        bk_put_away(c, after, "bk-aborted", "")
+        bk_put_away(c, after, "bk-aborted", "", run_id_of(run))
         ack, closed = call("c6-ack"), call("c6-status-closed")
         if ack and closed:
             c.check(ack.code == 200, "acknowledge closes the run", "HTTP 200", ack.shown())
@@ -1019,6 +1057,7 @@ try:
         c.check(old not in ("", "-") and new not in ("", "-") and old != new and not exists("boot-%s-reboot.timeout" % p), "%sthe guest went away and came back with another boot id" % label,
                 "a boot id other than %s" % old, "%s%s" % (new, ", the time ran out" if exists("boot-%s-reboot.timeout" % p) else ""))
         vr = rows("%s-verify" % p)
+        hop_run = run_id_of(vr) or run_id_of(bw)
         if stopped_for_network("%s-verify" % p, label.strip() or p):
             return None
         reached(c, "%s-verify" % p, ("succeeded", "succeeded_with_findings"), "%sthe check after the restart ends in a success" % label,
@@ -1040,11 +1079,13 @@ try:
         c.check(not f.get("half_upgraded") and not f.get("busy"), "%sthe verdict is not half upgraded and lets go of the machine" % label, "half_upgraded false, busy false",
                 "half_upgraded %s, busy %s" % (f.get("half_upgraded"), f.get("busy")))
         c.check(not f.get("not_returned"), "%sthe containers that ran before are back" % label, "none missing", cell(json.dumps(f.get("not_returned")), 200))
-        findings = f.get("findings") or []
-        errs = [x for x in findings if isinstance(x, dict) and x.get("severity") == "error"]
-        c.check(not errs, "%sthe judge found no error" % label, "no finding of severity error", few("%s%s" % (x.get("code"), "(" + str(x.get("arg")) + ")" if x.get("arg") else "") for x in errs))
+        findings = [x for x in (f.get("findings") or []) if isinstance(x, dict)]
+        errs = [x for x in findings if x.get("severity") == "error"]
+        c.check(not errs, "%sthe judge found no finding of severity error" % label, "no finding of severity error (warn and info are for whoever reads the report)", few("%s%s" % (x.get("code"), "(" + str(x.get("arg")) + ")" if x.get("arg") else "") for x in errs))
         if findings:
-            notes.append("%sfindings (%s): %s" % (label or p + " ", f.get("state"), "; ".join(cell("%s %s%s" % (x.get("severity"), x.get("code"), " " + str(x.get("arg")) if x.get("arg") else ""), 120) for x in findings if isinstance(x, dict))))
+            by = {sev: sum(1 for x in findings if x.get("severity") == sev) for sev in FINDING_SEVERITIES}
+            notes.append("%sfindings of the judge, %s (%s): %s" % (label or p + " ", f.get("state"), ", ".join("%d %s" % (n, sev) for sev, n in by.items() if n),
+                                                                  "; ".join(cell("%s %s%s" % (x.get("severity") or "no severity", x.get("code"), " " + str(x.get("arg")) if x.get("arg") else ""), 120) for x in findings)))
         if f.get("not_judged"):
             notes.append("%snot judged: %s" % (label or p + " ", few(f.get("not_judged"))))
         c.check(after.f.get("version_id") == "12", "%sos-release says VERSION_ID=12" % label, "12", after.f.get("version_id"))
@@ -1064,8 +1105,7 @@ try:
         if ack and closed:
             c.check(ack.code == 200, "%sacknowledge closes the run" % label, "HTTP 200", ack.shown())
             c.check(isinstance(closed.data, dict) and closed.data.get("state") == "idle", "%safter the close the status is idle" % label, "idle", closed.shown())
-        c.check(not final_snap.bk_dirs() and any(d.endswith("bk-done") for d in final_snap.run_bk()), "%sthe backup folder moved into the run's folder" % label, "no folder in /var/backups, a bk-done in the run's",
-                "in /var/backups: %s; in the run's: %s" % (few(final_snap.bk_dirs()) or "none", few(final_snap.run_bk()) or "none"))
+        bk_put_away(c, final_snap, "bk-done", label, hop_run)
         return dict(aw=aw, after=after, final_snap=final_snap, verify_rows=vr, last=last, reboot_post=rb, boot_table=bt, old_boot=old, state=f.get("state"))
 
     def dict_str_services(services, prefix):
@@ -1113,6 +1153,8 @@ try:
             c.check(False, "POST start (the hop) is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
             return
+        c.check(request_body("c7-start").get("safety_net") == "snapshot" and request_body("c7-start").get("rehearsal") is False, "the hop is started with the safety net snapshot", "a hop with safety_net snapshot",
+                "rehearsal %s, safety_net %r" % (request_body("c7-start").get("rehearsal"), request_body("c7-start").get("safety_net")))
         if stopped_for_network("c7-run", "C7"):
             return
         rs = reached(c, "c7-run", ("awaiting_reboot",), "the blocks end with the machine waiting for its restart", ("running", "awaiting_reboot", "idle"))
@@ -1142,13 +1184,57 @@ try:
         if prelude is not None and base.f.get("boot_id") != prelude.f.get("boot_id"):
             invalid("%s: the restored guest is not the snapshotted one (boot id %s, the snapshot's %s)" % (cid, base.f.get("boot_id"), prelude.f.get("boot_id")))
             return None
+        if not clock_set(cid, cid):
+            return None
         return base
+
+    def clock_lines(name):
+        return [ln.strip() for ln in read(name + ".clock").splitlines() if ln.strip() and not ln.startswith("#")]
+
+    def clock_set(cid, name):
+        """the clock of a guest that was restored from a snapshot (or that was reset) is that of the snapshot, behind the Release files of the mirrors: it was set from the runner's before anything polled"""
+        lines = clock_lines(name)
+        if "set" not in lines:
+            invalid("%s: the clock of the restored guest was not set from the runner's (%s): its first apt-get update would meet a Release file dated in its future" % (cid, cell(" ".join(lines), 120) or "no record"))
+            return False
+        skew = next((int(ln.split()[1]) for ln in lines if re.fullmatch(r"skew -?\d+", ln)), None)
+        if skew is not None:
+            number("%s clock" % name.replace(".", " "), "the restored guest was %s %s the runner's clock, and was set from it before anything polled" % (secs(abs(skew)), "behind" if skew >= 0 else "ahead of"))
+        return True
+
+    def dpkg_seen(name):
+        """True: dpkg was seen at work (three looks in a row) before the cut; False: it was not within the time; None: the runner left no record"""
+        lines = [ln.strip() for ln in read(name + ".dpkg").splitlines() if ln.strip() and not ln.startswith("#")]
+        if any(ln.startswith("seen ") for ln in lines):
+            return True
+        return False if any(ln.startswith("never ") for ln in lines) else None
+
+    def dpkg_at_work(cid, c_title):
+        """the verdict of a fault that has to land in the middle of dpkg waits for the evidence that it did: not seen is NOT TESTABLE, no record is no evidence. True: judge it"""
+        seen = dpkg_seen(cid)
+        if seen is None:
+            invalid("%s: there is no record of dpkg at work when the fault was delivered (%s.dpkg)" % (cid, cid))
+            return False
+        if not seen:
+            not_testable("%s %s" % (cid, c_title), "dpkg was not seen running (%s)" % cell(read(cid + ".dpkg").strip().splitlines()[-1] if read(cid + ".dpkg").strip() else "", 60))
+            return False
+        number("%s dpkg" % cid, "seen at work (%s) before the fault was delivered, which was %s" % (cell([ln for ln in read(cid + ".dpkg").splitlines() if ln.startswith("seen ")][0], 40),
+                                                                                             "the kill of the unit, once dpkg had been at work for three looks in a row" if cid == "F2" else "the reset of the machine, once dpkg had been at work for three looks in a row"))
+        return True
 
     def untestable(cid, title):
         if exists("%s.untestable" % cid):
             not_testable("%s %s" % (cid, title), read("%s.untestable" % cid).strip())
             return True
         return False
+
+    def kill_taken(cid, c):
+        """the unit was killed: the invocation the runner saw is gone, however many tries it took (a try that was cut short may have done it, and the next says gone)"""
+        lines = [ln.strip() for ln in read("%s.kill" % cid).splitlines() if ln.strip() and not ln.startswith("#")]
+        tries = sum(1 for ln in read("%s.kill" % cid).splitlines() if ln.startswith("# try "))
+        c.check("gone" in lines, "systemctl kill casaos-os-upgrade took effect (the invocation of the unit that was seen is gone)", "gone", cell(" ".join(lines), 100) or "no record")
+        if tries > 1:
+            c.note("the kill took %d tries (a missed ssh)" % tries)
 
     def judge_f1():
         if not gate("F1", CASES_FAULTS[0][1]):
@@ -1166,19 +1252,26 @@ try:
         run = rows("f1-run")
         early = [r for r in run if r.answered() and r.state == "running" and r.bid in EARLY_BLOCKS]
         c.check(bool(early), "the unit was killed while block 1 to 5 worked", "a poll in a block before the point of no return", "none seen")
-        c.check(read("f1.kill").strip().endswith("rc 0"), "systemctl kill casaos-os-upgrade was accepted", "rc 0", read("f1.kill").strip() or "no record")
+        kill_taken("F1", c)
         if stopped_for_network("f1-after", "F1"):
             return
         rs = reached(c, "f1-after", ("failed",), "the core puts the machine back by itself and the run is failed", ("running", "interrupted", "unwinding", "failed", "-"))
         if rs is None:
             return
         seq = states_of(rs)
-        c.check("interrupted" in seq, "the run is seen interrupted before it is put back", "interrupted in the states seen", " > ".join(seq))
-        c.check(is_subsequence(["interrupted", "failed"], seq) and (("unwinding" not in seq) or is_subsequence(["interrupted", "unwinding", "failed"], seq)), "interrupted, then (unwinding), then failed", "that order", " > ".join(seq))
-        inter = [r for r in rs if r.answered() and r.state == "interrupted"]
-        c.check(bool(inter) and all(r.cause == "killed" for r in inter) and all(r.pnr == "false" for r in inter), "interrupted by a kill, before the point of no return", "cause killed, pnr false",
-                few("cause %s pnr %s" % (r.cause, r.pnr) for r in inter[:2]) or "never interrupted")
         failed = [r for r in rs if r.answered() and r.state == "failed"]
+        # `interrupted` lasts until the next look of the core, which launches the unwind then: a poll can miss it. The run was seen working before the kill (the check above), and a failure with the reason
+        # interrupted_killed is what the unwind of an interruption by a kill leaves, and nothing else: that is the proof of it when the polls missed it (and `unwinding`, if seen, comes before `failed`)
+        by_road = "interrupted" not in seq and bool(failed) and failed[0].reason == "interrupted_killed" and ("unwinding" not in seq or is_subsequence(["unwinding", "failed"], seq))
+        c.check("interrupted" in seq or by_road, "the run is seen interrupted before it is put back, or fails with the reason interrupted_killed, which only an interruption by a kill leaves (it lasts one look of the core, which a poll can miss)",
+                "interrupted in the states seen, or failed(interrupted_killed)", " > ".join(seq) + (" (reason %s)" % failed[0].reason if failed else ""))
+        if by_road:
+            c.note("the polls did not catch `interrupted`, which lasts one look of the core (they saw %s); the reason interrupted_killed of the failure is the proof of it" % (" > ".join(seq) or "nothing"))
+        else:
+            c.check(is_subsequence(["interrupted", "failed"], seq) and (("unwinding" not in seq) or is_subsequence(["interrupted", "unwinding", "failed"], seq)), "interrupted, then (unwinding), then failed", "that order", " > ".join(seq))
+            inter = [r for r in rs if r.answered() and r.state == "interrupted"]
+            c.check(bool(inter) and all(r.cause == "killed" for r in inter) and all(r.pnr == "false" for r in inter), "interrupted by a kill, before the point of no return", "cause killed, pnr false",
+                    few("cause %s pnr %s" % (r.cause, r.pnr) for r in inter[:2]) or "never interrupted")
         c.check(bool(failed) and failed[0].reason == "interrupted_killed" and failed[0].pnr == "false" and failed[0].half == "false", "failed with the reason interrupted_killed, nothing half upgraded",
                 "reason interrupted_killed, pnr false, half_upgraded false", few("reason %s pnr %s half %s" % (r.reason, r.pnr, r.half) for r in failed[:1]) or "never failed")
         flag_check(c, run + rs, ("running", "interrupted", "unwinding"), "f1", "F1")
@@ -1188,7 +1281,7 @@ try:
         machine_as_before(c, base, after)
         removed, added, changed = dpkg_diff(base, after)
         c.check(not (removed or added or changed), "no package was installed, removed or changed", "none", few(removed + added + changed))
-        bk_put_away(c, after, "bk-aborted", "")
+        bk_put_away(c, after, "bk-aborted", "", run_id_of(run))
         ack, closed = call("f1-ack"), call("f1-status-closed")
         if ack and closed:
             c.check(ack.code == 200 and isinstance(closed.data, dict) and closed.data.get("state") == "idle", "acknowledge closes the run", "HTTP 200, idle", "%s, %s" % (ack.shown(), closed.shown()))
@@ -1211,7 +1304,12 @@ try:
             c.check(False, "POST start (the hop) is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
             return
-        c.check(read("f2.kill").strip().endswith("rc 0"), "systemctl kill casaos-os-upgrade was accepted", "rc 0", read("f2.kill").strip() or "no record")
+        if not dpkg_at_work("F2", CASES_FAULTS[1][1]):
+            return
+        if "dpkg_at_kill no" in read("F2.kill") and "dpkg_at_kill yes" not in read("F2.kill"):
+            not_testable("F2 " + CASES_FAULTS[1][1], "dpkg was not running at the moment of the kill (it ended in the second between the look and the kill)")
+            return
+        kill_taken("F2", c)
         if stopped_for_network("f2-gone", "F2"):
             return
         gone = reached(c, "f2-gone", ("interrupted",), "the killed unit leaves the run interrupted", ("running", "interrupted", "-"))
@@ -1228,8 +1326,9 @@ try:
             return
         span = obs[-1].t1 - obs[0].t0
         bad = sorted(set(r.state for r in obs if r.answered() and r.state != "interrupted"))
-        c.check(span >= OBSERVE_MIN, "the stopped run was looked at long enough (3 looks of the core)", "at least %d s" % OBSERVE_MIN, secs(span))
-        c.check(not bad, "no automatic repair: the run stays interrupted (the shipped setting allows none)", "interrupted throughout", "also " + few(bad))
+        c.check(span >= OBSERVE_MIN, "the stopped run was looked at long enough (more than the 2 minutes of backoff that a repair that is allowed waits)", "at least %d s" % OBSERVE_MIN, secs(span))
+        c.check(not bad, "no automatic repair in the %s that the stopped run was watched: it stays interrupted (this proves that the shipped setting of zero tries holds, and nothing of what a repair would do)" % secs(span),
+                "interrupted throughout", "also " + few(bad))
         resume = call("f2-resume")
         if resume is None:
             return
@@ -1268,7 +1367,8 @@ try:
             c.check(False, "POST start (the hop) is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
             return
-        c.check(read("f3.cut").strip().endswith("cut"), "the default route was taken away after the point of no return", "cut", read("f3.cut").strip() or "no record")
+        cut = [ln.strip() for ln in read("f3.cut").splitlines() if ln.strip() and not ln.startswith("#")]
+        c.check(bool(cut) and cut[-1] == "cut", "the routes of the guest were taken away after the point of no return, and a request from the guest failed (the proof that it is cut)", "cut", " ".join(cut) or "no record")
         stopped = reached(c, "f3-stopped", ("stopped_at_waypoint",), "a download that cannot go through stops the run at a waypoint", ("running", "stopped_at_waypoint", "-"))
         if stopped is None:
             return
@@ -1308,13 +1408,17 @@ try:
         base, start = fault_base("F4"), call("f4-start")
         if not (base and start):
             return
-        if exists("boot-f4-reset.timeout") or (exists("f4.reset") and not exists("f4-status-interrupted.code")):
-            invalid("F4: the guest did not come back (or the core did not answer) after the power cut: its serial log is in the artifacts")
-            return
         c = Case("F4 " + CASES_FAULTS[3][1])
         if start.code != 202:
             c.check(False, "POST start (the hop) is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
+            return
+        if not dpkg_at_work("F4", CASES_FAULTS[3][1]):
+            return
+        if exists("boot-f4-reset.timeout") or (exists("f4.reset") and not exists("f4-status-interrupted.code")):
+            invalid("F4: the guest did not come back (or the core did not answer) after the power cut: its serial log is in the artifacts")
+            return
+        if not clock_set("F4", "F4-reset"):
             return
         old = read("f4.boot-old").strip()
         bt = [r for r in table("boot-f4-reset.tsv") if len(r) == 3]

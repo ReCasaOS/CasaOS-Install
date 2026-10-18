@@ -14,7 +14,9 @@ fixtures/plan/plan-needs_acceptance.json) and the states of the real reducer in 
 reboot_first; rehearsing, rehearsed, unwinding, rehearsal_done; running, awaiting_reboot, rebooting, resuming, verifying, succeeded; the abort, the kill, the stop at a waypoint, the
 power cut. What the real tools, systemd, apt and the engine say on a real guest is what the first dispatch of the workflow shows: nothing here proves that.
 
-REPORT=<path>, SCRIPT=<path> and WORKFLOW=<path> run the cases against other copies, to see that a broken one is caught. CASES=<regex> runs the checks whose name matches.
+REPORT=<path>, SCRIPT=<path> and WORKFLOW=<path> run the cases against other copies, to see that a broken one is caught. CASES=<regex> runs the checks whose name matches (and the scenarios;
+the runs of the healthy legs and the mutations are made all the same: SCENARIOS_ONLY=1 leaves them out, and makes the healthy faults leg only when a scenario of the faults needs it). STATIC_ONLY=1 runs
+the checks of the files only: the guest tools under dash with stand-ins, the workflow against GitHub's table of contexts, the legs file.
 KEEP=<dir> keeps the recordings of the two healthy runs there; with REPORT_ONLY=1 they are used again instead of being made (only the mutations of the recordings are then run: minutes, not
 the half hour that the runs of the script take), and BASE_ONLY=1 stops after the mutations, before the scenarios. SHELLCHECK=1 also runs shellcheck on the script (the workflow does not).
 TEST_BASH=<path> names a bash where plain `bash` is not the one (on Windows: the MSYS bash of Git, C:/Program Files/Git/usr/bin/bash.exe, with a PATH that has no WindowsApps stub of
@@ -97,6 +99,20 @@ def iso(t):
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000000000Z")
 
 
+KEEP_KEYS = ("lock", "snapshots", "cfg", "log", "faultlog", "starts")      # what a restore of the guest does not take back: the test's own records
+_NAMES_SKIP = []
+
+
+def names_skip():
+    """the filter that the guest tool of the script puts on the names of the file system (logind makes a scope, a slice and drop-ins for every login, under a new number): the fake plays the tool, so it applies the script's own;
+    a script without one leaves them in"""
+    if not _NAMES_SKIP:
+        with open(SCRIPT, encoding="utf-8", newline="") as f:
+            m = re.search(r"^NAMES_SKIP='([^']*)'", f.read().replace("\r\n", "\n"), re.M)
+        _NAMES_SKIP.append(m.group(1) if m else "")
+    return _NAMES_SKIP[0]
+
+
 class Seg:
     """one stretch of a run: the state the status says while it lasts (dur seconds, None for the last), what is made true when it begins (enter), and the fields the status has then"""
 
@@ -108,9 +124,15 @@ class World:
     """the guest and its core, as the runner sees them: the clock moves only when the runner sleeps (tick)"""
 
     def __init__(self, cfg=None):
+        # what a real guest does that a tidy one does not: a login makes a scope of its own, the clock of a restored guest is that of the snapshot, an ssh is missed now and then (the first call of
+        # each of these verbs, after every restore), the unit's death is seen by the core one look later and the interruption lasts one look, a start takes a minute and a half to answer
         self.cfg = dict(resume_fail_class="dpkg_broken", refresh_wants_reboot=True, refresh_touches_keyring=True, findings=False, block_seconds=dict(verify=3, timers=3, snapshot=6, sources=33, download=15, minimal=90, full=150,
-                                                                                                                       prereboot=21), down_seconds=40, token_valid_s=10 ** 9)
+                                                                                                                       prereboot=21), down_seconds=40, token_valid_s=10 ** 9,
+                        restore_lag=1800, ssh_drops={"kill_unit": 1, "route_cut": 1, "set_clock": 1, "dpkg_wait": 1}, ssh_lost={}, start_takes_s=90, interrupted_s=1, notice_s=2)
         self.cfg.update(cfg or {})
+        self.session_n, self.clock_lag, self.unit_gen, self.last_state = 0, 0.0, 0, ""
+        self.ssh_calls, self.faultlog, self.starts, self.delay_taken = {}, [], [], 0.0
+        self.run_info, self.run_ids = {}, []
         self.t = 0.0
         self.lock = threading.RLock()
         self.boot = str(uuid.uuid4())
@@ -197,6 +219,9 @@ class World:
 
     def begin(self, seg):
         seg.since = self.now()
+        if seg.state in ("unwinding", "recovering") and self.last_state != seg.state:
+            self.unit_gen += 1          # the unwind and the repair run as a unit of their own, under the same name
+        self.last_state = seg.state
         if seg.enter:
             getattr(self, seg.enter)()
 
@@ -258,6 +283,12 @@ class World:
         return base
 
     def verdict_segs(self):
+        if self.cfg["findings"] == "mixed":
+            # what the judge most likely says of a Debian 11 to 12 hop: information (the paused source of Docker, a file dpkg left as .dpkg-new) and a few warnings
+            return [Seg("succeeded_with_findings", None, enter="release_flag_later",
+                        **self.f(state="succeeded_with_findings", pnr=True, busy=False, not_judged=["ports"], findings=[
+                            {"code": "docker_source_paused", "severity": "info"}, {"code": "dpkg_dist_new", "severity": "info", "arg": "/etc/ssh/sshd_config"},
+                            {"code": "ports_missing", "severity": "warn", "arg": "445/tcp"}, {"code": "units_failed_new", "severity": "warn", "arg": "x.service"}, {"code": "facts_incomplete", "severity": "warn"}]))]
         if self.cfg["findings"]:
             return [Seg("succeeded_with_findings", None, enter="release_flag_later",
                         **self.f(state="succeeded_with_findings", pnr=True, findings=[{"code": "docker_source_unreachable", "severity": "warn"}], busy=False))]
@@ -268,6 +299,9 @@ class World:
     def new_run(self, kind, plan_id, segs):
         self.run_n += 1
         self.run = dict(id="0b1c2d3e-%04d-4a5b-8c9d-0e1f2a3b4c5d" % self.run_n, kind=kind, plan_id=plan_id, segs=segs, i=0, elapsed=0.0, closed=False, started=self.now())
+        self.run_ids.append(self.run["id"])
+        self.run_info[self.run["id"]] = {"bk": None}
+        self.unit_gen += 1
         self.run_dir, self.flag = True, True
         self.begin(segs[0])
         return self.run
@@ -278,7 +312,7 @@ class World:
         segs = []
         for i, (bid, title) in enumerate(blocks, 1):
             pnr = bid in ("minimal", "full", "prereboot")
-            enter = {"timers": "stop_timers", "snapshot": "make_bk", "sources": "write_sources", "minimal": "pnr_on"}.get(bid)
+            enter = {"timers": "stop_timers", "snapshot": "make_bk", "sources": "sources_begin", "minimal": "pnr_on"}.get(bid)
             segs.append(Seg("rehearsing" if rehearsal else "running", bs[bid], block=(i, bid, title), enter=enter,
                             **self.f(state="rehearsing" if rehearsal else "running", pnr=pnr, half=pnr and bid != "prereboot", actions=[] if pnr else ["abort"])))
         if rehearsal:
@@ -293,6 +327,15 @@ class World:
 
     def make_bk(self):
         self.bk_dirs = ["/var/backups/casaos-os-upgrade-" + (self.run["plan_id"] or "x")]
+        self.run_info[self.run["id"]]["bk"] = self.bk_dirs[0]
+
+    def sources_begin(self):
+        """block 3 writes the sources of Debian 12 and runs the first apt-get update --error-on=any against them: a Release file dated later than the clock of the guest is not valid yet, and stops it"""
+        self.write_sources()
+        if self.clock_lag > 120:
+            failure = {"stage": "sources", "class": "apt_failed", "rc": 100,
+                       "detail_line": "E: Release file for http://deb.debian.org/debian/dists/bookworm/InRelease is not valid yet (invalid for another 31min 2s). Updates for this repository will not be applied."}
+            self.go([Seg("unwinding", 6, **self.f(state="unwinding")), Seg("failed", None, enter="put_back", **self.f(state="failed", reason="apt_failed", failure=failure, busy=False, actions=["acknowledge", "discard"]))])
 
     def write_sources(self):
         self.sources_text = "bookworm"
@@ -356,6 +399,8 @@ class World:
             s["after_reboot_hint"] = {"bk_path": self.bk_dirs[0] if self.bk_dirs else "", "log": "/var/lib/casaos/os-upgrade/%s/output.log" % r["id"], "commands": ["uname -r"], "block8": ""}
         if k.get("findings"):
             s["findings"] = k["findings"]
+        if k.get("not_judged"):
+            s["not_judged"] = k["not_judged"]
         if k.get("pnr") and seg.state in ("succeeded", "succeeded_with_findings"):
             s["half_upgraded"] = False
         if seg.state == "interrupted" and k.get("half"):
@@ -463,6 +508,7 @@ class World:
         refusal = self.readiness_refusal()
         if refusal:
             return refusal
+        self.take_time()
         bs = dict(rcheck=5, rsources=30, rupgrade=120)
         segs = []
         for i, (bid, title) in enumerate(REFRESH_BLOCKS[:3], 1):
@@ -477,8 +523,16 @@ class World:
         self.new_run("refresh", None, segs)
         return self.answer(202, self.status())
 
+    def take_time(self):
+        """the facts of the machine are taken before the run begins, and the call waits for them: the time goes by, and the handler learns how long the caller waited"""
+        d = float(self.cfg.get("start_takes_s", 0))
+        if d:
+            self.tick(d)
+        self.delay_taken = d
+
     def make_refresh_bk(self):
         self.bk_dirs = ["/var/backups/casaos-os-upgrade-refresh-" + self.run["id"][:8]]
+        self.run_info[self.run["id"]]["bk"] = self.bk_dirs[0]
 
     def upgrade_old(self):
         for n, (v, st) in list(self.dpkg.items()):
@@ -536,6 +590,8 @@ class World:
         refusal = self.readiness_refusal()
         if refusal:
             return refusal
+        self.take_time()
+        self.starts.append((reh, req.get("safety_net")))
         self.new_run("rehearsal" if reh else "hop", PLAN_ID, self.hop_segs(reh))
         return self.answer(202, self.status())
 
@@ -551,9 +607,13 @@ class World:
             return self.refuse("not_abortable", "the run cannot be called off", {"reason": "past_block"})
         block = seg.block[1] if seg.block else ""
         failure = {"stage": block, "class": "abort", "rc": 0, "detail_line": "STOP: the call-off was asked for"}
-        self.go([Seg("interrupted", 4, **self.f(state="interrupted", cause="killed", actions=[])), Seg("unwinding", 6, **self.f(state="unwinding")),
+        self.go(self.noticed(seg) + [Seg("interrupted", self.cfg["interrupted_s"], **self.f(state="interrupted", cause="killed", actions=[])), Seg("unwinding", 6, **self.f(state="unwinding")),
                  Seg("failed", None, enter="put_back", **self.f(state="failed", reason="abort", failure=failure, busy=False, actions=["acknowledge", "discard"]))])
         return self.answer(202, self.status())
+
+    def noticed(self, seg):
+        """the unit is gone, and the core has not looked yet: the state is still the one it was"""
+        return [Seg(seg.state, self.cfg["notice_s"], block=seg.block, **dict(seg.kw))]
 
     def post_ack(self, req):
         if not self.open_run():
@@ -613,27 +673,62 @@ class World:
 
     # ---- faults --------------------------------------------------------------------------------------------------------------------------
 
-    def kill_unit(self):
-        seg = self.cur() if self.open_run() else None
-        if seg is None or seg.state not in ("refreshing", "rehearsing", "running", "recovering", "unwinding"):
-            return 5, "Failed to kill unit casaos-os-upgrade.service: Unit casaos-os-upgrade.service not loaded.\nrc 5\n"
-        if seg.kw.get("pnr"):
-            if self.cfg.get("auto_repair"):
-                self.go([Seg("interrupted", 20, **self.f(state="interrupted", cause="killed", pnr=True, half=True, actions=["resume", "takeover", "acknowledge"])),
-                         Seg("recovering", None, block=(1, "forward", "mend what dpkg left half done"), **self.f(state="recovering", pnr=True, half=True))])
+    def unit_active(self):
+        return self.open_run() and self.cur().state in ("refreshing", "rehearsing", "running", "recovering", "unwinding")
+
+    def unit_inv(self):
+        """the invocation of the unit as systemd names it: the unwind and the repair of a stop run under the same name, as another invocation"""
+        return "inv-%d-%d" % (self.run_n, self.unit_gen) if self.unit_active() else ""
+
+    # where dpkg works in a block: from the second it begins (apt has first solved and downloaded) to a few seconds before the block ends
+    DPKG_WINDOW = {"minimal": (10, 3), "full": (40, 5), "forward": (3, 0)}
+
+    def dpkg_running(self):
+        if not self.unit_active() or self.cur().state == "unwinding" or not self.cur().block or self.cfg.get("dpkg_never"):
+            return False
+        seg, win = self.cur(), self.DPKG_WINDOW.get(self.cur().block[1])
+        return bool(win) and self.run["elapsed"] >= win[0] and (seg.dur is None or self.run["elapsed"] < seg.dur - win[1])
+
+    def kill_unit(self, want):
+        """`kill_unit <invocation>`: the unit is killed only while it is the invocation the runner saw; what is said last is what became of it"""
+        if not want:
+            return 2, "no invocation given\n"
+        out = ""
+        if self.unit_inv() == want:
+            dp = self.dpkg_running()
+            self.faultlog.append(("kill", dp))
+            out = "dpkg_at_kill %s\n" % ("yes" if dp else "no")
+            seg = self.cur()
+            self.unit_gen += 1
+            if seg.state == "unwinding":
+                failure = {"stage": "unwind", "class": "unit", "rc": 143}
+                self.go([Seg("needs_attention", None, **self.f(state="needs_attention", reason="unwind_partial", failure=failure, actions=["manual", "acknowledge"]))])
+            elif seg.kw.get("pnr"):
+                if self.cfg.get("auto_repair"):
+                    self.go(self.noticed(seg) + [Seg("interrupted", 20, **self.f(state="interrupted", cause="killed", pnr=True, half=True, actions=["resume", "takeover", "acknowledge"])),
+                                                 Seg("recovering", None, block=(1, "forward", "mend what dpkg left half done"), **self.f(state="recovering", pnr=True, half=True))])
+                else:
+                    self.go(self.noticed(seg) + [Seg("interrupted", None, **self.f(state="interrupted", cause="killed", pnr=True, half=True, actions=["resume", "takeover", "acknowledge"]))])
             else:
-                self.go([Seg("interrupted", None, **self.f(state="interrupted", cause="killed", pnr=True, half=True, actions=["resume", "takeover", "acknowledge"]))])
-        else:
-            failure = {"stage": "unwind", "class": "interrupted_killed", "rc": 0}
-            self.go([Seg("interrupted", 12, **self.f(state="interrupted", cause="killed", actions=[])), Seg("unwinding", 6, **self.f(state="unwinding")),
-                     Seg("failed", None, enter="put_back", **self.f(state="failed", reason="interrupted_killed", failure=failure, busy=False, actions=["acknowledge", "discard"]))])
-        return 0, "rc 0\n"
+                failure = {"stage": "unwind", "class": "interrupted_killed", "rc": 0}
+                self.go(self.noticed(seg) + [Seg("interrupted", self.cfg["interrupted_s"], **self.f(state="interrupted", cause="killed", actions=[])), Seg("unwinding", 6, **self.f(state="unwinding")),
+                                             Seg("failed", None, enter="put_back", **self.f(state="failed", reason="interrupted_killed", failure=failure, busy=False, actions=["acknowledge", "discard"]))])
+            out += "rc 0\n"
+        for _ in range(3):
+            if self.unit_inv() != want:
+                return 0, out + "gone\n"
+            self.tick(1)
+        return 1, out + "alive\n"
 
     def cut_route(self):
+        """both families of default route and slirp's site-local one are taken away, and a probe from the guest must fail"""
+        if self.cfg.get("v6_stays"):
+            return 1, "still reachable\n"
         self.route_cut = True
         seg = self.cur() if self.open_run() else None
         if seg and seg.state == "running" and seg.kw.get("pnr") and seg.block and seg.block[1] in ("minimal", "full") and not self.cfg.get("net_cut_ignored"):
             self.at(8, "network_stop")
+        return 0, "cut\n"
 
     def network_stop(self):
         seg = self.cur() if self.open_run() else None
@@ -643,6 +738,7 @@ class World:
 
     def power_cut(self):
         seg = self.cur() if self.open_run() else None
+        self.faultlog.append(("reset", self.dpkg_running()))
         if seg and seg.state in ("running", "rehearsing", "refreshing", "recovering"):
             if seg.kw.get("pnr"):
                 self.go([Seg("interrupted", None, **self.f(state="interrupted", cause="power", pnr=True, half=True, actions=["resume", "takeover", "acknowledge"]))])
@@ -672,7 +768,10 @@ class World:
             n += ["/var/lib/casaos/flipper"]
         if self.cfg.get("stray_file_after") and self.snap_n > self.cfg["stray_file_after"]:
             n += ["/var/lib/casaos/stray-file"]
-        return sorted(set(n))
+        n += ["/run/systemd/transient/session-%d.scope" % self.session_n, "/run/systemd/system/session-%d.scope.d" % self.session_n, "/run/systemd/transient/user-1000.slice",
+              "/run/systemd/system/user@1000.service.d", "/run/systemd/system/user-runtime-dir@1000.service.d"]
+        skip = names_skip()
+        return sorted(x for x in set(n) if not (skip and re.search(skip, x)))
 
     def snap_text(self):
         o = ["@@ facts", "boot_id " + self.boot, "uptime_s %d" % int(self.t), "uname " + self.kernel, "hostname " + self.hostname, "version_id " + self.version_id,
@@ -688,8 +787,14 @@ class World:
         o += ["@@ dpkg"] + ["%s\t%s\t%s" % (n, v, st) for n, (v, st) in sorted(self.dpkg.items())]
         o += ["@@ aptfiles"] + ["%s\t%s" % (n, h) for n, h in sorted(self.apt.items())]
         o += ["@@ names"] + self.names()
-        o += ["@@ units"] + (["casaos-os-upgrade.service loaded active running an operating system upgrade"] if self.open_run() and self.cur().state in ("refreshing", "rehearsing", "running") else [])
-        o += ["@@ pid1"] + self.pid1 + ["@@ end"]
+        o += ["@@ units", "# asked"] + (["casaos-os-upgrade.service loaded active running an operating system upgrade"] if self.open_run() and self.cur().state in ("refreshing", "rehearsing", "running") else [])
+        o += ["@@ pid1", "# lines %d" % (180 + int(self.t))] + self.pid1
+        o += ["@@ runs"]
+        for rid in self.run_ids[-3:]:
+            bk = self.run_info[rid]["bk"]
+            moved = next((m for m in ("bk-done", "bk-aborted") if "%s/%s" % (rid, m) in " ".join(self.run_bk)), "-")
+            o.append("%s\t%s\t%s\t%s" % (rid, bk or "-", "yes" if bk and bk in self.bk_dirs else "no", moved))
+        o += ["@@ end"]
         return "\n".join(o) + "\n"
 
     def ssh(self, cmd):
@@ -697,60 +802,85 @@ class World:
         with self.lock:
             if not self.up():
                 return 255, ""
-            m = re.match(r"^sudo sh /usr/local/lib/oup/guest\.sh (\w+)", cmd.strip())
+            m = re.match(r"^sudo sh /usr/local/lib/oup/guest\.sh (\w+)(?: (.*))?$", cmd.strip())
             if not m:
                 return (0, "") if cmd.strip() == "true" else (127, "")
-            verb = m.group(1)
-            if verb == "boot_id":
-                return 0, self.boot + "\n"
-            if verb == "hostname":
-                return 0, self.hostname + "\n"
-            if verb == "snap":
-                return 0, self.snap_text()
-            if verb == "flag":
-                return 0, ("yes" if self.flag else "no") + "\n"
-            if verb == "unit":
-                return 0, ("active" if self.open_run() and self.cur().state in ("refreshing", "rehearsing", "running") else "inactive") + "\n"
-            if verb == "kill_unit":
-                return self.kill_unit()
-            if verb == "lock_start":
-                self.lock_held = True
-                return 0, "held\n"
-            if verb == "lock_stop":
-                self.lock_held = bool(self.cfg.get("lock_stays"))
-                return (0, "free\n") if not self.lock_held else (1, "the lock is still held\n")
-            if verb == "lock_state":
-                return 0, ("held" if self.lock_held else "free") + "\n"
-            if verb == "route_cut":
-                self.cut_route()
-                return 0, "cut\n"
-            if verb == "route_restore":
-                if self.cfg.get("route_stays_cut"):
-                    return 1, "RTNETLINK answers: Network is unreachable\n"
-                self.route_cut = False
-                return 0, "restored\n"
-            if verb == "net_check":
-                return (0, "200\n") if not self.route_cut else (22, "")
-            if verb == "runfiles":
-                return 0, "== /var/lib/casaos/os-upgrade\nCASAOS_OSU_UNIT_START NONCE 1 run\n"
-            if verb == "diag":
-                return 0, "0 loaded units listed.\n"
-            return 2, "unknown verb: %s\n" % verb
+            verb, arg = m.group(1), (m.group(2) or "").strip()
+            n = self.ssh_calls[verb] = self.ssh_calls.get(verb, 0) + 1
+            if n <= self.cfg["ssh_drops"].get(verb, 0):
+                return 255, ""          # the connection was missed: nothing was done
+            self.session_n += 1
+            rc, out = self.verb(verb, arg)
+            if n <= self.cfg["ssh_lost"].get(verb, 0):
+                return 255, ""          # it was done, and the reply was lost
+            return rc, out
+
+    def verb(self, verb, arg):
+        if verb == "boot_id":
+            return 0, self.boot + "\n"
+        if verb == "hostname":
+            return 0, self.hostname + "\n"
+        if verb == "snap":
+            return 0, self.snap_text()
+        if verb == "flag":
+            return 0, ("yes" if self.flag else "no") + "\n"
+        if verb == "unit":
+            return 0, ("active" if self.open_run() and self.cur().state in ("refreshing", "rehearsing", "running") else "inactive") + "\n"
+        if verb == "unit_id":
+            return 0, self.unit_inv() + "\n"
+        if verb == "kill_unit":
+            return self.kill_unit(arg)
+        if verb == "dpkg_wait":
+            mx, run = int(arg or 180), 0
+            for i in range(mx):
+                run = run + 1 if self.dpkg_running() else 0
+                if run >= 3:
+                    return 0, "seen %d\n" % i
+                self.tick(1)
+            return 1, "never %d\n" % mx
+        if verb == "set_clock":
+            if not re.fullmatch(r"\d+", arg):
+                return 2, "no epoch\n"
+            skew, self.clock_lag = int(round(self.clock_lag)), 0.0
+            return 0, "skew %d\nset\n" % skew
+        if verb == "lock_start":
+            self.lock_held = True
+            return 0, "held\n"
+        if verb == "lock_stop":
+            self.lock_held = bool(self.cfg.get("lock_stays"))
+            return (0, "free\n") if not self.lock_held else (1, "the lock is still held\n")
+        if verb == "lock_state":
+            return 0, ("held" if self.lock_held else "free") + "\n"
+        if verb == "route_cut":
+            return self.cut_route()
+        if verb == "route_restore":
+            if self.cfg.get("route_stays_cut"):
+                return 1, "no default route\n"
+            had, self.route_cut = not self.route_cut, False
+            return 0, ("present" if had else "restored") + "\n"
+        if verb == "net_check":
+            return (0, "200\n") if not self.route_cut else (22, "")
+        if verb == "runfiles":
+            return 0, "== /var/lib/casaos/os-upgrade\nCASAOS_OSU_UNIT_START NONCE 1 run\n"
+        if verb == "diag":
+            return 0, "0 loaded units listed.\n"
+        return 2, "unknown verb: %s\n" % verb
 
     def qmon(self, cmd):
         with self.lock:
             word = cmd.split()
             if word and word[0] == "savevm":
-                self.snapshots[word[1]] = copy.deepcopy({k: v for k, v in self.__dict__.items() if k not in ("lock", "snapshots", "cfg", "log")})
+                self.snapshots[word[1]] = copy.deepcopy({k: v for k, v in self.__dict__.items() if k not in KEEP_KEYS})
                 return 0, "\n"
             if word and word[0] == "loadvm":
                 if word[1] not in self.snapshots:
                     return 1, "Error: Snapshot %s does not exist\n" % word[1]
-                keep = {k: self.__dict__[k] for k in ("lock", "snapshots", "cfg", "log")}
+                keep = {k: self.__dict__[k] for k in KEEP_KEYS}
                 state = copy.deepcopy(self.snapshots[word[1]])
                 self.__dict__.clear()
                 self.__dict__.update(state)
                 self.__dict__.update(keep)
+                self.clock_lag = float(self.cfg["restore_lag"])      # the clock is that of the instant of the snapshot
                 return 0, "\n"
             if word and word[0] == "system_reset":
                 self.power_cut()
@@ -784,9 +914,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        w.delay_taken = 0.0
         res = w.route(self.command, path, self.headers.get("Authorization", ""), body)
         if res is None:
             return      # the guest is away: nothing answers
+        limit = float(self.headers.get("X-Max-Time") or 0)
+        if limit and w.delay_taken > limit:
+            return      # the caller gave up before the answer came: the work is done, and nobody knows
         status, doc = res
         data = json.dumps(doc).encode()
         self.send_response(status)
@@ -818,8 +952,9 @@ def posix(p):
 
 SHIMS = {
     "ssh": '''#!/usr/bin/env bash
-# a stand-in for ssh: the last word is the command for the guest, which the fake plays
+# a stand-in for ssh: the last word is the command for the guest, which the fake plays. sudo, on a guest that cloud-init gave another /etc/hosts, says on stderr that it cannot look its name up
 cmd="${*: -1}"
+[ -z "${FAKE_SUDO_NOISE:-}" ] || echo "sudo: unable to resolve host oup-1a2b3c4d: Name or service not known" >&2
 body="$(curl -sS --max-time 300 --data-binary "$cmd" "http://127.0.0.1:${FAKE_PORT}/_ssh" 2>/dev/null; printf x)"
 body="${body%x}"
 rc="${body%%$'\\n'*}"
@@ -835,6 +970,12 @@ rc="${body%%$'\\n'*}"
 case "$rc" in ''|*[!0-9]*) exit 1 ;; esac
 printf '%s' "${body#*$'\\n'}"
 exit "$rc"
+''',
+    "curl": '''#!/usr/bin/env bash
+# the real curl, told the time it will wait (the fake guest takes as long as it takes, in the time of its own clock, and a caller that waited less gets no answer)
+limit=0; prev=""
+for a in "$@"; do [ "$prev" != --max-time ] || limit="$a"; prev="$a"; done
+exec "@CURL@" -H "X-Max-Time: ${limit}" "$@"
 ''',
     "tick": '''#!/usr/bin/env bash
 curl -sS --max-time 300 "http://127.0.0.1:${FAKE_PORT}/_tick?s=$1" >/dev/null 2>&1
@@ -856,9 +997,10 @@ def tool_dirs():
 def make_bin(root):
     d = os.path.join(root, "bin")
     os.makedirs(d, exist_ok=True)
+    real_curl = shutil.which("curl", path=os.pathsep.join(tool_dirs() + [ENV.get("PATH", "")])) or "curl"
     for name, text in SHIMS.items():
         with open(os.path.join(d, name), "w", newline="\n") as f:
-            f.write(text)
+            f.write(text.replace("@CURL@", posix(real_curl) if os.path.isabs(real_curl) else real_curl))
         os.chmod(os.path.join(d, name), 0o755)
     return d
 
@@ -898,7 +1040,8 @@ def run_script(leg, cases="", cfg=None, root=None, env_extra=None, world_from=No
         f.write("Aa1-test")
     world.user, world.pw = "oupproof", "Aa1-test"
     env = dict(ENV, PATH=os.pathsep.join([bindir] + tool_dirs() + [ENV.get("PATH", "")]), OUT=posix(out), WORK=posix(work), SSH_CONFIG="ssh_config", SSH_HOST="vm", GW_PORT=str(port), FAKE_PORT=str(port),
-               OUP_FAST="1", OUP_TICK=posix(os.path.join(bindir, "tick")), QMON=posix(os.path.join(bindir, "qmon")), TAG="v0.0.0-test", CASES=cases, POLL_EVERY="3", CONTROL_SECONDS="200")
+               OUP_FAST="1", OUP_TICK=posix(os.path.join(bindir, "tick")), QMON=posix(os.path.join(bindir, "qmon")), TAG="v0.0.0-test", CASES=cases, POLL_EVERY="3", CONTROL_SECONDS="200",
+               FAKE_SUDO_NOISE="1")
     env.update(env_extra or {})
     try:
         proc = subprocess.run([BASH, posix(SCRIPT), "run", leg], env=env, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=int(os.environ.get("RUN_TIMEOUT", "1500")))
@@ -1104,6 +1247,19 @@ def map_rows(d, tag, match, **kw):
     rows_edit(d, tag, fn)
 
 
+def runs_edit(d, tag, fn):
+    """the rows of the runs section of a snapshot (id, folder, left, moved), changed by fn"""
+    rows = [ln.split("\t") for ln in read_out(d, "snap-%s.runs" % tag).splitlines()]
+    out = fn(rows)
+    write_out(d, "snap-%s.runs" % tag, "".join("\t".join(r) + "\n" for r in (out if out is not None else rows)))
+
+
+def after_seconds(rows, seconds):
+    """the index of the first row of a poll that began at least this many seconds after the first one"""
+    t0 = float(rows[0][COL["t0"]])
+    return next(i for i, r in enumerate(rows) if float(r[COL["t0"]]) - t0 >= seconds)
+
+
 def drop_rows(d, tag, state):
     rows_edit(d, tag, lambda rows: [r for r in rows if r[COL["state"]] != state])
 
@@ -1138,6 +1294,11 @@ def core_mutations():
     m("C1: the status after the calls says the switch is on", fails("C1 flag off", "idle, with beta_enabled false"), lambda d: jdata(d, "c1-status-after", lambda x: x.update(beta_enabled=True)))
     m("C1: the flag file is there before the calls", fails("C1 flag off", "os-upgrade.beta is absent"), lambda d: fact(d, "c1-before", "beta_file", "yes"))
 
+    m("C1: the journal of PID 1 was not read", invalid_run("the journal of PID 1 (it was not read)"), lambda d: write_out(d, "snap-c1-after.pid1", "# lines 0\n"))
+    m("C1: systemd was not asked for the units", invalid_run("the units of the engine (systemd was not asked)"), lambda d: write_out(d, "snap-c1-before.units", ""))
+    m("C1: the names of the file system are missing", invalid_run("the names of the file system"), lambda d: write_out(d, "snap-c1-ctl-a.names", ""))
+    m("C1: the login of a snapshot is among the names that the control did not show", fails("C1 flag off", "that the control did not show"), lambda d: add_line(d, "snap-c1-after.names", "/run/systemd/transient/session-99.scope"))
+
     # C2
     m("C2: the file is not there after the switch", fails("C2 switch on", "os-upgrade.beta exists"), lambda d: fact(d, "c2-after", "beta_file", "no"))
     m("C2: the switch answers off", fails("C2 switch on", "beta_enabled true"), lambda d: jdata(d, "c2-beta", lambda x: x.update(beta_enabled=False)))
@@ -1145,6 +1306,7 @@ def core_mutations():
     # C3
     m("C3: the busy flag is never seen while the refresh works", fails("C3 refresh", "the busy flag is there while the run works"),
       lambda d: rows_edit(d, "c3-run", lambda rows: [r[:15] + ["no"] + r[16:] for r in rows]))
+    m("C3: a kept run's backup folder is still in /var/backups", fails("C3 refresh", "each kept run's backup folder"), lambda d: runs_edit(d, "c3-after", lambda rows: [r[:2] + ["yes"] + r[3:] for r in rows]))
     m("C3: the sources are not what they were", fails("C3 refresh", "the sources of apt are as they were"), lambda d: subst(d, "snap-c3-after.aptfiles", "/etc/apt/sources.list\t", "/etc/apt/sources.list\tf"))
     m("C3: a timer of apt is still stopped", fails("C3 refresh", "the timers of apt are as they were"), lambda d: timer_line(d, "c3-after", "apt-daily.timer", "inactive"))
     m("C3: a package was removed", fails("C3 refresh", "no package was removed"), lambda d: drop_line(d, "snap-c3-after.dpkg", "fuse\t"))
@@ -1166,6 +1328,13 @@ def core_mutations():
       lambda d: jdata(d, "c4-status-rehearsed", lambda x: x.update(expires_at=x["expires_at"].replace("T", "T", 1)[:8] + "%02d" % (int(x["expires_at"][8:10]) + 1) + x["expires_at"][10:])))
     m("C4: a package was installed by the rehearsal", fails("C4 plan and rehearsal", "no package was installed"), lambda d: add_line(d, "snap-c4-after.dpkg", "osm-new\t1.0\tii "))
     m("C4: the backup folder stays in /var/backups", fails("C4 plan and rehearsal", "no backup folder is left"), lambda d: fact(d, "c4-after", "bk_dirs", "/var/backups/casaos-os-upgrade-p1-x"))
+    m("C4: the folder of an older run is still in /var/backups, though the folder list is empty", fails("C4 plan and rehearsal", "each kept run's backup folder"),
+      lambda d: runs_edit(d, "c4-after", lambda rows: [r[:2] + ["yes"] + r[3:] if i == 0 else r for i, r in enumerate(rows)]))
+    m("C4: the backup folder of the rehearsal was not moved into its run folder", fails("C4 plan and rehearsal", "backup folder of this run was moved"),
+      lambda d: runs_edit(d, "c4-after", lambda rows: [r[:3] + ["-"] if i == len(rows) - 1 else r for i, r in enumerate(rows)]))
+    m("C4: the polls carry no run id: the run whose folder was moved cannot be named", fails("C4 plan and rehearsal", "backup folder of this run was moved"),
+      lambda d: rows_edit(d, "c4-run", lambda rows: [r[:16] + ["-"] + r[17:] for r in rows]))
+    m("C4: the rehearsal is started with a safety net, which the page does not give", fails("C4 plan and rehearsal", "the way the page starts one"), lambda d: subst(d, "c4-start.req", '"safety_net":""', '"safety_net":"snapshot"'))
     m("C4: rehearsal_done keeps the machine busy", fails("C4 plan and rehearsal", "rehearsal_done lets go of the machine"), lambda d: map_rows(d, "c4-unwind", "rehearsal_done", busy="true"))
     m("C4: the plan is blocked: the cases that start from it cannot be run", fails("C4 plan and rehearsal", "can be started from", also=("C5", "C6", "C7")), lambda d: jdata(d, "c4-plan-get", lambda x: x["plan"].update(verdict="blocked")))
     m("C4: the flag is still there after rehearsal_done", fails("C4 plan and rehearsal", "the busy flag is gone"), lambda d: write_out(d, "flag-c4.tsv", "1\tyes\n"))
@@ -1184,6 +1353,12 @@ def core_mutations():
     m("C5: a second start is accepted", fails("C5 run_open", "a second start while a run is open is refused"), lambda d: code(d, "c5-second", 202))
     m("C5: the page's restart is accepted", fails("C5 os_upgrade_open", "is refused while the unit works"), lambda d: code(d, "c5-restart", 200))
     m("C5: the guest restarted", fails("C5 os_upgrade_open", "the guest did not restart"), lambda d: write_out(d, "c5-restart.boot-after", "00000000-0000-4000-8000-000000000000\n"))
+    m("C5: the folder of an older run is still in /var/backups", fails("C5 nothing left behind", "each kept run's backup folder"),
+      lambda d: runs_edit(d, "c5-after", lambda rows: [r[:2] + ["yes"] + r[3:] if i == 0 else r for i, r in enumerate(rows)]))
+    m("C5: the rehearsal that holds the run open has no safety net", fails("C5 run_open", "safety net of a hop"), lambda d: subst(d, "c5-open.req", '"safety_net":"snapshot"', '"safety_net":""'))
+    m("C5: sudo says on stderr that it cannot look the name up: the lock was held all the same", passes("C5 dpkg lock"),
+      lambda d: write_out(d, "c5-lock.during", "sudo: unable to resolve host oup-1a2b3c4d: Name or service not known\nheld\n"))
+    m("C5: the same with the lock given back", passes("C5 nothing left behind"), lambda d: write_out(d, "c5-lock.undone", "sudo: unable to resolve host oup-1a2b3c4d: Name or service not known\nfree\n"))
     m("C5: the rehearsal was not working: not testable", not_testable("C5 run_open", "was not working", also=("C5 os_upgrade_open",)), lambda d: jdata(d, "c5-status-before-second", lambda x: x.update(state="rehearsed")))
     m("C5: something is left behind", fails("C5 nothing left behind", "the timers of apt are as they were"), lambda d: timer_line(d, "c5-after", "apt-daily.timer", "inactive"))
     m("C5: the run that was opened is not closed", fails("C5 nothing left behind", "is closed"), lambda d: write_out(d, "c5-open.closed", "state rehearsing\n"))
@@ -1196,6 +1371,10 @@ def core_mutations():
     m("C6: the backup folder is left", fails("C6 call-off", "no backup folder is left"), lambda d: fact(d, "c6-after", "bk_dirs", "/var/backups/casaos-os-upgrade-p1-x"))
     m("C6: the point of no return was passed", fails("C6 call-off", "the point of no return was not passed"), lambda d: jdata(d, "c6-status-failed", lambda x: x.update(pnr=True)))
     m("C6: the abort was not offered", fails("C6 call-off", "running offers `abort`"), lambda d: map_rows(d, "c6-run", "running", actions="-"))
+    m("C6: the backup folder of the call-off was not moved into its run folder, whatever was moved of the runs before it", fails("C6 call-off", "backup folder of this run was moved"),
+      lambda d: runs_edit(d, "c6-after", lambda rows: [r[:3] + ["-"] if i == len(rows) - 1 else r for i, r in enumerate(rows)]))
+    m("C6: the hop is started with another safety net", fails("C6 call-off", "safety net snapshot"), lambda d: subst(d, "c6-start.req", '"safety_net":"snapshot"', '"safety_net":"reinstall_ok"'))
+    m("C6: the interruption of the call-off is not caught by the polls", passes("C6 call-off"), lambda d: drop_rows(d, "c6-after", "interrupted"))
     m("C6: the sources are not put back", fails("C6 call-off", "the sources of apt are as they were"), lambda d: subst(d, "snap-c6-after.aptfiles", "/etc/apt/sources.list\t", "/etc/apt/sources.list\tf"))
     m("C6: a package changed", fails("C6 call-off", "no package was installed"), lambda d: subst(d, "snap-c6-after.dpkg", "libc6\t", "libc6\t9"))
 
@@ -1216,8 +1395,20 @@ def core_mutations():
     m("C7: the timers of apt are not back", fails("C7 the hop", "the timers of apt are back"), lambda d: timer_line(d, "c7-after", "unattended-upgrades.service", "inactive"))
     m("C7: half upgraded at the verdict", fails("C7 the hop", "not half upgraded"), lambda d: jdata(d, "c7-status-final", lambda x: x.update(half_upgraded=True)))
     m("C7: a container did not return", fails("C7 the hop", "the containers that ran before are back"), lambda d: jdata(d, "c7-status-final", lambda x: x.update(not_returned=[{"container": "p-web", "policy": "unless-stopped"}])))
-    m("C7: an error finding", fails("C7 the hop", "the judge found no error"), lambda d: jdata(d, "c7-status-final", lambda x: x.update(findings=[{"code": "service_down", "severity": "error", "arg": "x"}])))
-    m("C7: the backup folder is not moved", fails("C7 the hop", "the backup folder moved into the run's folder"), lambda d: fact(d, "c7-final", "bk_dirs", "/var/backups/casaos-os-upgrade-p1-x"))
+    m("C7: an error finding", fails("C7 the hop", "the judge found no finding of severity error"), lambda d: jdata(d, "c7-status-final", lambda x: x.update(findings=[{"code": "service_down", "severity": "error", "arg": "x"}])))
+    m("C7: the backup folder is not moved", fails("C7 the hop", "no backup folder is left"), lambda d: fact(d, "c7-final", "bk_dirs", "/var/backups/casaos-os-upgrade-p1-x"))
+    m("C7: the backup folder of the hop is not moved into its run folder", fails("C7 the hop", "backup folder of this run was moved"),
+      lambda d: runs_edit(d, "c7-final", lambda rows: [r[:3] + ["-"] if i == len(rows) - 1 else r for i, r in enumerate(rows)]))
+    m("C7: the folder of an older run is still in /var/backups, though the folder list is empty", fails("C7 the hop", "each kept run's backup folder"),
+      lambda d: runs_edit(d, "c7-final", lambda rows: [r[:2] + ["yes"] + r[3:] if i == 0 else r for i, r in enumerate(rows)]))
+    m("C7: the hop is started with another safety net", fails("C7 the hop", "safety net snapshot"), lambda d: subst(d, "c7-start.req", '"safety_net":"snapshot"', '"safety_net":""'))
+    m("C7: findings of every severity but error: they are printed, and the verdict stands", passes("C7 the hop", "warn ports_missing"),
+      lambda d: jdata(d, "c7-status-final", lambda x: x.update(state="succeeded_with_findings", not_judged=["ports"], findings=[
+          {"code": "docker_source_paused", "severity": "info"}, {"code": "dpkg_dist_new", "severity": "info", "arg": "/etc/ssh/sshd_config"},
+          {"code": "ports_missing", "severity": "warn", "arg": "445/tcp"}, {"code": "units_failed_new", "severity": "warn", "arg": "x.service"}, {"code": "facts_incomplete", "severity": "warn"}])))
+    m("C7: the same findings with an error among them", fails("C7 the hop", "the judge found no finding of severity error"),
+      lambda d: jdata(d, "c7-status-final", lambda x: x.update(state="succeeded_with_findings", findings=[{"code": "docker_source_paused", "severity": "info"}, {"code": "ports_missing", "severity": "warn", "arg": "445/tcp"},
+                                                                                                         {"code": "casaos_unit_down", "severity": "error", "arg": "casaos.service"}])))
     m("C7: the busy flag is still there at the verdict", fails("C7 the hop", "the busy flag is gone at the verdict"), lambda d: write_out(d, "flag-c7.tsv", "1\tyes\n"))
     m("C7: the blocks are seen out of order", fails("C7 the hop", "in their order"), lambda d: rows_edit(d, "c7-run", lambda rows: [r[:8] + ["verify"] + r[9:] if r[COL["bid"]] == "download" else r for r in rows]))
     m("C7: the point of no return is never seen", fails("C7 the hop", "point of no return is seen passed"), lambda d: rows_edit(d, "c7-run", lambda rows: [r[:9] + ["false"] + r[10:] for r in rows]))
@@ -1268,13 +1459,31 @@ def faults_mutations():
     m("faults: no snapshot of the whole machine", invalid_run("snapshot of the whole machine"), lambda d: os.remove(os.path.join(d, "savevm.ok")))
     m("faults: the start state was not reached", invalid_run("start state of the faults was not reached"), lambda d: jdata(d, "c4-status-closed", lambda x: x.update(state="rehearsal_done")))
     m("faults: a restored guest that is not the snapshotted one", invalid_run("not the snapshotted one"), lambda d: fact(d, "F2-base", "boot_id", "00000000-0000-4000-8000-000000000000"))
-    m("F1: the unit is never seen interrupted", fails("F1 the unit killed before", "interrupted in the states seen"), lambda d: drop_rows(d, "f1-after", "interrupted"))
+    m("F1: the poll missed `interrupted` (it lasts one look): the road through unwinding to failed(interrupted_killed) proves it", passes("F1 the unit killed before", "did not catch"), lambda d: drop_rows(d, "f1-after", "interrupted"))
+    m("F1: interrupted missed and the reason of the failure is another", fails("F1 the unit killed before", "interrupted_killed"),
+      lambda d: (drop_rows(d, "f1-after", "interrupted"), map_rows(d, "f1-after", "failed", reason="interrupted_power")))
+    m("F1: interrupted and unwinding both missed by the polls: the reason of the failure shows the interruption", passes("F1 the unit killed before", "did not catch"),
+      lambda d: (drop_rows(d, "f1-after", "interrupted"), drop_rows(d, "f1-after", "unwinding")))
+    m("F1: unwinding comes after the failure", fails("F1 the unit killed before", "the run is seen interrupted before it is put back"),
+      lambda d: (drop_rows(d, "f1-after", "interrupted"), rows_edit(d, "f1-after", lambda rows: [r[:4] + [{"unwinding": "failed", "failed": "unwinding"}.get(r[COL["state"]], r[COL["state"]])] + r[5:] for r in rows])))
+    m("F1: the backup folder of the killed hop was not moved into its run folder, whatever was moved of the runs before it", fails("F1 the unit killed before", "backup folder of this run was moved"),
+      lambda d: runs_edit(d, "f1-after", lambda rows: [r[:3] + ["-"] if i == len(rows) - 1 else r for i, r in enumerate(rows)]))
+    m("F1: the kill took three tries", passes("F1 the unit killed before", "3 tries"), lambda d: write_out(d, "F1.kill", "# try 1\n# try 2\n# try 3\ndpkg_at_kill no\nrc 0\ngone\n"))
+    m("F1: the clock of the restored guest was not set", invalid_run("F1: the clock of the restored guest was not set"), lambda d: os.remove(os.path.join(d, "F1.clock")))
     m("F1: the timers are not back", fails("F1 the unit killed before", "the timers of apt are as they were"), lambda d: timer_line(d, "f1-after", "apt-daily.timer", "inactive"))
     m("F1: another reason", fails("F1 the unit killed before", "interrupted_killed"), lambda d: map_rows(d, "f1-after", "failed", reason="interrupted_power"))
-    m("F1: the kill was not accepted", fails("F1 the unit killed before", "systemctl kill"), lambda d: write_out(d, "f1.kill", "rc 5\n"))
+    m("F1: the kill did not take effect", fails("F1 the unit killed before", "systemctl kill"), lambda d: write_out(d, "F1.kill", "# try 1\nalive\n"))
     m("F1: the sources are not put back", fails("F1 the unit killed before", "the sources of apt are as they were"), lambda d: subst(d, "snap-f1-after.aptfiles", "/etc/apt/sources.list\t", "/etc/apt/sources.list\tf"))
-    m("F2: the run is repaired by itself", fails("F2 the unit killed after", "no automatic repair"), lambda d: rows_edit(d, "f2-observe", lambda rows: [r[:4] + ["recovering"] + r[5:] if i == 20 else r for i, r in enumerate(rows)]))
+    m("F2: the run is repaired by itself", fails("F2 the unit killed after", "no automatic repair"), lambda d: rows_edit(d, "f2-observe", lambda rows: [r[:4] + ["recovering"] + r[5:] if i == after_seconds(rows, 60) else r for i, r in enumerate(rows)]))
+    m("F2: the run is repaired by itself after two minutes, which a window of 100 s would have missed", fails("F2 the unit killed after", "no automatic repair"),
+      lambda d: rows_edit(d, "f2-observe", lambda rows: [r[:4] + ["recovering"] + r[5:] if i == after_seconds(rows, 120) else r for i, r in enumerate(rows)]))
     m("F2: the run is not looked at long enough", fails("F2 the unit killed after", "looked at long enough"), lambda d: rows_edit(d, "f2-observe", lambda rows: rows[:5]))
+    m("F2: the run is looked at for 100 s only, which is not the backoff of a repair that is allowed", fails("F2 the unit killed after", "looked at long enough"), lambda d: rows_edit(d, "f2-observe", lambda rows: rows[:after_seconds(rows, 100)]))
+    m("F2: dpkg was not seen at work", not_testable("F2 the unit killed after", "dpkg was not seen"), lambda d: write_out(d, "F2.dpkg", "never 240\n"))
+    m("F2: there is no record of dpkg", invalid_run("no record of dpkg at work"), lambda d: os.remove(os.path.join(d, "F2.dpkg")))
+    m("F2: dpkg was gone when the unit was killed", not_testable("F2 the unit killed after", "not running at the moment of the kill"), lambda d: write_out(d, "F2.kill", "# try 1\ndpkg_at_kill no\nrc 0\ngone\n"))
+    m("F2: the kill did not take effect", fails("F2 the unit killed after", "systemctl kill"), lambda d: write_out(d, "F2.kill", "# try 1\ndpkg_at_kill yes\nrc 0\nalive\n"))
+    m("F2: the clock of the restored guest was not set", invalid_run("F2: the clock of the restored guest was not set"), lambda d: write_out(d, "F2.clock", "# try 1\nthe clock could not be set\n"))
     m("F2: interrupted by a power cut, not a kill", fails("F2 the unit killed after", "interrupted by a kill after the point of no return"), lambda d: jdata(d, "f2-status-interrupted", lambda x: x.update(cause="power")))
     m("F2: resume is not offered", fails("F2 the unit killed after", "interrupted offers `resume`"), lambda d: jdata(d, "f2-status-interrupted", lambda x: x.update(actions=["takeover"])))
     m("F2: resume is refused", fails("F2 the unit killed after", "POST resume is accepted"), lambda d: code(d, "f2-resume", 409))
@@ -1283,7 +1492,8 @@ def faults_mutations():
     m("F3: the stop has another class", fails("F3 the network cut after", "the stop has the class network"), lambda d: jdata(d, "f3-status-stopped", lambda x: x["failure"].update({"class": "apt_failed"})))
     m("F3: the network is not given back", invalid_run("the network was not given back"), lambda d: write_out(d, "f3.restore", "failed\n"))
     m("F3: resume is refused after the network is back", fails("F3 the network cut after", "POST resume is accepted"), lambda d: code(d, "f3-resume", 409))
-    m("F3: the default route was not taken away", fails("F3 the network cut after", "default route was taken away"), lambda d: write_out(d, "f3.cut", "no default route\n"))
+    m("F3: the routes were not taken away", fails("F3 the network cut after", "routes of the guest were taken away"), lambda d: write_out(d, "f3.cut", "# try 1\nno default route\n"))
+    m("F3: the cut was not proved by a failing request", fails("F3 the network cut after", "routes of the guest were taken away"), lambda d: write_out(d, "f3.cut", "# try 1\nstill reachable\n"))
     m("F1: the hop is not accepted", fails("F1 the unit killed before", "POST start (the hop) is accepted"), lambda d: code(d, "f1-start", 409))
     m("F1: the unit is not killed in an early block", fails("F1 the unit killed before", "was killed while block 1 to 5 worked"), lambda d: map_rows(d, "f1-run", "running", bid="minimal"))
     m("F1: interrupted comes after the unwinding", fails("F1 the unit killed before", "interrupted, then"),
@@ -1297,6 +1507,11 @@ def faults_mutations():
     m("F4: the guest does not come back after the reset", invalid_run("did not come back"), lambda d: write_out(d, "boot-f4-reset.timeout", "1500\n"))
     m("F4: interrupted by a kill, not a power cut", fails("F4 a power cut", "interrupted by a power cut"), lambda d: jdata(d, "f4-status-interrupted", lambda x: x.update(cause="killed")))
     m("F4: not half upgraded", fails("F4 a power cut", "half upgraded"), lambda d: jdata(d, "f4-status-interrupted", lambda x: x.update(half_upgraded=False)))
+    m("F4: dpkg was not seen at work", not_testable("F4 a power cut", "dpkg was not seen"), lambda d: write_out(d, "F4.dpkg", "never 240\n"))
+    m("F4: there is no record of dpkg", invalid_run("no record of dpkg at work"), lambda d: os.remove(os.path.join(d, "F4.dpkg")))
+    m("F3: the clock of the restored guest was not set", invalid_run("F3: the clock of the restored guest was not set"), lambda d: os.remove(os.path.join(d, "F3.clock")))
+    m("F4: the clock of the restored guest was not set", invalid_run("F4: the clock of the restored guest was not set"), lambda d: os.remove(os.path.join(d, "F4.clock")))
+    m("F4: the clock was not set after the reset", invalid_run("the clock of the restored guest was not set"), lambda d: os.remove(os.path.join(d, "F4-reset.clock")))
     m("F4: the boot id did not change", fails("F4 a power cut", "another boot id after the reset"), lambda d: write_out(d, "boot-f4-reset.tsv", "".join("%s\t%s\t%s\n" % (r.split("\t")[0], r.split("\t")[1], read_out(d, "f4.boot-old").strip()) for r in read_out(d, "boot-f4-reset.tsv").splitlines())))
     return M
 
@@ -1306,6 +1521,8 @@ def run_mutations(label, base_out, leg, mutations):
     base = statuses(text)
     check("%s: the recordings of a healthy run pass" % label, rc == 0 and head(text) == "PASS", head(text) + "\n" + text[:1500])
     for name, fn, exp in mutations:
+        if not wanted("%s: %s" % (label, name)):
+            continue
         d = copytree(base_out)
         try:
             fn(d)
@@ -1334,8 +1551,26 @@ def merge_prelude(out, base_out):
     write_out(out, "timeline.tsv", "".join(ln + "\n" for ln in theirs + mine))
 
 
-def scenario(label, leg, cases, cfg, exp, env_extra=None, world_from=None, base_out=None):
+class FaultsBase:
+    """the healthy faults leg, whose snapshot the scenarios of the faults start from: made when the first of them is asked for"""
+
+    def __init__(self, world=None, out=None):
+        self.world, self.out = world, out
+
+    def get(self):
+        if self.world is None:
+            self.out, self.world, proc = run_script("faults", "")
+            check("the script runs the faults leg to its end against the fake guest", proc.returncode == 0, proc.stdout.decode("utf-8", "replace")[-400:])
+        return self
+
+
+def scenario(label, leg, cases, cfg, exp, env_extra=None, base=None):
     """the real script against a fake guest that misbehaves one way: what the report says of the recordings it makes"""
+    if not wanted(label):
+        return None, None, ""
+    world_from = base_out = None
+    if base is not None:
+        world_from, base_out = base.get().world, base.out
     out, w, proc = run_script(leg, cases, cfg, env_extra=env_extra, world_from=world_from)
     if base_out:
         merge_prelude(out, base_out)
@@ -1345,6 +1580,414 @@ def scenario(label, leg, cases, cfg, exp, env_extra=None, world_from=None, base_
         print(text[:3000])
         print(proc.stdout.decode("utf-8", "replace")[-1500:])
     return out, w, text
+
+
+# ---- the tools of the guest, run for real -----------------------------------------------------------------------------------------------------
+#
+# The fake guest above plays what the verbs answer; it cannot show what they DO. These run the text of the guest tool, as the script writes it, under dash, with stand-ins for the commands it asks of the
+# machine (ip, curl, systemctl, pgrep, sleep, date, journalctl) that keep their state in a file: the routes of both families, the invocation of the unit, the clock, where dpkg works.
+
+STUBBOX = r'''
+import json
+import os
+import sys
+
+d = os.environ["STUB_STATE"]
+path = os.path.join(d, "state.json")
+st = json.load(open(path))
+name, args = sys.argv[1], sys.argv[2:]
+rc = 0
+
+
+def say(x=""):
+    sys.stdout.buffer.write((x + "\n").encode())          # a line ends with a line feed on any host: the tools of the guest compare what these print
+
+
+def err(x):
+    sys.stderr.buffer.write((x + "\n").encode())
+
+
+st["calls"].append([name] + args)
+if name == "ip":
+    fam = "6" if "-6" in args else "4"
+    key = "routes" + fam
+    rest = [a for a in args if a not in ("-4", "-6")]
+    if rest[:2] == ["route", "show"]:
+        for r in st[key]:
+            if len(rest) == 2 or (rest[2] == "default" and r.startswith("default")):
+                say(r)
+    elif rest[:2] == ["route", "del"]:
+        hit = [r for r in st[key] if r.split()[0] == rest[2]]
+        if hit and not (fam == "6" and st.get("keep6")):
+            st[key].remove(hit[0])
+        else:
+            err("RTNETLINK answers: No such process")
+            rc = 2
+    elif rest[:2] == ["route", "add"]:
+        spec = " ".join(rest[2:])
+        if spec in st[key]:
+            err("RTNETLINK answers: File exists")
+            rc = 2
+        else:
+            st[key].append(spec)
+    else:
+        rc = 1
+elif name == "curl":
+    if any(r.startswith("default") for r in st["routes4"] + st["routes6"]):
+        say("200")
+    else:
+        err("curl: (7) Failed to connect: Network is unreachable")
+        rc = 7
+elif name == "pgrep":
+    rc = 0 if any(a <= st["vt"] < b for a, b in st["dpkg"]) else 1
+elif name == "sleep":
+    st["vt"] += float(args[0])
+elif name == "date":
+    if "-s" in args:
+        st["clock"] = int(args[args.index("-s") + 1].lstrip("@"))
+        st["order"].append("date-s")
+    else:
+        say(str(int(st["clock"])))
+elif name == "journalctl":
+    for i in range(st["journal"]):
+        say("Started unit number %d." % i)
+    for ln in st.get("journal_extra", []):
+        say(ln)
+    rc = st.get("journal_rc", 0)
+elif name == "systemctl":
+    if args[:1] == ["show"]:
+        say(st["inv"] if st["unit_active"] else "")
+    elif args[:1] == ["kill"]:
+        st["kills"].append(args[1])
+        st["order"].append("kill")
+        if st["unit_active"] and not st.get("immortal"):
+            st["inv"] = "B"          # the core starts the unwind under the same name, as another invocation
+    elif args[:1] == ["is-active"]:
+        up = st["svc"].get(args[-1], False)
+        if "--quiet" not in args:
+            say("active" if up else "inactive")
+        rc = 0 if up else 3
+    elif args[:1] in (["stop"], ["start"]):
+        st["svc"][args[1]] = args[0] == "start"
+        st["order"].append("%s %s" % (args[0], args[1]))
+    elif args[:1] == ["list-units"]:
+        if st.get("units_rc"):
+            rc = st["units_rc"]
+        else:
+            for u in st["units"]:
+                say(u)
+json.dump(st, open(path, "w"))
+sys.exit(rc)
+'''
+
+STUB_STATE0 = dict(calls=[], order=[], vt=0.0, clock=1000, dpkg=[], inv="A", unit_active=True, kills=[], svc={"systemd-timesyncd": True}, units=[], journal=40,
+                   routes4=["default via 10.0.2.2 dev ens3 proto dhcp src 10.0.2.15 metric 100", "10.0.2.0/24 dev ens3 proto kernel scope link src 10.0.2.15"],
+                   routes6=["fec0::/64 dev ens3 proto ra metric 256 expires 86300sec pref medium", "default via fe80::2 dev ens3 proto ra metric 1024 expires 1700sec hoplimit 64 pref medium"])
+
+
+def dash_path():
+    sib = os.path.join(os.path.dirname(BASH), "dash.exe") if os.path.isabs(BASH) else None
+    return (sib if sib and os.path.exists(sib) else None) or shutil.which("dash") or BASH
+
+
+def guest_tools_text():
+    with open(SCRIPT, newline="") as f:
+        m = re.search(r"cat >\"\$1/guest\.sh\" <<'OUP_GUEST'\n(.*?)\nOUP_GUEST\n", f.read().replace("\r\n", "\n"), re.S)
+    return m.group(1) + "\n" if m else None
+
+
+class Guest:
+    """the guest tool of the script under dash, in folders of its own, with the stand-ins in front of the machine's commands"""
+
+    def __init__(self, **state):
+        self.root = tempfile.mkdtemp(prefix="oup-g-", dir=os.environ.get("TMPDIR") or None)
+        self.state_dir = os.path.join(self.root, "stub")
+        for sub_ in ("stub", "run", "lib", "osr"):
+            os.makedirs(os.path.join(self.root, sub_))
+        self.set(**dict(copy.deepcopy(STUB_STATE0), **state))
+        write_out(self.state_dir, "stubbox.py", STUBBOX)
+        py = posix(sys.executable)
+        for cmd in ("ip", "curl", "systemctl", "pgrep", "sleep", "date", "journalctl"):
+            with open(os.path.join(self.state_dir, cmd), "w", newline="\n") as f:
+                f.write('#!/bin/sh\nexec "%s" "%s" %s "$@"\n' % (py, posix(os.path.join(self.state_dir, "stubbox.py")), cmd))
+            os.chmod(os.path.join(self.state_dir, cmd), 0o755)
+        text = guest_tools_text()
+        self.text = None
+        if text is not None:
+            path_ = ":".join([posix(self.state_dir), "/usr/bin", "/bin"])
+            for var, val in (("PATH", path_ + "; export PATH"), ("RUN", posix(os.path.join(self.root, "run"))), ("LIB", posix(os.path.join(self.root, "lib"))),
+                             ("OSR", posix(os.path.join(self.root, "osr")))):
+                text = re.sub(r"^%s=.*$" % var, lambda m_: "%s=%s" % (var, val), text, count=1, flags=re.M)
+            self.text = text
+        self.file = os.path.join(self.root, "guest.sh")
+        if self.text:
+            write_out(self.root, "guest.sh", self.text)
+
+    def set(self, **kw):
+        st = self.state() if os.path.exists(os.path.join(self.state_dir, "state.json")) else {}
+        st.update(kw)
+        write_out(self.state_dir, "state.json", json.dumps(st))
+
+    def state(self):
+        return json.loads(read_out(self.state_dir, "state.json"))
+
+    def run(self, *argv, code=None):
+        """(status, stdout) of a verb, or of a piece of shell run where the verbs are defined (code)"""
+        file = self.file
+        if code is not None:
+            head_ = self.text.split('\nverb="${1:-}"')[0] + "\n" + code + "\n"
+            file = os.path.join(self.root, "piece.sh")
+            write_out(self.root, "piece.sh", head_)
+        env = dict(ENV, STUB_STATE=posix(self.state_dir), KILL_WAIT="3")
+        p = subprocess.run([dash_path(), posix(file)] + list(argv), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+        return p.returncode, p.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+
+    def done(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def guest_checks():
+    if guest_tools_text() is None:
+        check("the guest tools are in the script", False)
+        return
+    # the cut: both families of default route and slirp's site-local prefix, proved by a probe that fails; said twice it is the same; the restore brings them back
+    g = Guest()
+    rc, out = g.run("route_cut")
+    st = g.state()
+    check("route_cut takes away the default route of both families and the site-local prefix of slirp", rc == 0 and out.strip().splitlines()[-1] == "cut" and not [r for r in st["routes4"] + st["routes6"] if r.startswith("default") or r.startswith("fec0:")],
+          "%s %s %s" % (rc, out, st["routes4"] + st["routes6"]))
+    rc, out = g.run("route_cut")
+    check("route_cut said twice is the same cut", rc == 0 and out.strip().splitlines()[-1] == "cut", "%s %s" % (rc, out))
+    rc, out = g.run("route_restore")
+    st = g.state()
+    check("route_restore brings back the routes it took away", rc == 0 and out.strip().splitlines()[-1] == "restored" and any(r.startswith("default") for r in st["routes4"]) and any(r.startswith("default") for r in st["routes6"]),
+          "%s %s %s" % (rc, out, st["routes4"] + st["routes6"]))
+    rc, out = g.run("route_restore")
+    check("route_restore said twice is the same", rc == 0 and out.strip().splitlines()[-1] == "present", "%s %s" % (rc, out))
+    g.done()
+    g = Guest(keep6=True)
+    rc, out = g.run("route_cut")
+    check("route_cut that does not cut (the guest still reaches the Internet) is not a cut", rc != 0 and out.strip().splitlines()[-1] != "cut", "%s %s" % (rc, out))
+    g.done()
+    g = Guest(routes4=[], routes6=[])
+    rc, out = g.run("route_cut")
+    check("route_cut with no default route says so", rc != 0 and "no default route" in out, "%s %s" % (rc, out))
+    g.done()
+    # the kill: only the invocation the runner saw; the unwind that follows has the same name and must not be killed by a second try
+    g = Guest()
+    rc, out = g.run("unit_id")
+    check("unit_id says the invocation of the unit", rc == 0 and out.strip() == "A", "%s %s" % (rc, out))
+    rc, out = g.run("kill_unit", "A")
+    check("kill_unit kills the invocation it is given, and says it is gone", rc == 0 and "rc 0" in out and out.strip().endswith("gone") and g.state()["kills"] == ["casaos-os-upgrade.service"], "%s %s %s" % (rc, out, g.state()["kills"]))
+    check("kill_unit says whether dpkg was running at the kill", "dpkg_at_kill no" in out, out)
+    rc, out = g.run("kill_unit", "A")
+    check("kill_unit said again does not kill the unit that took the name (the unwind)", rc == 0 and out.strip() == "gone" and len(g.state()["kills"]) == 1, "%s %s %s" % (rc, out, g.state()["kills"]))
+    rc, out = g.run("kill_unit")
+    check("kill_unit without the invocation does nothing", rc != 0 and not g.state()["kills"][1:], "%s %s" % (rc, out))
+    g.done()
+    g = Guest(dpkg=[[0, 100]])
+    rc, out = g.run("kill_unit", "A")
+    check("kill_unit says that dpkg was running", "dpkg_at_kill yes" in out, out)
+    g.done()
+    g = Guest(immortal=True)
+    rc, out = g.run("kill_unit", "A")
+    check("kill_unit of a unit that stays says so", rc != 0 and out.strip().endswith("alive"), "%s %s" % (rc, out))
+    g.done()
+    # dpkg: seen running three looks in a row; a dpkg that comes and goes within two looks is not one; never seen says so
+    g = Guest(dpkg=[[5, 20]])
+    rc, out = g.run("dpkg_wait", "30")
+    check("dpkg_wait returns when dpkg has run for three looks", rc == 0 and re.fullmatch(r"seen [0-9]+", out.strip()) is not None and 5 < int(out.split()[1]) <= 9, "%s %s" % (rc, out))
+    g.done()
+    g = Guest(dpkg=[[5, 7], [9, 11], [14, 30]])
+    rc, out = g.run("dpkg_wait", "30")
+    check("dpkg_wait is not satisfied by a dpkg that runs two looks", rc == 0 and int(out.split()[1]) >= 14, "%s %s" % (rc, out))
+    g.done()
+    g = Guest()
+    rc, out = g.run("dpkg_wait", "30")
+    check("dpkg_wait says when dpkg was never seen", rc != 0 and out.strip() == "never 30", "%s %s" % (rc, out))
+    g.done()
+    # the clock: the services that fight it are stopped, the clock is set from the runner's, and they are started again; what it was behind is said
+    g = Guest()
+    rc, out = g.run("set_clock", "2800")
+    st = g.state()
+    lines = out.strip().splitlines()
+    check("set_clock sets the clock, says how far behind it was, and says it is set", rc == 0 and "skew 1800" in lines and lines[-1] == "set" and st["clock"] == 2800, "%s %s %s" % (rc, out, st["clock"]))
+    check("set_clock stops the time service before it sets the clock and starts it after", st["order"] == ["stop systemd-timesyncd", "date-s", "start systemd-timesyncd"], str(st["order"]))
+    rc, out = g.run("set_clock", "soon")
+    check("set_clock without a number does nothing", rc != 0 and g.state()["clock"] == 2800, "%s %s" % (rc, out))
+    g.done()
+    # the names: what a login makes goes out, what the engine makes stays
+    g = Guest()
+    skew = re.search(r"^NAMES_SKIP='([^']*)'", g.text or "", re.M)
+    check("the guest tool filters the names of the file system with NAMES_SKIP", bool(skew), "")
+    if skew:
+        names_in = ["/run/systemd/transient/session-12.scope", "/run/systemd/system/session-12.scope.d", "/run/systemd/system/session-12.scope.d/50-TasksMax.conf", "/run/systemd/transient/user-1000.slice",
+                    "/run/systemd/system/user@1000.service.d", "/run/systemd/system/user-runtime-dir@1000.service.d", "/run/systemd/transient/casaos-os-upgrade.service", "/run/systemd/transient",
+                    "/run/systemd/system", "/run/systemd/system/casaos-os-upgrade.service.d", "/var/lib/casaos/os-upgrade", "/etc/apt/sources.list", "/var/lib/casaos/session-1"]
+        write_out(g.root, "names.txt", "".join(n + "\n" for n in names_in))
+        rc, out = g.run(code='grep -Ev "$NAMES_SKIP" "%s"' % posix(os.path.join(g.root, "names.txt")))
+        kept = out.split()
+        check("NAMES_SKIP takes out the scopes, slices and drop-ins of a login and nothing of the engine", names_in[6:] == kept and not [n for n in kept if "session-12" in n or "user-1000" in n or "user@" in n],
+              "kept %s" % kept)
+    g.done()
+    # the sections that are empty when all is well say that they were asked
+    g = Guest(units=[], journal=40)
+    rc, out = g.run(code="units_section")
+    check("the units section says that systemd was asked, when no unit of the engine is loaded", rc == 0 and out.splitlines() == ["@@ units", "# asked"], "%s %s" % (rc, out))
+    g.set(units=["casaos-os-upgrade.service loaded active running an operating system upgrade"])
+    rc, out = g.run(code="units_section")
+    check("the units section lists the units of the engine", out.splitlines()[:2] == ["@@ units", "# asked"] and "casaos-os-upgrade.service" in out, out)
+    g.set(units_rc=1)
+    rc, out = g.run(code="units_section")
+    check("the units section does not say it was asked when systemd did not answer", "# asked" not in out, out)
+    rc, out = g.run(code="pid1_section")
+    check("the PID 1 section says how many lines of the journal it read", out.splitlines() == ["@@ pid1", "# lines 40"], out)
+    g.set(journal_extra=["Started casaos-os-upgrade.service."])
+    rc, out = g.run(code="pid1_section")
+    check("the PID 1 section lists the lines that name the engine", out.splitlines() == ["@@ pid1", "# lines 41", "Started casaos-os-upgrade.service."], out)
+    g.set(journal=0, journal_extra=[], journal_rc=1)
+    rc, out = g.run(code="pid1_section")
+    check("the PID 1 section says that it read nothing when it could not", out.splitlines()[:2] == ["@@ pid1", "# lines 0"], out)
+    g.done()
+    # the kept runs: where each run's backup folder is
+    g = Guest()
+    run_dir = os.path.join(g.root, "run")
+    left = os.path.join(g.root, "var-backups-left")
+    os.makedirs(left)
+    for rid, bk, moved in (("run-a", left, None), ("run-b", os.path.join(g.root, "gone"), "bk-done"), ("run-c", None, None)):
+        os.makedirs(os.path.join(run_dir, rid, *([moved] if moved else [])))
+        if bk:
+            write_out(os.path.join(run_dir, rid), "bk-path", posix(bk) + "\n")
+    rc, out = g.run(code="runs_section")
+    rows = [ln.split("\t") for ln in out.splitlines()[1:]]
+    check("the runs section tells, for each kept run, its backup folder, whether it is still there and where it was moved",
+          out.splitlines()[0] == "@@ runs" and rows == [["run-a", posix(left), "yes", "-"], ["run-b", posix(os.path.join(g.root, "gone")), "no", "bk-done"], ["run-c", "-", "no", "-"]], out)
+    g.done()
+    p = subprocess.run([dash_path(), "-n", posix(write_guest_file())], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    check("the guest tools read under dash -n", p.returncode == 0, p.stdout.decode("utf-8", "replace"))
+
+
+def write_guest_file():
+    root = tempfile.mkdtemp(prefix="oup-g-", dir=os.environ.get("TMPDIR") or None)
+    write_out(root, "guest.sh", guest_tools_text() or "")
+    return os.path.join(root, "guest.sh")
+
+
+# ---- the workflow: where each expression is -------------------------------------------------------------------------------------------------
+
+# GitHub does not give every context to every key of a workflow ("Context availability" in its documentation): an expression that names one that is not there is refused when the workflow is read, which
+# is when a dispatch fails before any job exists. The table is that one: the path of the key (a job's id and a step's place are `*`), the contexts that exist there, the special functions that exist there.
+CONTEXT_NAMES = ("github", "needs", "strategy", "matrix", "job", "runner", "env", "vars", "secrets", "steps", "inputs")
+SPECIAL_FUNCTIONS = ("always", "cancelled", "success", "failure", "hashFiles")
+STEP_CONTEXTS = "github needs strategy matrix job runner env vars secrets steps inputs"
+AVAILABLE = [
+    (r"run-name", "github inputs vars", ""),
+    (r"concurrency(\..*)?", "github inputs vars", ""),
+    (r"env\..*", "github secrets inputs vars", ""),
+    (r"jobs\.\*\.concurrency(\..*)?", "github needs strategy matrix inputs vars", ""),
+    (r"jobs\.\*\.container\.credentials\..*", "github needs strategy matrix env vars secrets inputs", ""),
+    (r"jobs\.\*\.container\.env\..*", "github needs strategy matrix job runner env vars secrets inputs", ""),
+    (r"jobs\.\*\.container(\..*)?", "github needs strategy matrix vars inputs", ""),
+    (r"jobs\.\*\.continue-on-error", "github needs strategy matrix vars inputs", ""),
+    (r"jobs\.\*\.defaults\.run(\..*)?", "github needs strategy matrix env vars inputs", ""),
+    (r"jobs\.\*\.env\..*", "github needs strategy matrix vars secrets inputs", ""),
+    (r"jobs\.\*\.environment\.url", "github needs strategy matrix job runner env vars steps inputs", ""),
+    (r"jobs\.\*\.environment(\..*)?", "github needs strategy matrix vars inputs", ""),
+    (r"jobs\.\*\.if", "github needs vars inputs", "always cancelled success failure"),
+    (r"jobs\.\*\.name", "github needs strategy matrix vars inputs", ""),
+    (r"jobs\.\*\.outputs\..*", STEP_CONTEXTS, ""),
+    (r"jobs\.\*\.runs-on(\..*)?", "github needs strategy matrix vars inputs", ""),
+    (r"jobs\.\*\.secrets\..*", "github needs strategy matrix secrets inputs vars", ""),
+    (r"jobs\.\*\.services\.[^.]+\.credentials\..*", "github needs strategy matrix env vars secrets inputs", ""),
+    (r"jobs\.\*\.services\.[^.]+\.env\..*", "github needs strategy matrix job runner env vars secrets inputs", ""),
+    (r"jobs\.\*\.services(\..*)?", "github needs strategy matrix vars inputs", ""),
+    (r"jobs\.\*\.steps\.if", "github needs strategy matrix job runner env vars steps inputs", "always cancelled success failure hashFiles"),
+    (r"jobs\.\*\.steps\.(continue-on-error|env|name|run|timeout-minutes|with|working-directory)(\..*)?", STEP_CONTEXTS, "hashFiles"),
+    (r"jobs\.\*\.strategy(\..*)?", "github needs vars inputs", ""),
+    (r"jobs\.\*\.timeout-minutes", "github needs strategy matrix vars inputs", ""),
+    (r"jobs\.\*\.with\..*", "github needs strategy matrix inputs vars", ""),
+    (r"on\.workflow_dispatch\.inputs\.[^.]+\.default", "github inputs vars", ""),
+]
+
+
+def workflow_expressions(wf):
+    """(the key, the expression) of every ${{ }} in a workflow read by YAML, and the whole value of an `if`, which is an expression with or without them"""
+    found = []
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, path + ["on" if k is True else str(k)])         # YAML 1.1 reads the key `on` as true
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, path)                                          # the place of a step in its list is not part of the name of its key
+        elif isinstance(node, str):
+            key = re.sub(r"^jobs\.[^.]+", "jobs.*", ".".join(path))
+            exprs = re.findall(r"\$\{\{(.*?)\}\}", node, re.S)
+            if path and path[-1] == "if" and not exprs:
+                exprs = [node]
+            found.extend((key, e) for e in exprs)
+
+    walk(wf, [])
+    return found
+
+
+def expression_problems(key, expr):
+    """what the table says against an expression at a key: a context or a special function that is not there, or no entry for the key at all"""
+    for pattern, contexts, functions in AVAILABLE:
+        if re.fullmatch(pattern, key):
+            break
+    else:
+        return ["no entry for the key %s in the table of where the contexts are available" % key]
+    text = re.sub(r"'(?:[^']|'')*'", "''", expr)                       # what is between quotes is not an expression
+    used = set(re.findall(r"(?<![.\w])(%s)\b(?=\s*[.\[])" % "|".join(CONTEXT_NAMES), text))      # a name after a dot is a property (steps.x.outputs.matrix), not the context of that name
+    called = set(re.findall(r"(?<![.\w])([A-Za-z_]\w*)\s*\(", text)) & set(SPECIAL_FUNCTIONS)
+    return (["the context %s is not available at %s" % (c, key) for c in sorted(used - set(contexts.split()))] +
+            ["%s() is not available at %s" % (f, key) for f in sorted(called - set(functions.split()))])
+
+
+def workflow_problems(wf):
+    return ["%s: %s" % (key, p) for key, expr in workflow_expressions(wf) for p in expression_problems(key, expr)]
+
+
+def at(wf, *path):
+    for p in path:
+        wf = wf[p]
+    return wf
+
+
+def workflow_checks():
+    try:
+        import yaml
+    except ImportError:
+        check("PyYAML is there to read the workflow", False, "install python3-yaml")
+        return
+    with open(WORKFLOW, encoding="utf-8") as f:
+        wf = yaml.safe_load(f)
+    exprs = workflow_expressions(wf)
+    check("the workflow has expressions to judge, in more than one kind of key", len(exprs) > 10 and len({k for k, _ in exprs}) > 8, "%d expressions" % len(exprs))
+    check("every expression of the workflow is where GitHub has its contexts and functions", not workflow_problems(wf), "; ".join(workflow_problems(wf)))
+    # the check says no
+    def mutated(path, value):
+        m = copy.deepcopy(wf)
+        at(m, *path[:-1])[path[-1]] = value
+        return workflow_problems(m)
+    for label, path, value, needle in (
+            ("a runner context in the env of a job", ("jobs", "vm", "env", "WORK"), "${{ runner.temp }}/oup-work", "context runner is not available at jobs.*.env.WORK"),
+            ("a steps context in runs-on", ("jobs", "vm", "runs-on"), "${{ steps.a.outputs.b }}", "context steps is not available at jobs.*.runs-on"),
+            ("a secrets context in the if of a step", ("jobs", "vm", "steps", 0, "if"), "secrets.X == 'y'", "context secrets is not available at jobs.*.steps.if"),
+            ("an env context in the timeout of a job", ("jobs", "vm", "timeout-minutes"), "${{ env.X }}", "context env is not available at jobs.*.timeout-minutes"),
+            ("a status function in a run", ("jobs", "vm", "steps", 1, "run"), "echo ${{ always() }}", "always() is not available at jobs.*.steps.run"),
+            ("a hash of files in the if of a job", ("jobs", "plan", "if"), "hashFiles('x') != ''", "hashFiles() is not available at jobs.*.if"),
+            ("a job context in the name of a job", ("jobs", "vm", "name"), "${{ job.status }}", "context job is not available at jobs.*.name"),
+            ("a key the table does not know", ("jobs", "vm", "bogus"), "${{ github.sha }}", "no entry for the key jobs.*.bogus"),
+            ("a context in a string that is not an expression", ("jobs", "vm", "steps", 1, "run"), "echo runner.temp '${{ github.sha }}'", None)):
+        got = mutated(path, value)
+        check("the workflow check: %s" % label, (any(needle in g for g in got) and len(got) >= 1) if needle else not got, "got %s" % got)
+    got = mutated(("jobs", "vm", "steps", 0, "if"), "always() && hashFiles('x') != '' && steps.a.outcome == 'success' && matrix.leg == 'core' && runner.os == 'Linux'")
+    check("the workflow check lets through what a step's if may use", not got, "got %s" % got)
+    got = mutated(("jobs", "plan", "outputs", "matrix"), "${{ steps.plan.outputs.matrix }}")
+    check("the workflow check does not take a property named like a context for the context", not got, "got %s" % got)
 
 
 def static_checks():
@@ -1367,6 +2010,8 @@ def static_checks():
         check("the guest tools read as POSIX sh", p.returncode == 0, p.stdout.decode("utf-8", "replace"))
         check("the guest tools use no bashism the hop could break (no [[ test, no arrays, no $'..', no <<<, no process substitution)",
               not re.search(r"\[\[\s|<<<|<\(|\$'|\bdeclare\b|\blocal -a\b|\bmapfile\b|\bEPOCHREALTIME\b", guest.group(1)), "")
+    guest_checks()
+    workflow_checks()
     legs = json.load(open(LEGS_JSON))
     check("the legs file names the two legs, with what the workflow needs", [l["leg"] for l in legs] == ["core", "faults"] and all(
         {"leg", "name", "label", "id", "version", "base", "image", "sums", "algo", "args", "docker_from", "timeout", "prove_timeout"} <= set(l) for l in legs), "")
@@ -1387,6 +2032,8 @@ def static_checks():
         check("the workflow runs this test, the script and the report", "test-os-upgrade-proof.py" in text and "os-upgrade-proof.sh" in text and "os-upgrade-proof-report.py" in text, "")
         perms = wf.get("permissions")
         check("the workflow reads the repository and nothing else", perms == {"contents": "read"}, str(perms))
+    check("the preparation of the guest keeps cloud-init from rewriting /etc/hosts (sudo would say it cannot look the name up, to every command)", "manage_etc_hosts: false" in script and "/etc/cloud/cloud.cfg.d/" in script, "")
+    check("the start and the refresh wait five minutes for their answer", script.count('"${START_PATH}" "${body}" 300') == 2 and script.count("""POST "${REFRESH_PATH}" '{}' 300""") == 2, "")
     # the names the report gates on are the markers the script writes
     for cid in ("C1", "C2", "C3", "C4", "C5", "C6", "C7"):
         check("the script writes the markers of %s" % cid, ("marker case_%s_start" % cid) in script and ("marker case_%s_done" % cid) in script, "")
@@ -1395,8 +2042,14 @@ def static_checks():
 
 def main():
     static_checks()
+    if os.environ.get("STATIC_ONLY"):
+        return
     keep = KEEP
-    base_core = base_faults = None
+    base_core = base_faults = w_core = w_faults = None
+    if os.environ.get("SCENARIOS_ONLY"):
+        scenarios_core()
+        scenarios_faults(FaultsBase())
+        return
     if keep and os.path.isdir(os.path.join(keep, "core")) and os.environ.get("REPORT_ONLY"):
         base_core, base_faults = os.path.join(keep, "core"), os.path.join(keep, "faults")
     else:
@@ -1409,6 +2062,10 @@ def main():
             for n, src in (("core", base_core), ("faults", base_faults)):
                 shutil.rmtree(os.path.join(keep, n), ignore_errors=True)
                 shutil.copytree(src, os.path.join(keep, n))
+        # what the fake saw of the runner: the rehearsal of the page has no safety net and comes first, the rest of the starts have the one of the hop; the kill of the second fault and the reset of the fourth
+        # fell in the middle of dpkg, and the kill of the first, in a block where there is none
+        check("the runner starts the rehearsal the way the page does (no safety net) first, then with the safety net of the hop", w_core.starts == [(True, ""), (True, "snapshot"), (False, "snapshot"), (False, "snapshot")], str(w_core.starts))
+        check("the runner kills the second unit and resets the machine in the middle of dpkg, and kills the first before dpkg", w_faults.faultlog == [("kill", False), ("kill", True), ("reset", True)], str(w_faults.faultlog))
     rc, text = report(base_core, "core")
     check("a healthy core leg passes, every case by name", rc == 0 and head(text) == "PASS" and all(verdict_line(text, n) and verdict_line(text, n)[0] == "PASS" for n in (
         "C1 flag off", "C2 switch on", "C3 refresh", "C4 plan and rehearsal", "C5 hostname_mismatch", "C5 acks_missing", "C5 dpkg lock", "C5 run_open", "C5 os_upgrade_open",
@@ -1417,20 +2074,23 @@ def main():
     rc, text = report(base_faults, "faults")
     check("a healthy faults leg passes, every fault by name", rc == 0 and head(text) == "PASS" and all(verdict_line(text, n) and verdict_line(text, n)[0] == "PASS" for n in (
         "F1 the unit killed before", "F2 the unit killed after", "F3 the network cut after", "F4 a power cut")), text[:2500])
+    check("a healthy faults leg catches the interruption of the first fault with its polls of one second (the road through unwinding is for the polls that miss it)", "did not catch" not in text, text[:1500])
+    check("a healthy faults leg prints the clock it corrected and the dpkg it saw", all(k in text for k in ("F1 clock:", "F2 clock:", "F4 clock:", "F4-reset clock:", "F2 dpkg:", "F4 dpkg:")), text[-1800:])
     run_mutations("core", base_core, "core", core_mutations())
     run_mutations("faults", base_faults, "faults", faults_mutations())
     if os.environ.get("REPORT_ONLY") or os.environ.get("BASE_ONLY"):
         return
     # the scenarios
     scenarios_core()
-    scenarios_faults(w_faults, base_faults)
+    scenarios_faults(FaultsBase(w_faults, base_faults))
 
 
 def scenarios_core():
     env = {"WAIT_BOOT": "60"}
     scenario("scenario: a core that starts with the flag off", "core", "c1", {"start_ignores_beta": True}, fails("C1 flag off", "POST start answers beta_off"))
     out, _, _ = scenario("scenario: a token that runs out is renewed by the runner", "core", "c1,c2", {"token_valid_s": 100}, passes("C1 flag off"))
-    check("scenario: the runner logged in again when the token ran out", any(n.endswith(".notes") and "relogin" in read_out(out, n) for n in os.listdir(out)), "")
+    if out:
+        check("scenario: the runner logged in again when the token ran out", any(n.endswith(".notes") and "relogin" in read_out(out, n) for n in os.listdir(out)), "")
     scenario("scenario: a discard that leaves the timers stopped", "core", "c2,c4", {"timers_stay_stopped": True}, fails("C4 plan and rehearsal", "the timers of apt are as they were"))
     scenario("scenario: a start that dpkg's lock does not stop", "core", "c2,c4,c5", {"lock_ignored": True}, fails("C5 dpkg lock", "is refused"))
     scenario("scenario: a lock that cannot be given back", "core", "c2,c4,c5", {"lock_stays": True}, invalid_run("dpkg's lock was not given back"))
@@ -1441,16 +2101,31 @@ def scenarios_core():
     scenario("scenario: a plan that is blocked", "core", "c2,c4,c5,c6,c7", {"plan_blocked": True}, fails("C4 plan and rehearsal", "can be started from"))
     scenario("scenario: a hop that ends with findings", "core", "c2,c4,c7", {"findings": True}, passes("C7 the hop", "docker_source_unreachable"))
     scenario("scenario: a refresh that needs no restart", "core", "c2,c3", {"refresh_wants_reboot": False}, passes("C3 refresh"))
+    # the start answers when it has taken the facts of the machine: a minute and a half is the ordinary case (the healthy runs have it), and more than the runner waits is not "no run"
+    scenario("scenario: a start that takes four minutes to answer", "core", "c2,c4", {"start_takes_s": 240}, passes("C4 plan and rehearsal"))
+    scenario("scenario: a start that answers after the runner stopped waiting began a run that nobody knows of", "core", "c2,c4", {"start_takes_s": 400}, invalid_run("a run is open that the runner does not know of (run 0b1c2d3e-0001"))
+    scenario("scenario: a refresh that answers after the runner stopped waiting", "core", "c2,c3", {"start_takes_s": 400}, invalid_run("a run is open that the runner does not know of (run 0b1c2d3e-0001"))
+    scenario("scenario: a hop that ends with findings of every severity but error", "core", "c2,c4,c7", {"findings": "mixed"}, passes("C7 the hop", "info docker_source_paused"))
 
 
-def scenarios_faults(base_world, base_out):
+def scenarios_faults(base):
     """each fault, on a fake that does it wrong, from the snapshot of the healthy faults run"""
-    scenario("scenario: a core that repairs a killed hop by itself", "faults", "f2", {"auto_repair": True}, fails("F2 the unit killed after", "no automatic repair"), world_from=base_world, base_out=base_out)
-    scenario("scenario: a network cut that the run does not feel", "faults", "f3", {"net_cut_ignored": True}, not_testable("F3 the network cut after", "nothing left to download"), world_from=base_world, base_out=base_out)
-    scenario("scenario: a network that cannot be given back", "faults", "f3", {"route_stays_cut": True}, invalid_run("the network was not given back"), world_from=base_world, base_out=base_out)
-    scenario("scenario: a repair after a power cut that stops with a class", "faults", "f4", {"resume_fails": True}, passes("F4 a power cut", "FINDING"), world_from=base_world, base_out=base_out)
-    scenario("scenario: a repair that stops with a class nobody knows", "faults", "f4", {"resume_fails": True, "resume_fail_class": "zzz"}, fails("F4 a power cut", "precise class"), world_from=base_world, base_out=base_out)
-    scenario("scenario: a repair that does not run after a kill", "faults", "f2", {"resume_fails": True}, fails("F2 the unit killed after", "resume completes the hop"), world_from=base_world, base_out=base_out)
+    scenario("scenario: a core that repairs a killed hop by itself", "faults", "f2", {"auto_repair": True}, fails("F2 the unit killed after", "no automatic repair"), base=base)
+    scenario("scenario: a network cut that the run does not feel", "faults", "f3", {"net_cut_ignored": True}, not_testable("F3 the network cut after", "nothing left to download"), base=base)
+    scenario("scenario: a network that cannot be given back", "faults", "f3", {"route_stays_cut": True}, invalid_run("the network was not given back"), base=base)
+    scenario("scenario: a cut that leaves the guest on the Internet", "faults", "f3", {"v6_stays": True}, invalid_run("the network could not be cut"), base=base)
+    scenario("scenario: a cut that is missed by the first two ssh", "faults", "f3", {"ssh_drops": {"route_cut": 2, "route_restore": 2, "set_clock": 1}}, passes("F3 the network cut after"), base=base)
+    scenario("scenario: a repair after a power cut that stops with a class", "faults", "f4", {"resume_fails": True}, passes("F4 a power cut", "FINDING"), base=base)
+    scenario("scenario: a repair that stops with a class nobody knows", "faults", "f4", {"resume_fails": True, "resume_fail_class": "zzz"}, fails("F4 a power cut", "precise class"), base=base)
+    scenario("scenario: a repair that does not run after a kill", "faults", "f2", {"resume_fails": True}, fails("F2 the unit killed after", "resume completes the hop"), base=base)
+    # what a real guest does that a tidy one does not
+    scenario("scenario: a kill whose reply is lost, and said again while the unwind holds the name", "faults", "f1", {"ssh_drops": {}, "ssh_lost": {"kill_unit": 1}}, passes("F1 the unit killed before"), base=base)
+    scenario("scenario: a kill that no ssh reaches", "faults", "f1", {"ssh_drops": {"kill_unit": 3}}, invalid_run("the unit could not be killed"), base=base)
+    scenario("scenario: an invocation that no ssh asks for", "faults", "f1", {"ssh_drops": {"unit_id": 3}}, invalid_run("did not answer when the invocation of the unit was asked for"), base=base)
+    scenario("scenario: an interruption that the polls miss", "faults", "f1", {"notice_s": 1.5, "interrupted_s": 0.5}, passes("F1 the unit killed before", "did not catch"), base=base)
+    scenario("scenario: a clock that no ssh reaches", "faults", "f1", {"ssh_drops": {"set_clock": 3}}, invalid_run("the clock of the restored guest could not be set"), base=base)
+    scenario("scenario: a dpkg that is never seen at work after the point of no return", "faults", "f2", {"dpkg_never": True}, not_testable("F2 the unit killed after", "dpkg was not seen"), base=base)
+    scenario("scenario: a dpkg that is never seen at work in block 6", "faults", "f4", {"dpkg_never": True}, not_testable("F4 a power cut", "dpkg was not seen"), base=base)
 
 
 if __name__ == "__main__":

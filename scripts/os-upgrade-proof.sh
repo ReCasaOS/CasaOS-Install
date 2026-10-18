@@ -28,7 +28,8 @@
 #   C6 call-off      the hop is started and called off in block 3 or 4: the machine is put back
 #   C7 the hop       the real one: the blocks, the restart, the check, the close; the first real numbers of the engine
 # Leg faults (every fault starts from a snapshot of the whole guest, memory included, taken after C4, so the plan is still live):
-#   F1 the unit killed before the point of no return   F2 the unit killed after it   F3 the network cut after it   F4 a power cut (the QEMU monitor's reset) in block 6
+#   F1 the unit killed before the point of no return   F2 the unit killed after it, with dpkg at work   F3 the network cut after it   F4 a power cut (the QEMU monitor's reset) in block 6, with dpkg at work
+# Each fault starts with the clock of the restored guest set from the runner's; the verbs that change the guest (the kill, the cut, the clock) are said up to three times and their effect is seen.
 #
 # The helpers of the other proofs are reused, not rewritten: os-readiness-proof.sh is SOURCED in the guest (Docker, the installer, the witnesses, the waits for the services, the
 # tolerant apt-get update, the dpkg lock holder), and the preparation is os-plan-proof.sh's main() up to its window, copied with the changes this proof needs (marked where they are).
@@ -72,6 +73,8 @@ LIB=/usr/local/lib/oup
 OSR=/usr/local/lib/osr
 UNIT=casaos-os-upgrade.service
 TIMERS="apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service"
+# what a login makes under /run/systemd (a scope, a slice and drop-ins, under a new number every time, this tool's own ssh login included) is not a change of the machine
+NAMES_SKIP='^/run/systemd/(transient|system)/(session-|user-|user@)'
 
 sec() { printf '@@ %s\n' "$1"; }
 yn() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
@@ -119,12 +122,44 @@ snap() {
         fi
     done
     sec names
-    find /etc /var/lib/casaos /var/backups /var/lib/dpkg /var/lib/apt /var/cache/apt /run/systemd/transient /run/systemd/system -xdev 2>/dev/null | sort
-    sec units
-    systemctl list-units --all --plain --no-legend 'casaos-os-upgrade*' 2>/dev/null
-    sec pid1
-    journalctl -b -o cat _PID=1 --no-pager 2>/dev/null | grep casaos-os-upgrade || true
+    find /etc /var/lib/casaos /var/backups /var/lib/dpkg /var/lib/apt /var/cache/apt /run/systemd/transient /run/systemd/system -xdev 2>/dev/null | sort | grep -Ev "$NAMES_SKIP"
+    units_section
+    pid1_section
+    runs_section
     sec end
+}
+
+# The sections that are empty when all is well say that they were asked ("# asked", "# lines <n>"): an empty section that nothing wrote is not a machine without a unit of the engine.
+units_section() {
+    sec units
+    if u="$(systemctl list-units --all --plain --no-legend 'casaos-os-upgrade*' 2>/dev/null)"; then
+        echo "# asked"
+        [ -z "$u" ] || printf '%s\n' "$u"
+    fi
+}
+
+pid1_section() {
+    sec pid1
+    j="$(journalctl -b -o cat _PID=1 --no-pager 2>/dev/null)"
+    n=0
+    [ -z "$j" ] || n="$(printf '%s\n' "$j" | wc -l | tr -d ' ')"
+    printf '# lines %s\n' "$n"
+    if [ "$n" -gt 0 ]; then printf '%s\n' "$j" | grep casaos-os-upgrade || true; fi
+}
+
+# the kept runs: for each, the folder of its backup (bk-path), whether it is still there, and where it was moved to (bk-done, bk-aborted)
+runs_section() {
+    sec runs
+    for d in "$RUN"/*/; do
+        [ -d "$d" ] || continue
+        p="$(cat "${d}bk-path" 2>/dev/null)"
+        left=no
+        if [ -n "$p" ] && [ -e "$p" ]; then left=yes; fi
+        moved=-
+        if [ -d "${d}bk-aborted" ]; then moved=bk-aborted; fi
+        if [ -d "${d}bk-done" ]; then moved=bk-done; fi
+        printf '%s\t%s\t%s\t%s\n' "$(basename "$d")" "${p:--}" "$left" "$moved"
+    done
 }
 
 lock_start() {
@@ -152,22 +187,102 @@ lock_stop() {
     return 1
 }
 
-route_cut() {
-    r="$(ip route show default | sed -n 1p)"
-    if [ -z "$r" ]; then echo "no default route"; return 3; fi
-    printf '%s\n' "$r" >"$LIB/route.saved"
-    ip route del default && echo cut
+# the routes that carry the guest out: every default route of both families, and the site-local prefix (fec0::/64) that the router advertisement of QEMU's slirp brings
+routes() {
+    ip -4 route show default | sed 's/^/4 /'
+    ip -6 route show 2>/dev/null | grep -E '^(default|fec0:)' | sed 's/^/6 /'
 }
 
-route_restore() {
-    if [ ! -s "$LIB/route.saved" ]; then echo "nothing saved"; return 0; fi
-    if [ -n "$(ip route show default)" ]; then
-        echo present
-    else
-        # shellcheck disable=SC2046
-        ip route add $(cat "$LIB/route.saved") && echo restored
+# route_cut: remembers the routes (once: said again it keeps what the first time saved), takes them all away, and proves the cut with a request from the guest that has to fail
+route_cut() {
+    if [ ! -s "$LIB/route.saved" ]; then routes >"$LIB/route.saved"; fi
+    if [ ! -s "$LIB/route.saved" ]; then echo "no default route"; return 3; fi
+    while [ -n "$(ip -4 route show default)" ] && ip -4 route del default; do :; done
+    while [ -n "$(ip -6 route show default)" ] && ip -6 route del default; do :; done
+    while ip -6 route show | grep -q '^fec0:' && ip -6 route del fec0::/64; do :; done
+    if curl -sS -m 10 -o /dev/null http://deb.debian.org/debian/dists/bookworm/InRelease 2>/dev/null; then
+        echo "still reachable"
+        return 1
     fi
-    [ -n "$(ip route show default)" ] && : >"$LIB/route.saved"
+    echo cut
+}
+
+# route_restore: puts back what route_cut took away (the IPv4 default route is what must be there after; the others come back with the router advertisement if they do not)
+route_restore() {
+    had="$(ip -4 route show default)"
+    if [ -s "$LIB/route.saved" ]; then
+        while read -r fam rest; do
+            # shellcheck disable=SC2086
+            ip -"$fam" route add $rest 2>/dev/null || true
+        done <"$LIB/route.saved"
+    fi
+    if [ -z "$(ip -4 route show default)" ]; then
+        echo "no default route"
+        return 1
+    fi
+    : >"$LIB/route.saved"
+    if [ -n "$had" ]; then echo present; else echo restored; fi
+}
+
+# unit_id: the invocation of the unit of the engine, nothing when none is active. The unwind and the repair of a stop run under the same name, as another invocation.
+unit_id() { systemctl show -p InvocationID --value "$UNIT" 2>/dev/null; }
+
+# kill_unit <invocation>: kills the unit only while it is the invocation that was asked for, so that it can be said again (a second try after a lost reply must not kill the unwind that took the name),
+# says whether dpkg was at work, and ends with "gone" or "alive"
+kill_unit() {
+    want="$1"
+    if [ -z "$want" ]; then echo "no invocation given"; return 2; fi
+    if [ "$(unit_id)" = "$want" ]; then
+        if pgrep -x dpkg >/dev/null 2>&1; then echo "dpkg_at_kill yes"; else echo "dpkg_at_kill no"; fi
+        systemctl kill "$UNIT"
+        echo "rc $?"
+    fi
+    i=0
+    while [ "$i" -lt "${KILL_WAIT:-100}" ]; do
+        if [ "$(unit_id)" != "$want" ]; then echo gone; return 0; fi
+        sleep 1
+        i=$((i + 1))
+    done
+    echo alive
+    return 1
+}
+
+# dpkg_wait <seconds>: looks every second for a dpkg at work and says "seen <second>" when it has been there for three looks in a row (a dpkg that comes and goes is not the one to cut off in the middle),
+# "never <seconds>" when it was not
+dpkg_wait() {
+    max="${1:-180}"
+    i=0
+    run=0
+    while [ "$i" -lt "$max" ]; do
+        if pgrep -x dpkg >/dev/null 2>&1; then run=$((run + 1)); else run=0; fi
+        if [ "$run" -ge 3 ]; then echo "seen $i"; return 0; fi
+        sleep 1
+        i=$((i + 1))
+    done
+    echo "never $max"
+    return 1
+}
+
+# set_clock <epoch>: a guest that was restored from a snapshot has the clock of the snapshot, and a Release file of a mirror dated after it is not valid yet. The services that would fight the step are
+# stopped for it and started again, and the seconds the clock was behind are said
+set_clock() {
+    case "$1" in '' | *[!0-9]*) echo "no epoch"; return 2 ;; esac
+    before="$(date -u +%s)"
+    stopped=""
+    for svc in systemd-timesyncd chrony chronyd; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl stop "$svc" 2>/dev/null
+            stopped="$stopped $svc"
+        fi
+    done
+    if ! date -u -s "@$1" >/dev/null; then echo "the clock could not be set"; return 1; fi
+    now="$(date -u +%s)"
+    for svc in $stopped; do systemctl start "$svc" 2>/dev/null; done
+    echo "skew $(($1 - before))"
+    off=$((now - $1))
+    if [ "$off" -lt 0 ]; then off=$((0 - off)); fi
+    if [ "$off" -gt 10 ]; then echo "the clock is $off s from the runner's"; return 1; fi
+    echo set
 }
 
 runfiles() {
@@ -208,7 +323,10 @@ hostname) hostname ;;
 snap) snap ;;
 flag) yn test -e "$RUN/busy" ;;
 unit) systemctl is-active "$UNIT" 2>/dev/null || true ;;
-kill_unit) systemctl kill "$UNIT"; echo "rc $?" ;;
+unit_id) unit_id ;;
+kill_unit) kill_unit "$@" ;;
+dpkg_wait) dpkg_wait "$@" ;;
+set_clock) set_clock "$@" ;;
 lock_start) lock_start ;;
 lock_stop) lock_stop ;;
 lock_state) python3 "$OSR/lockprobe.py" /var/lib/dpkg/lock-frontend ;;
@@ -227,7 +345,7 @@ OUP_GUEST
 #   get FILE PATH                      a value of a JSON file by its dotted path ("-" when it is not there)
 #   row FILE HTTP CURL FLAG T0 T1      the row of a poll of the status (polls-<tag>.tsv)
 #   planrow FILE HTTP CURL T0 T1       the row of a poll of the plan
-#   startbody PLANFILE HOST REHEARSAL ACKS   the body of a start, built from the plan as the page builds it (ACKS: full or none)
+#   startbody PLANFILE HOST REHEARSAL ACKS NET   the body of a start, built from the plan as the page builds it (ACKS: full or none; NET: the safety net, empty for the rehearsal of the page)
 #   snapsplit FILE PREFIX              the sections of a snapshot into PREFIX.<section> (status 1 when it has no end)
 write_oup_py() {
     cat >"$1" <<'OUP_PY'
@@ -295,7 +413,7 @@ def cmd_planrow(path, http, curl, t0, t1):
     print("\t".join(clean(show(c)) for c in (t0, t1, http, curl, d.get("state"), d.get("phase"))))
 
 
-def cmd_startbody(path, host, rehearsal, acks):
+def cmd_startbody(path, host, rehearsal, acks, net):
     plan = data_of(path).get("plan")
     if not isinstance(plan, dict):
         sys.exit(1)
@@ -303,7 +421,7 @@ def cmd_startbody(path, host, rehearsal, acks):
     paused = sorted({x["file"] + (":%d" % x["line"] if x.get("line", 0) > 0 else "") for x in plan.get("paused") or []})
     reh = rehearsal == "true"
     given = ["no_interruption"] + ([] if reh else ["no_way_back"]) + (["sources_paused"] if paused else []) + (["removals_read"] if removals else [])
-    body = {"plan_id": plan.get("plan_id"), "rehearsal": reh, "safety_net": "snapshot", "hostname": host, "accept_removals": removals, "paused_sources": paused,
+    body = {"plan_id": plan.get("plan_id"), "rehearsal": reh, "safety_net": net, "hostname": host, "accept_removals": removals, "paused_sources": paused,
             "acks": given if acks == "full" else []}
     print(json.dumps(body, separators=(",", ":")))
 
@@ -327,7 +445,7 @@ def cmd_snapsplit(path, prefix):
                 f.write("".join(l + "\n" for l in lines))
 
 
-COMMANDS = {"get": (cmd_get, 2), "row": (cmd_row, 6), "planrow": (cmd_planrow, 5), "startbody": (cmd_startbody, 4), "snapsplit": (cmd_snapsplit, 2)}
+COMMANDS = {"get": (cmd_get, 2), "row": (cmd_row, 6), "planrow": (cmd_planrow, 5), "startbody": (cmd_startbody, 5), "snapsplit": (cmd_snapsplit, 2)}
 if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS or len(sys.argv) - 2 != COMMANDS[sys.argv[1]][1]:
     sys.stderr.write("usage: oup.py get|row|planrow|startbody|snapsplit ...\n")
     sys.exit(2)
@@ -386,6 +504,9 @@ guest_prepare() {
     hostnamectl set-hostname "${HOST_NAME}"
     # sudo and the services look the name up: without a line for it every `sudo` of the run says "unable to resolve host"
     echo "127.0.1.1 ${HOST_NAME}" >>/etc/hosts
+    # cloud-init rewrites /etc/hosts at every start (and takes this line out): sudo would then say on stderr that it cannot look the name up, to every command the runner sends
+    mkdir -p /etc/cloud/cloud.cfg.d
+    printf 'manage_etc_hosts: false\npreserve_hostname: true\n' >/etc/cloud/cloud.cfg.d/99-oup-hosts.cfg
     install_docker
     install_casaos
     start_things
@@ -452,6 +573,22 @@ gssh() { timeout -k 5 "${SSH_LIMIT}" ssh -n -F "${SSH_CONFIG}" -o ConnectTimeout
 # g <verb> [words]: a verb of the guest's tool
 g() { gssh "sudo sh ${GUEST_TOOLS_DIR}/guest.sh $*"; }
 boot_id() { g boot_id 2>/dev/null | tr -d '\r\n'; }
+# g3 <file> <verb> [words]: a verb of the guest's tool said up to three times (an ssh is missed now and then while dpkg keeps the four processors busy; the verbs that change the guest can be said again), until one ends
+# well. What each try printed goes into <file> after a "# try n" line, what it said on stderr into <file>.err (sudo may say what it likes there: the verdicts read stdout only). Status 0: a try ended well.
+g3() {
+    local out="$1" try rc=1
+    shift
+    : >"${out}"
+    : >"${out}.err"
+    for try in 1 2 3; do
+        echo "# try ${try}" >>"${out}"
+        g "$@" >>"${out}" 2>>"${out}.err"
+        rc=$?
+        [ "${rc}" -ne 0 ] || return 0
+        nap 3
+    done
+    return "${rc}"
+}
 
 # qmon <HMP command...>: the QEMU monitor (savevm, loadvm, system_reset), its reply on stdout, status 1 when it does not answer or says an error
 qmon() {
@@ -548,6 +685,18 @@ snap() {
 
 # evidence <tag>: the run folder's markers and the end of the unit's output, and the units, as the guest has them (best effort; for whoever reads the report)
 evidence() { g runfiles >"${OUT}/runfiles-$1.txt" 2>&1 || true; }
+
+# after_silence <name>: a call that begins something (a start, a refresh) and got no answer may have begun it all the same (the engine answers once it has taken the facts of the machine, which is minutes on a loaded one):
+# the status says. A run that is open and that the runner does not know of ends the run of the proof, with its id: "no answer" is not "no run".
+after_silence() {
+    local name="$1" state
+    [ "${CALL_CODE}" = 000 ] || return 0
+    call "${name}-lookup" GET "${STATUS_PATH}" "" 30
+    state="$(py get "${OUT}/${name}-lookup.json" data.state)"
+    [ "${CALL_CODE}" = 200 ] || abort "the call ${name} got no answer in its time (curl ${CALL_RC}) and the status did not answer either: whether a run was begun is not known"
+    [ "${state}" = idle ] || abort "the call ${name} got no answer in its time and a run is open that the runner does not know of (run $(py get "${OUT}/${name}-lookup.json" data.run_id), state ${state})"
+    CALL_CODE=000
+}
 
 # the rows of the status polls: P_* of the latest poll
 P_STATE=- P_REASON=- P_CAUSE=- P_BIDX=- P_BID=- P_PNR=- P_HALF=- P_BUSY=- P_ATTEMPT=- P_FCLASS=- P_HINT=- P_FLAG=- P_RUN=- P_BETA=- P_ACTIONS=- P_HTTP=000 P_CURL=0 P_T0=0 P_T1=0
@@ -674,13 +823,15 @@ ensure_plan() {
     plan_startable
 }
 
-# start_run <name> <rehearsal: true|false> [acks: full|none] [hostname]: POST start, with the body the page builds from the live plan (plan_id, the name of the machine, the removals and the
-# sources put aside as the plan lists them, the acknowledgements it needs). Status 1 when there is no plan to build it from.
+# start_run <name> <rehearsal: true|false> [acks: full|none] [hostname] [safety net]: POST start, with the body the page builds from the live plan (plan_id, the name of the machine, the removals and the
+# sources put aside as the plan lists them, the acknowledgements it needs, the safety net: `snapshot` unless one is given, and an empty one is given by the page for a rehearsal). The start answers
+# when it has taken the facts of the machine (two minutes for the facts alone): five minutes. Status 1 when there is no plan to build it from.
 start_run() {
-    local name="$1" reh="$2" acks="${3:-full}" host="${4:-${GUEST_HOST}}" body
+    local name="$1" reh="$2" acks="${3:-full}" host="${4:-${GUEST_HOST}}" net="${5-snapshot}" body
     [ -s "${PLAN_FILE}" ] || return 1
-    body="$(py startbody "${PLAN_FILE}" "${host}" "${reh}" "${acks}")" || return 1
-    call "${name}" POST "${START_PATH}" "${body}" 60
+    body="$(py startbody "${PLAN_FILE}" "${host}" "${reh}" "${acks}" "${net}")" || return 1
+    call "${name}" POST "${START_PATH}" "${body}" 300
+    after_silence "${name}"
     return 0
 }
 
@@ -730,8 +881,10 @@ case_c1() {
     marker c1_window
     snap c1-before || return 1
     call c1-status-before GET "${STATUS_PATH}"
-    call c1-start POST "${START_PATH}" "${body}"
-    call c1-refresh POST "${REFRESH_PATH}" '{}'
+    call c1-start POST "${START_PATH}" "${body}" 300
+    after_silence c1-start
+    call c1-refresh POST "${REFRESH_PATH}" '{}' 300
+    after_silence c1-refresh
     call c1-status-after GET "${STATUS_PATH}"
     snap c1-after || return 1
     marker case_C1_done
@@ -748,7 +901,8 @@ case_c2() {
 case_c3() {
     marker case_C3_start
     snap c3-before || return 1
-    call c3-refresh POST "${REFRESH_PATH}" '{}' 60
+    call c3-refresh POST "${REFRESH_PATH}" '{}' 300
+    after_silence c3-refresh
     if [ "${CALL_CODE}" = 202 ]; then
         wait_for c3-run "${WAIT_REFRESH}" "refreshed reboot_first" "" "${STOP_STATES}"
         evidence c3-run
@@ -778,7 +932,7 @@ case_c4() {
     plan_make c4-plan || true
     if plan_startable; then
         snap c4-before || return 1
-        start_run c4-start true
+        start_run c4-start true full "${GUEST_HOST}" ""
         if [ "${CALL_CODE}" = 202 ]; then
             wait_for c4-run "${WAIT_REHEARSE}" "rehearsed" "" "${STOP_STATES}"
             evidence c4-run
@@ -816,13 +970,13 @@ case_c5() {
     snap c5-before || return 1
     start_run c5-hostname false full "${GUEST_HOST}x"
     start_run c5-acks false none
-    if g lock_start >"${OUT}/c5-lock.start" 2>&1; then
+    if g lock_start >"${OUT}/c5-lock.start" 2>"${OUT}/c5-lock.start.err"; then
         echo pending >"${WORK}/pending-lock"
-        g lock_state >"${OUT}/c5-lock.during" 2>&1 || true
+        g lock_state >"${OUT}/c5-lock.during" 2>"${OUT}/c5-lock.during.err" || true
         start_run c5-lock true
-        g lock_stop >"${OUT}/c5-lock.stop" 2>&1 || true
-        g lock_state >"${OUT}/c5-lock.undone" 2>&1 || true
-        if [ "$(tr -d '\r\n' <"${OUT}/c5-lock.undone")" = free ]; then rm -f "${WORK}/pending-lock"; else harness_invalid C5 "dpkg's lock was not given back"; fi
+        g lock_stop >"${OUT}/c5-lock.stop" 2>"${OUT}/c5-lock.stop.err" || true
+        g lock_state >"${OUT}/c5-lock.undone" 2>"${OUT}/c5-lock.undone.err" || true
+        if grep -qx free "${OUT}/c5-lock.undone"; then rm -f "${WORK}/pending-lock"; else harness_invalid C5 "dpkg's lock was not given back"; fi
         # a start that the lock did not stop began a rehearsal: it is called off and closed
         if [ "$(cat "${OUT}/c5-lock.code" 2>/dev/null)" = 202 ]; then close_run c5-lock 900 || true; fi
     else
@@ -932,9 +1086,53 @@ case_c7() {
 # ---- the faults ---------------------------------------------------------------------------------------------------------------------
 
 SNAP_NAME=oupbase
-FAULT_OBSERVE="${FAULT_OBSERVE:-100}"
+FAULT_OBSERVE="${FAULT_OBSERVE:-180}"
 F4_BLOCK="${F4_BLOCK:-full}"
-F4_DELAY="${F4_DELAY:-20}"
+# (block 5 lasted a minute in the measured hop; block 6 is longer, and apt solves and downloads before dpkg begins: the wait is for the block, and ends when dpkg is seen)
+DPKG_WAIT="${DPKG_WAIT:-600}"
+
+# guest_clock <name>: a guest restored from a snapshot has the clock of the instant of the snapshot (minutes to hours behind), and a Release file of a mirror dated after it is "not valid yet" to the first apt-get update of
+# the hop: the clock is set from the runner's, the epoch taken again for each of three tries. <name>.clock says how far behind it was ("skew <seconds>") and "set". Status 1: it could not be set (recorded as the harness's).
+guest_clock() {
+    local name="$1" try
+    : >"${OUT}/${name}.clock"
+    for try in 1 2 3; do
+        now_s
+        echo "# try ${try}" >>"${OUT}/${name}.clock"
+        if g set_clock "${NOW_S}" >>"${OUT}/${name}.clock" 2>>"${OUT}/${name}.clock.err"; then return 0; fi
+        nap 3
+    done
+    harness_invalid "${name}" "the clock of the restored guest could not be set from the runner's: $(tr -d '\r' <"${OUT}/${name}.clock" | tr '\n' ' ' | cut -c1-200)"
+    return 1
+}
+
+# dpkg_gate <id>: waits until dpkg is at work (the guest looks every second, up to DPKG_WAIT seconds, and wants it there for three looks in a row), so that the cut that follows lands in the middle of dpkg and not in
+# apt's solver or its download. <id>.dpkg says what was seen ("seen <second>" or "never <seconds>"). Status 1: it was not seen.
+dpkg_gate() {
+    local id="$1" try
+    : >"${OUT}/${id}.dpkg"
+    : >"${OUT}/${id}.dpkg.err"
+    for try in 1 2 3; do
+        SSH_LIMIT=$((DPKG_WAIT + 90)) g dpkg_wait "${DPKG_WAIT}" >>"${OUT}/${id}.dpkg" 2>>"${OUT}/${id}.dpkg.err" || true
+        grep -qE '^(seen|never) ' "${OUT}/${id}.dpkg" && break
+    done
+    grep -q '^seen ' "${OUT}/${id}.dpkg"
+}
+
+# kill_unit_now <id>: kills the unit of the run as it is now (its invocation is asked first and given to the kill, which makes the kill safe to say again), and sees it gone. <id>.kill has what the tries said.
+# Status 0: gone. 2: no unit was active. 1: it could not be killed (recorded as the harness's).
+kill_unit_now() {
+    local id="$1" inv
+    if ! g3 "${OUT}/${id}.unit-id" unit_id; then
+        harness_invalid "${id}" "the guest did not answer when the invocation of the unit was asked for"
+        return 1
+    fi
+    inv="$(grep -v '^#' "${OUT}/${id}.unit-id" | tail -n 1 | tr -d '\r\n ')"
+    [ -n "${inv}" ] || return 2
+    if SSH_LIMIT=200 g3 "${OUT}/${id}.kill" kill_unit "${inv}"; then return 0; fi
+    harness_invalid "${id}" "the unit could not be killed: $(grep -v '^#' "${OUT}/${id}.kill" | tr -d '\r' | tr '\n' ' ' | cut -c1-200)"
+    return 1
+}
 
 # fault_begin <id>: the whole machine as it was after C4 (the snapshot is of the memory too: the plan is live), the guest waited for, the core and the plan asked
 fault_begin() {
@@ -946,6 +1144,7 @@ fault_begin() {
         return 1
     fi
     wait_boot "${id}-restored" none 600 || true
+    guest_clock "${id}" || { marker "case_${id}_done"; return 1; }
     wait_for "${id}-idle" 300 "idle" "" "${STOP_STATES}"
     call "${id}-planlive" GET "${PLAN_PATH}" "" 30
     PLAN_FILE="${OUT}/${id}-planlive.json"
@@ -973,20 +1172,28 @@ fault_resume() {
 }
 
 fault_f1() {
+    local rc
     fault_begin F1 || return 0
     start_run f1-start false
     if [ "${CALL_CODE}" = 202 ]; then
         wait_for f1-run 900 "" pred_early_block "${STOP_STATES} awaiting_reboot"
         if pred_early_block; then
-            g kill_unit >"${OUT}/f1.kill" 2>&1 || true
-            wait_for f1-after "${WAIT_UNWIND}" "failed" "" "needs_attention stopped_at_waypoint awaiting_reboot manual manual_done"
-            evidence f1-after
-            call f1-status-failed GET "${STATUS_PATH}"
-            wait_flag_gone f1 "${FLAG_SECONDS}"
-            snap f1-after || return 1
-            if [ "${P_STATE}" = failed ]; then
-                call f1-ack POST "${ACK_PATH}" '{"action":"acknowledge"}' 60
-                call f1-status-closed GET "${STATUS_PATH}"
+            kill_unit_now F1
+            rc=$?
+            if [ "${rc}" -eq 2 ]; then
+                echo "no unit of the engine was active when the kill was due (state ${P_STATE}, block ${P_BID})" >"${OUT}/F1.untestable"
+            elif [ "${rc}" -eq 0 ]; then
+                # the core sees the unit gone at its next look, and `interrupted` lasts until the look after (it launches the unwind then): polled every second, and with nothing else asked of the guest, it is caught
+                # most of the time; the report also takes the road through unwinding to failed with the reason interrupted_killed as the proof of the interruption
+                POLL_EVERY=1 POLL_FLAG=0 wait_for f1-after "${WAIT_UNWIND}" "failed" "" "needs_attention stopped_at_waypoint awaiting_reboot manual manual_done"
+                evidence f1-after
+                call f1-status-failed GET "${STATUS_PATH}"
+                wait_flag_gone f1 "${FLAG_SECONDS}"
+                snap f1-after || return 1
+                if [ "${P_STATE}" = failed ]; then
+                    call f1-ack POST "${ACK_PATH}" '{"action":"acknowledge"}' 60
+                    call f1-status-closed GET "${STATUS_PATH}"
+                fi
             fi
         else
             echo "the hop was past block 4 (state ${P_STATE}, block ${P_BID}) before the unit could be killed" >"${OUT}/F1.untestable"
@@ -1010,20 +1217,30 @@ observe() {
 }
 
 fault_f2() {
+    local rc
     fault_begin F2 || return 0
     start_run f2-start false
     if [ "${CALL_CODE}" = 202 ]; then
         wait_for f2-run "${WAIT_HOP}" "" pred_pnr "${STOP_STATES} awaiting_reboot"
         if pred_pnr; then
-            echo "$(now) ${P_BID}" >"${OUT}/f2.kill-at"
-            g kill_unit >"${OUT}/f2.kill" 2>&1 || true
-            wait_for f2-gone 300 "interrupted" "" "failed needs_attention stopped_at_waypoint awaiting_reboot manual manual_done"
-            call f2-status-interrupted GET "${STATUS_PATH}"
-            evidence f2-interrupted
-            # nothing repairs it by itself: the shipped setting allows no automatic try
-            observe f2-observe "${FAULT_OBSERVE}"
-            call f2-status-observed GET "${STATUS_PATH}"
-            fault_resume f2 || return 1
+            if dpkg_gate F2; then
+                echo "$(now) ${P_BID}" >"${OUT}/f2.kill-at"
+                kill_unit_now F2
+                rc=$?
+                if [ "${rc}" -eq 2 ]; then
+                    echo "no unit of the engine was active when the kill was due: the hop had ended" >"${OUT}/F2.untestable"
+                elif [ "${rc}" -eq 0 ]; then
+                    wait_for f2-gone 300 "interrupted" "" "failed needs_attention stopped_at_waypoint awaiting_reboot manual manual_done"
+                    call f2-status-interrupted GET "${STATUS_PATH}"
+                    evidence f2-interrupted
+                    # nothing repairs it by itself: the shipped setting allows no automatic try
+                    observe f2-observe "${FAULT_OBSERVE}"
+                    call f2-status-observed GET "${STATUS_PATH}"
+                    fault_resume f2 || return 1
+                fi
+            else
+                echo "dpkg was not seen running within ${DPKG_WAIT} s of the point of no return: the unit was not killed, and a kill outside dpkg is not the fault of this case" >"${OUT}/F2.untestable"
+            fi
         else
             echo "the hop did not reach its point of no return (state ${P_STATE}, block ${P_BID}) before the unit could be killed" >"${OUT}/F2.untestable"
         fi
@@ -1039,13 +1256,17 @@ fault_f3() {
         if pred_pnr; then
             echo pending >"${WORK}/pending-route"
             echo "$(now) ${P_BID}" >"${OUT}/f3.cut-at"
-            g route_cut >"${OUT}/f3.cut" 2>&1 || harness_invalid F3 "the default route could not be taken away: $(tr -d '\r' <"${OUT}/f3.cut" | tr '\n' ' ' | cut -c1-200)"
-            wait_for f3-stopped "${WAIT_HOP}" "stopped_at_waypoint" "" "failed needs_attention interrupted awaiting_reboot manual manual_done"
-            call f3-status-stopped GET "${STATUS_PATH}"
-            evidence f3-stopped
-            g route_restore >"${OUT}/f3.restore" 2>&1 || true
-            g net_check >"${OUT}/f3.netcheck" 2>&1 || true
-            if grep -qE 'restored|present' "${OUT}/f3.restore"; then rm -f "${WORK}/pending-route"; else harness_invalid F3 "the network was not given back: $(tr -d '\r' <"${OUT}/f3.restore" | tr '\n' ' ' | cut -c1-200)"; fi
+            # the verb takes the routes of both families away and proves the cut with a request that has to fail; a cut that could not be made ends the case, with the network given back
+            if g3 "${OUT}/f3.cut" route_cut; then
+                wait_for f3-stopped "${WAIT_HOP}" "stopped_at_waypoint" "" "failed needs_attention interrupted awaiting_reboot manual manual_done"
+                call f3-status-stopped GET "${STATUS_PATH}"
+                evidence f3-stopped
+            else
+                harness_invalid F3 "the network could not be cut: $(grep -v '^#' "${OUT}/f3.cut" | tr -d '\r' | tr '\n' ' ' | cut -c1-200)"
+            fi
+            g3 "${OUT}/f3.restore" route_restore || true
+            g net_check >"${OUT}/f3.netcheck" 2>/dev/null || true
+            if grep -qxE 'restored|present' "${OUT}/f3.restore"; then rm -f "${WORK}/pending-route"; else harness_invalid F3 "the network was not given back: $(tr -d '\r' <"${OUT}/f3.restore" | tr '\n' ' ' | cut -c1-200)"; fi
             if [ "${P_STATE}" = stopped_at_waypoint ]; then
                 fault_resume f3 || return 1
             fi
@@ -1063,22 +1284,27 @@ fault_f4() {
     if [ "${CALL_CODE}" = 202 ]; then
         wait_for f4-run "${WAIT_HOP}" "" pred_f4_block "${STOP_STATES} awaiting_reboot"
         if pred_f4_block; then
-            nap "${F4_DELAY}"
-            poll_once f4-before-reset
-            echo "$(now) ${P_STATE} ${P_BID}" >"${OUT}/f4.reset-at"
             old="$(boot_id)"
             echo "${old:--}" >"${OUT}/f4.boot-old"
-            if qmon system_reset >"${OUT}/f4.reset" 2>&1; then
-                if wait_boot f4-reset "${old}" "${WAIT_BOOT:-1500}"; then
-                    wait_for f4-gone 600 "interrupted" "" "failed needs_attention stopped_at_waypoint awaiting_reboot manual manual_done"
-                    call f4-status-interrupted GET "${STATUS_PATH}"
-                    evidence f4-interrupted
-                    fault_resume f4 || return 1
+            # the power goes when dpkg is at work (apt's solver and download come first in the block), not at a time after the block began
+            if dpkg_gate F4; then
+                poll_once f4-before-reset
+                echo "$(now) ${P_STATE} ${P_BID}" >"${OUT}/f4.reset-at"
+                if qmon system_reset >"${OUT}/f4.reset" 2>&1; then
+                    if wait_boot f4-reset "${old}" "${WAIT_BOOT:-1500}"; then
+                        guest_clock F4-reset || return 1
+                        wait_for f4-gone 600 "interrupted" "" "failed needs_attention stopped_at_waypoint awaiting_reboot manual manual_done"
+                        call f4-status-interrupted GET "${STATUS_PATH}"
+                        evidence f4-interrupted
+                        fault_resume f4 || return 1
+                    else
+                        evidence f4-noboot
+                    fi
                 else
-                    evidence f4-noboot
+                    harness_invalid F4 "the reset could not be sent to the monitor: $(tr -d '\r' <"${OUT}/f4.reset" | tr '\n' ' ' | cut -c1-200)"
                 fi
             else
-                harness_invalid F4 "the reset could not be sent to the monitor: $(tr -d '\r' <"${OUT}/f4.reset" | tr '\n' ' ' | cut -c1-200)"
+                echo "dpkg was not seen running within ${DPKG_WAIT} s in block ${F4_BLOCK}: the power was not cut, and a cut outside dpkg is not the fault of this case" >"${OUT}/F4.untestable"
             fi
         else
             echo "the hop did not reach block ${F4_BLOCK} (state ${P_STATE}, block ${P_BID}) before the power could be cut" >"${OUT}/F4.untestable"
