@@ -1,0 +1,3 @@
+This release is published as a pre-release until the install check of the bundle with the new dashboard is green.
+Promote it with: gh release edit v0.5.31 -R ReCasaOS/CasaOS-Install --prerelease=false --latest
+then delete this file in the next commit.

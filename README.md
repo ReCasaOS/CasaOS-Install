@@ -118,6 +118,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.31
+
+**The groundwork for optional modules**: an assistant that installs and removes a module from a catalogue pinned by the release, its API, a *Modules* page, and `install.sh --module`. The catalogue is empty in this release, so nothing is offered yet.
+
 ## What is in v0.5.30
 
 **The page of the upgrade of the operating system**: the window of the operating system now runs the Debian 11 to 12 beta of v0.5.29 (refresh, rehearsal, hop, restart, check) instead of the API alone, and says in plain words where it stands and what to do.
