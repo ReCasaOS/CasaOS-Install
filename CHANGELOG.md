@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.34] - 2026-10-19
+
+Components unchanged from v0.5.33: CasaOS `v0.4.77`, CasaOS-UI `v0.4.91`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The first optional module, `virt` (virtual machines)**, `CasaOS-VirtManagement` `v0.1.1`. The release now carries a module catalogue with it, so the *Modules* window of the dashboard and `casaos module list|plan|install|remove` offer it. Nothing is installed unless you ask: `casaos module install virt`, the Modules window, or `--module virt` on the installer. It is marked *community*: it was proven on a simulated libvirt (Debian 12, Ubuntu 24.04), not yet on real virtual machines.
+
 ## [0.5.33] - 2026-10-18
 
 Components: CasaOS `v0.4.77`, CasaOS-UI `v0.4.91`. Unchanged from v0.5.32: CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
