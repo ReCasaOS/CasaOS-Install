@@ -2227,7 +2227,7 @@ def dirty_mutations():
     m("M8 symlink: the link was not planted", fails("M8 link in the area of the install", "was planted"), lambda d: write_out(d, "m8-symlink-dirt.out", "no\n"))
     m("M8 symlink: the link stays", invalid_run("the link could not be taken away again"), lambda d: write_out(d, "m8-symlink-undo.out", "off link=yes\n"))
     m("M8 held: the plan passes", fails("M8 held_package", "refused held_package"), lambda d: gjson(d, "m8-held-plan", lambda x: x.update(refused=None)))
-    m("M8 held: the check does not say a package is held", fails("M8 held_package", "says that a package is held"), lambda d: gjson(d, "m8-held-plan", lambda x: x["checks"][8].update(detail="apt gave no answer")))
+    m("M8 held: the check does not say a package is held", fails("M8 held_package", "says that a package is held"), lambda d: gjson(d, "m8-held-plan", lambda x: x["checks"][9].update(detail="apt gave no answer")))
     m("M8 held: the install is accepted", fails("M8 held_package", "ends with status 2"), lambda d: rc(d, "m8-held-install", 0))
     m("M8 held: the package could not be held", invalid_run("could not be put in place"), lambda d: write_out(d, "m8-held-dirt.out", "no\n"))
     m("M8 held: the package is not back", invalid_run("could not be put back as it was"), lambda d: dpkg_line(d, "m8-held-after", "ovmf", "none"))
