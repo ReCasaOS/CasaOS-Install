@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.31] - 2026-10-18
+
+Components: CasaOS `v0.4.75`, CasaOS-UI `v0.4.90`. Unchanged from v0.5.30: CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The assistant for optional modules**, `casaos module list|plan|install|remove|status`, a subcommand of the core, with its API (`/v1/sys/modules`) and a *Modules* page in the dashboard. A module is a service in a repository of its own that you install only if you want it: the release carries a catalogue that pins each module's tag, commit and the checksum of its archive, the assistant downloads only that archive, writes only the files the module declares (its program, its one service unit and a sample configuration), and records them so that *Remove* takes away exactly those. The installer gains `--module <name>`. **No module is offered by this release**: the catalogue is empty until the first module (virtual machines) has been proved on real machines, so the dashboard shows nothing new and nothing changes on your box.
+
+### Changed
+
+- Package updates, backups and the upgrade of the operating system wait while a module is being installed or removed, and the other way round.
+- `casaos-uninstall` removes the installed modules first and says what stays (the packages they needed and their data).
+
 ## [0.5.30] - 2026-10-18
 
 Components: CasaOS-UI `v0.4.89`. Unchanged from v0.5.29: CasaOS `v0.4.74`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

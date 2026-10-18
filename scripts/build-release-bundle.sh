@@ -3,7 +3,10 @@
 # Assemble a CasaOS-Install release from components that have already been
 # released by their own repositories.
 #
-# Nothing is compiled here. Each Go service publishes its own tarballs and a
+# Nothing is compiled here for the release, but for one thing: when the release
+# carries a module catalogue the pinned core is built for the machine that runs
+# the build, and run, to prove that it has `casaos module` (see
+# prove_modules_core). Each Go service publishes its own tarballs and a
 # checksums.txt from its own release workflow; this script fetches those
 # checksums and writes them into install.sh, so the digests the installer
 # verifies against are never typed by hand. Two consecutive releases once
@@ -23,8 +26,10 @@
 # What it produces, in OUTPUT_DIR:
 #   install.sh            the installer with every tag and digest filled in
 #   casaos-uninstall      the uninstaller, served from our release rather than
-#                         from a third party's web server; its digest is
-#                         written into install.sh like the packages'
+#                         from a third party's web server; the oldest core that
+#                         has `casaos module` (MODULES_MIN_CORE_TAG) is written
+#                         into it, and its digest into install.sh like the
+#                         packages'
 #   linux-all-appstore-<tag>.tar.gz
 #                         IceWhale's App Store seed as published, mirrored so a
 #                         new install does not depend on their release
@@ -36,10 +41,18 @@
 #                         this release
 #   release-notes.md      that same section, the body of the GitHub release
 #   components.lock       the exact commits and tags this release was cut from
+#   modules-catalogue-<tag>.json
+#                         the modules this release can install, only when
+#                         release/modules.env lists any; install.sh carries the
+#                         digest of it, and carries none when there is no file.
+#                         It is built only for a core that has been shown to
+#                         read it: see prove_modules_core
 #   checksums.txt         digests of everything above
 #
 # Inputs:
 #   release/components.env   tags and commits of every component
+#   release/modules.env      tag, commit, repository and tier of every module
+#                            (comments only while no module is offered)
 #   WORKSPACE_ROOT           directory holding the six component checkouts,
 #                            each at the commit pinned in components.env
 #                            (default: the parent of this repository)
@@ -52,6 +65,17 @@
 #                            thing be exercised before any release exists.
 #   UPSTREAM_BASE_URL        where to fetch the App Store seed tarball from
 #                            (default: https://github.com/IceWhaleTech)
+#   MODULES_GIT_BASE_URL     where the repositories of the modules are, to read
+#                            the commit a module's tag names (default:
+#                            CHECKSUMS_BASE_URL)
+#   PYTHON                   the interpreter of scripts/build-modules-catalogue.py,
+#                            which is the one reader of release/modules.env
+#                            (python3; 3.12, the Unicode tables of the Go that
+#                            builds the core)
+#   MODULES_PROBE_TIMEOUT    seconds the pinned core is given to answer
+#                            `casaos module list` before it is killed (30);
+#                            only for a release that lists modules, which also
+#                            needs Go in PATH
 
 set -euo pipefail
 
@@ -59,10 +83,25 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly INSTALLER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "${INSTALLER_ROOT}/.." && pwd)}"
 readonly COMPONENT_LOCK="${INSTALLER_ROOT}/release/components.env"
+readonly MODULES_LOCK="${INSTALLER_ROOT}/release/modules.env"
 readonly GITHUB_OWNER="${GITHUB_OWNER:-ReCasaOS}"
 readonly CHECKSUMS_BASE_URL="${CHECKSUMS_BASE_URL:-https://github.com/${GITHUB_OWNER}}"
 readonly UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-https://github.com/IceWhaleTech}"
 readonly RCLONE_BASE_URL="${RCLONE_BASE_URL:-https://github.com/rclone}"
+readonly MODULES_GIT_BASE_URL="${MODULES_GIT_BASE_URL:-${CHECKSUMS_BASE_URL}}"
+readonly PYTHON="${PYTHON:-python3}"
+
+# The oldest core that has `casaos module`. A core older than this, given "module",
+# does not know it and starts as a server, a second one beside the running one; so a
+# release that carries a module catalogue has to pin a core of this version or later
+# (build_modules_catalogue refuses to build one otherwise), and install.sh and
+# casaos-uninstall are given the same value here, to check the core they find on the
+# box before they run `module`. It is the tag of the core release that brought
+# `casaos module`, and it must match that tag. This is the only place it is written.
+# It is a number that nothing proves: the check against CASAOS_TAG is the early, cheap
+# one, and what counts is prove_modules_core, which builds the pinned core and runs its
+# `module list` on the catalogue.
+readonly MODULES_MIN_CORE_TAG="v0.4.75"
 
 # shellcheck source=../release/components.env
 source "${COMPONENT_LOCK}"
@@ -189,6 +228,167 @@ package_overlay() {
     echo "Packaged compatibility overlay as ${OVERLAY_FILE}"
 }
 
+# check_core_for_modules
+# A release that lists modules has to pin a core that has `casaos module` (see
+# MODULES_MIN_CORE_TAG): the pinned tag is compared as three numbers, so v0.4.9 is
+# older than v0.4.75, and a tag that is not v<number>.<number>.<number> is refused.
+check_core_for_modules() {
+    [[ "${CASAOS_TAG}" =~ ^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] ||
+        fail "release/modules.env lists modules, but the core this release pins (CASAOS_TAG=${CASAOS_TAG}) is not a tag of the form v<number>.<number>.<number>, so it cannot be checked against ${MODULES_MIN_CORE_TAG}, the first core that has 'casaos module'."
+    [[ "$(printf '%s\n' "${MODULES_MIN_CORE_TAG}" "${CASAOS_TAG}" | sort -V | head -n 1)" == "${MODULES_MIN_CORE_TAG}" ]] ||
+        fail "release/modules.env lists modules, but the core this release pins (CASAOS_TAG=${CASAOS_TAG}) is older than ${MODULES_MIN_CORE_TAG}, the first core that has 'casaos module': an older core given 'module' would start as a second server. Pin a core of ${MODULES_MIN_CORE_TAG} or later in release/components.env, or list no module."
+    [[ -d "${WORKSPACE_ROOT}/CasaOS/pkg/modulecmd" ]] ||
+        fail "release/modules.env lists modules, but the core checkout at ${WORKSPACE_ROOT}/CasaOS (CASAOS_COMMIT=${CASAOS_COMMIT}) has no pkg/modulecmd: it does not have 'casaos module'. Pin a core that has it in release/components.env, or list no module."
+}
+
+# fill_modules_min_core_tag <file>
+# Writes MODULES_MIN_CORE_TAG into install.sh and casaos-uninstall, which check the core they
+# find on the box against it before they run `casaos module`.
+fill_modules_min_core_tag() {
+    local target="$1"
+
+    [[ "${MODULES_MIN_CORE_TAG}" =~ ^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] || fail "MODULES_MIN_CORE_TAG is not a tag: ${MODULES_MIN_CORE_TAG}"
+    sed -i "s|__CASAOS_MODULES_MIN_CORE_TAG__|${MODULES_MIN_CORE_TAG}|g" "${target}"
+}
+
+# refuse_catalogue <sentence>
+# Stops the build, and takes the catalogue that was written with it: a catalogue that has not
+# been proved is neither published nor named in install.sh.
+refuse_catalogue() {
+    [[ -z "${MODULES_CATALOGUE_FILE:-}" ]] || rm -f "${MODULES_CATALOGUE_FILE}"
+    MODULES_CATALOGUE_FILE=""
+    fail "$@"
+}
+
+# build_probe_core <output file>
+# Builds the core that this release pins, for the machine that runs the build, from the checkout
+# at CASAOS_COMMIT that verify_repo_commit has checked has no change to a tracked file; the way
+# build-casaos-binaries.sh builds it, for the host alone. Nothing else is run on a binary that
+# was not built here, from that commit.
+build_probe_core() {
+    local out="$1"
+
+    command -v go >/dev/null 2>&1 ||
+        refuse_catalogue "Go is needed to build the core that this release pins, to prove that it has 'casaos module', and there is none in PATH."
+    (
+        cd "${WORKSPACE_ROOT}/CasaOS" &&
+            env -u GOOS -u GOARCH -u GOARM CGO_ENABLED=0 \
+                go build -buildvcs=false -trimpath -tags "musl netgo osusergo" -o "${out}" .
+    ) || refuse_catalogue "The core that this release pins (CasaOS at ${CASAOS_COMMIT}) could not be built, so it could not be proved to have 'casaos module'."
+}
+
+# prove_modules_core <catalogue>
+# The tag number that check_core_for_modules compares is a belief about which core release
+# brought `casaos module`, and nothing proves it: a core that does not have the subcommand,
+# given `module`, starts as a second server and never ends. So the core that is shipped is
+# built here and run on the catalogue that was built: its `module list` has to print one JSON
+# object that says the catalogue is fine and lists every module of modules.env (see
+# `build-modules-catalogue.py proof`). That is the real reader of the real core reading the real
+# catalogue, which also leaves no room for the python copy of its rules to drift.
+# The run is a probe and is kept small: only a binary built here from the pinned commit, and
+# only when the string that the assistant has and an old core has not is in it, so an old core
+# is never started; with nothing on its input, a time limit and a limit on what it may write,
+# an environment of its own with nothing of this job's, and as nobody when this runs as root.
+prove_modules_core() {
+    local catalogue="$1"
+    local dir="${STAGING_ROOT}/proof" limit="${MODULES_PROBE_TIMEOUT:-30}"
+    local core="${STAGING_ROOT}/proof/casaos" as=() status=0 said
+
+    mkdir -p "${dir}"
+    chmod 0755 "${dir}"
+    build_probe_core "${core}"
+
+    [[ "$(grep -ac 'CASAOS_MODULE_RESULT' "${core}" || true)" -ge 1 ]] ||
+        refuse_catalogue "The core that this release pins (CasaOS at ${CASAOS_COMMIT}) has no module assistant: the string CASAOS_MODULE_RESULT is not in the binary built from it. It was not run: an old core given 'module' starts as a second server."
+
+    cp "${catalogue}" "${dir}/catalogue.json"
+    chmod 0644 "${dir}/catalogue.json"
+    if [[ "$(id -u)" == 0 ]] && command -v setpriv >/dev/null 2>&1; then
+        chmod 0711 "${STAGING_ROOT}"
+        as=(setpriv --reuid=65534 --regid=65534 --clear-groups)
+    fi
+    (
+        ulimit -f 2048 2>/dev/null || true
+        cd "${dir}"
+        exec timeout -k 5 "${limit}" ${as[@]+"${as[@]}"} \
+            env -i PATH="${PATH}" HOME="${dir}" CASAOS_MODULE_TEST=1 CASAOS_MODULE_CATALOGUE="${dir}/catalogue.json" \
+            "${core}" module list </dev/null >"${dir}/out" 2>"${dir}/err"
+    ) || status=$?
+    case "${status}" in
+    0) ;;
+    124 | 137)
+        refuse_catalogue "The core that this release pins (CasaOS at ${CASAOS_COMMIT}) did not answer 'casaos module list' within ${limit} seconds and was killed."
+        ;;
+    *)
+        said="$(head -c 300 "${dir}/err" | tr -c '[:print:]\n' '?')"
+        refuse_catalogue "The core that this release pins (CasaOS at ${CASAOS_COMMIT}) failed 'casaos module list' with status ${status}: ${said}"
+        ;;
+    esac
+    "${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" proof "${MODULES_LOCK}" "${dir}/out" ||
+        refuse_catalogue "The core that this release pins (CasaOS at ${CASAOS_COMMIT}) does not read the module catalogue that was built, or does not list its modules (see above)."
+    echo "Proved: the core at ${CASAOS_COMMIT} reads the module catalogue and lists its modules."
+}
+
+# build_modules_catalogue
+# Writes OUTPUT_DIR/modules-catalogue-<release tag>.json from release/modules.env
+# and sets MODULES_CATALOGUE_FILE to it. With no module in modules.env there is no
+# catalogue: the variable stays empty and nothing is fetched. For each module the
+# checksums.txt of its release and the two archives that file names are fetched
+# the way the components' are (curl -fsSL from CHECKSUMS_BASE_URL, the digest of
+# an archive being the one its own release publishes), and
+# build-modules-catalogue.py judges what came: one module that cannot be fetched
+# or does not hold stops the whole bundle, and no half catalogue is left behind.
+# The catalogue is shipped only once the pinned core has been shown to read it
+# (prove_modules_core). That python script is the one reader of modules.env, and the one
+# to say that it holds no module: grep and python do not end a line in the same places, and
+# a file that cannot be read is not a file with no module in it.
+build_modules_catalogue() {
+    local list stage name component tag commit tier archives archive
+    local file="${OUTPUT_DIR}/modules-catalogue-${RELEASE_TAG}.json"
+
+    MODULES_CATALOGUE_FILE=""
+    rm -f "${OUTPUT_DIR}"/modules-catalogue-*.json
+
+    list="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" list "${MODULES_LOCK}")" || fail "release/modules.env is not valid, or cannot be read, or ${PYTHON} could not run."
+
+    # no module: this release offers none
+    [[ -n "${list}" ]] || return 0
+
+    # before anything is fetched: no catalogue for a core that cannot run its assistant
+    check_core_for_modules
+
+    stage="${STAGING_ROOT}/modules"
+    while read -r name component tag commit tier; do
+        mkdir -p "${stage}/${name}"
+        curl -fsSL -o "${stage}/${name}/checksums.txt" "${CHECKSUMS_BASE_URL}/${component}/releases/download/${tag}/checksums.txt" ||
+            fail "Failed to download the checksums of module ${name} (${component} ${tag})."
+        archives="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" archives "${stage}/${name}/checksums.txt" "${tag}")" ||
+            fail "Module ${name}: its checksums.txt names no usable archives."
+        for archive in ${archives}; do
+            compute_checksum "${CHECKSUMS_BASE_URL}" "${component}" "${tag}" "${archive}" "${stage}/${name}" >/dev/null
+        done
+    done <<<"${list}"
+
+    "${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" build --git-base "${MODULES_GIT_BASE_URL}" --out "${file}" "${MODULES_LOCK}" "${stage}" ||
+        fail "The module catalogue was not built."
+    MODULES_CATALOGUE_FILE="${file}"
+    prove_modules_core "${file}"
+}
+
+# fill_catalogue_digest <install.sh>
+# The digest of the catalogue goes into install.sh like the others, and is empty
+# when this release has none: install.sh then installs no catalogue and refuses
+# --module before it changes anything.
+fill_catalogue_digest() {
+    local target="$1" sum=""
+
+    if [[ -n "${MODULES_CATALOGUE_FILE}" ]]; then
+        sum="$(sha256sum "${MODULES_CATALOGUE_FILE}" | awk '{ print $1 }')"
+        [[ "${sum}" =~ ^[0-9a-f]{64}$ ]] || fail "No digest for ${MODULES_CATALOGUE_FILE}."
+    fi
+    sed -i "s|__CASAOS_MODULE_CATALOGUE_SHA256__|${sum}|g" "${target}"
+}
+
 # fill_installer <output install.sh>
 # Every value install.sh needs at run time is a placeholder in the committed
 # script and is written here from components.env and the published checksums.
@@ -257,6 +457,9 @@ fill_installer() {
     sum="$(compute_checksum "${UPSTREAM_BASE_URL}" CasaOS-AppStore "${CASAOS_APPSTORE_TAG}" "${APPSTORE_SEED_FILE}" "${OUTPUT_DIR}")"
     sed -i "s|__CASAOS_APPSTORE_SHA256__|${sum}|g" "${target}"
 
+    fill_catalogue_digest "${target}"
+    fill_modules_min_core_tag "${target}"
+
     if grep -qE '__[A-Z][A-Z0-9_]*__' "${target}"; then
         echo "Unfilled placeholders remain in install.sh:" >&2
         grep -oE '__[A-Z][A-Z0-9_]*__' "${target}" | sort -u >&2
@@ -313,13 +516,15 @@ write_version_manifest() {
 write_checksums() {
     (
         cd "${OUTPUT_DIR}"
-        sha256sum "${OVERLAY_FILE}" "${APPSTORE_SEED_FILE}" install.sh casaos-uninstall components.lock version.json >checksums.txt
+        sha256sum "${OVERLAY_FILE}" "${APPSTORE_SEED_FILE}" install.sh casaos-uninstall components.lock version.json ${MODULES_CATALOGUE_FILE:+"${MODULES_CATALOGUE_FILE##*/}"} >checksums.txt
         sha256sum install.sh >install.sh.sha256
     )
 }
 
 package_overlay
 install -m 0755 "${INSTALLER_ROOT}/casaos-uninstall" "${OUTPUT_DIR}/casaos-uninstall"
+fill_modules_min_core_tag "${OUTPUT_DIR}/casaos-uninstall"
+build_modules_catalogue
 fill_installer "${OUTPUT_DIR}/install.sh"
 install -m 0644 "${COMPONENT_LOCK}" "${OUTPUT_DIR}/components.lock"
 write_version_manifest

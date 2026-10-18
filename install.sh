@@ -126,6 +126,12 @@ readonly RCLONE_SHA256_ARM7="__RCLONE_SHA256_ARM7__"
 readonly CASAOS_APPSTORE_SHA256="__CASAOS_APPSTORE_SHA256__"
 readonly CASAOS_COMPAT_OVERLAY_SHA256="__CASAOS_COMPAT_OVERLAY_SHA256__"
 readonly CASAOS_UNINSTALL_SHA256="__CASAOS_UNINSTALL_SHA256__"
+# empty when this release carries no module catalogue
+readonly CASAOS_MODULE_CATALOGUE_SHA256="__CASAOS_MODULE_CATALOGUE_SHA256__"
+# the oldest core that has `casaos module`, written by the release build, which also
+# refuses a catalogue for a release whose pinned core is older: an older core given
+# `module` does not know it and starts as a server
+readonly CASAOS_MODULES_MIN_CORE_TAG="__CASAOS_MODULES_MIN_CORE_TAG__"
 
 # REQUIREMENTS CONF PATH
 # Udevil
@@ -184,6 +190,16 @@ if [[ "${RECASAOS_DEBIAN_ARCHIVE:-}" == "1" ]]; then
     DEBIAN_ARCHIVE=1
 fi
 APT_SOURCES_LIST=/etc/apt/sources.list
+# Optional modules (docs/modules.md). The catalogue of this release is placed in
+# CASA_MODULE_CATALOGUE_DIR; --module adds a name to MODULES_REQUESTED (names
+# separated by a space, each one checked by Valid_Module_Name); the modules are
+# installed with the core's own assistant once ReCasaOS runs.
+CASA_MODULE_CATALOGUE_DIR=/usr/share/casaos/modules
+CASA_BIN=/usr/bin/casaos
+MODULES_REQUESTED=""
+MODULE_CATALOGUE_READY=0
+# 1 once this run has put the core of this release in place: only that core is given `module`
+CORE_INSTALLED_NOW=0
 # How long refreshing apt's package lists may take. A mirror that accepts the
 # connection and then says nothing used to hold the whole install for as long as
 # whoever ran it was willing to wait (a CI job's limit was forty minutes, twice).
@@ -294,6 +310,15 @@ Detach_From_CasaOS_Service() {
     # The detached run gets no arguments: an opt-out goes through the environment.
     local telemetry_env=()
     if ((NO_TELEMETRY)); then telemetry_env=(--setenv=RECASAOS_TELEMETRY=0); fi
+
+    # ... and so it takes no --module either: say so rather than drop the modules in silence.
+    if [[ -n "${MODULES_REQUESTED}" ]]; then
+        local module_name module_commands=""
+        for module_name in ${MODULES_REQUESTED}; do
+            module_commands+=" sudo casaos module install ${module_name};"
+        done
+        Show 3 "The update runs detached and takes no options, so it will NOT install the modules asked for with --module (${MODULES_REQUESTED}). Once it has finished, install them from the Modules page of the dashboard, or run:${module_commands%;}"
+    fi
 
     Show 2 "Handing the update to ${update_unit}.service..."
     if ! ${sudo_cmd} systemd-run \
@@ -1072,6 +1097,7 @@ DownloadAndInstallCasaOS() {
     PREVIOUS_FORK_RELEASE="$(cat "${CASA_STATE_DIR}/fork-release" 2>/dev/null || true)"
     FORK_RELEASE_REPLACED=1
     ${sudo_cmd} cp -rf "${SYSROOT_DIR}"/* / || Show 1 "Failed to install CasaOS"
+    CORE_INSTALLED_NOW=1
     ColorReset
 
     SETUP_SCRIPT_DIR=$(realpath -e "${BUILD_DIR}"/scripts/setup/script.d || Show 1 "Failed to find setup script directory")
@@ -1105,6 +1131,8 @@ DownloadAndInstallCasaOS() {
     ${sudo_cmd} chmod +x $CASA_UNINSTALL_PATH
 
     Install_Rclone
+
+    Install_Module_Catalogue
 
     for SERVICE in "${CASA_SERVICES[@]}"; do
         Show 2 "Starting ${SERVICE}..."
@@ -1213,6 +1241,263 @@ Telemetry_Notice() {
 }
 
 ###############################################################################
+# Modules                                                                     #
+###############################################################################
+
+# Whether a text is the name of a module: a lower case letter, then lower case
+# letters, digits or hyphens, 32 characters at most. The letters are listed, not
+# written as ranges, so that no locale reads more into them than they say.
+Valid_Module_Name() {
+    case "$1" in
+    "" | [!abcdefghijklmnopqrstuvwxyz]* | *[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 32 ]
+}
+
+# The three numbers of a version tag, "v<major>.<minor>.<patch>" and nothing else (each
+# of up to six digits and without a leading zero), on one line; status 1 and nothing
+# printed for any other text.
+Version_Parts() {
+    local rest="${1#v}" a b c part
+    [ "${rest}" != "$1" ] || return 1
+    case "${rest}" in
+    *[!0123456789.]* | .* | *. | *..* | *.*.*.*) return 1 ;;
+    *.*.*) ;;
+    *) return 1 ;;
+    esac
+    a="${rest%%.*}"
+    b="${rest#*.}"
+    c="${b#*.}"
+    b="${b%%.*}"
+    for part in "${a}" "${b}" "${c}"; do
+        case "${part}" in
+        0 | [123456789]*) [ "${#part}" -le 6 ] || return 1 ;;
+        *) return 1 ;;
+        esac
+    done
+    echo "${a} ${b} ${c}"
+}
+
+# Whether the version tag $1 is $2 or later: no for a text that is not a version tag,
+# in either place.
+Version_At_Least() {
+    local got min
+    got="$(Version_Parts "$1")" || return 1
+    min="$(Version_Parts "$2")" || return 1
+    # shellcheck disable=SC2086 # (six numbers, split on purpose)
+    set -- ${got} ${min}
+    [ "$1" -gt "$4" ] && return 0
+    [ "$1" -lt "$4" ] && return 1
+    [ "$2" -gt "$5" ] && return 0
+    [ "$2" -lt "$5" ] && return 1
+    [ "$3" -ge "$6" ]
+}
+
+# Runs the core's module assistant (the program and what it is asked, as the arguments)
+# with none of the CASAOS_MODULE variables of this environment. The assistant has test
+# hooks that it reads from there: a catalogue and an archive of the caller's own, read in
+# place of the pinned ones, and the nonce of the core's own jobs. This script runs as root,
+# and a root shell that has such variables (a direct run, sudo -E, a CI job) must not hand
+# them on. Every variable that starts with CASAOS_MODULE is taken out, not only the ones the
+# assistant reads today; the rest of the environment is left as it is.
+Run_Module_Assistant() {
+    local var
+    for var in $(env | sed -n 's/^\(CASAOS_MODULE[A-Za-z0-9_]*\)=.*/\1/p'); do
+        set -- -u "${var}" "$@"
+    done
+    ${sudo_cmd} env "$@"
+}
+
+# A name given to --module, added once to the list. A text that is not the name
+# of a module ends the install here, before anything on this machine is touched.
+Add_Requested_Module() {
+    local name="$1" shown
+    if ! Valid_Module_Name "${name}"; then
+        shown="$(printf '%.40s' "${name}" | tr -c 'A-Za-z0-9._-' '?')"
+        Show 1 "--module needs the name of a module: a lower case letter, then lower case letters, digits or hyphens, 32 characters at most (got '${shown}'). Nothing on this machine was changed."
+        return 1
+    fi
+    case " ${MODULES_REQUESTED} " in
+    *" ${name} "*) ;;
+    *) MODULES_REQUESTED="${MODULES_REQUESTED:+${MODULES_REQUESTED} }${name}" ;;
+    esac
+}
+
+# Checked once the options are read, still before anything is changed: a release
+# that carries no module catalogue offers no module, so --module is refused.
+Validate_Module_Request() {
+    [ -n "${MODULES_REQUESTED}" ] || return 0
+    if [ -z "${CASAOS_MODULE_CATALOGUE_SHA256}" ]; then
+        Show 1 "--module cannot be used with this release: it carries no module catalogue, so it offers no module. Nothing on this machine was changed."
+    fi
+}
+
+# Takes away the catalogue file that is in place. The status says whether there was one to
+# take away. Nothing is touched behind a directory that is a link.
+Remove_Module_Catalogue() {
+    local file="${CASA_MODULE_CATALOGUE_DIR}/catalogue.json"
+
+    [ ! -L "${CASA_MODULE_CATALOGUE_DIR}" ] || return 1
+    [ -e "${file}" ] || [ -L "${file}" ] || return 1
+    ${sudo_cmd} rm -f "${file}"
+}
+
+# Puts the catalogue $1, a file whose SHA-256 digest has been checked, at its place, whole or
+# not at all: copied under a name of its own beside the place, and renamed onto it. Status 2
+# when something is in the way that is not a plain file (a directory or a link where the file
+# goes, a link where its directory is), 1 when a command failed.
+Place_Module_Catalogue() {
+    local dir="${CASA_MODULE_CATALOGUE_DIR}" staged
+    local file="${CASA_MODULE_CATALOGUE_DIR}/catalogue.json"
+
+    [ ! -L "${dir}" ] || return 2
+    { [ ! -d "${file}" ] && [ ! -L "${file}" ]; } || return 2
+    ${sudo_cmd} install -d -m 0755 "${dir}" || return 1
+    staged="$(${sudo_cmd} mktemp "${dir}/.catalogue.json.XXXXXX")" || return 1
+    if ! ${sudo_cmd} install -m 0644 "$1" "${staged}" || ! ${sudo_cmd} mv -f "${staged}" "${file}"; then
+        ${sudo_cmd} rm -f "${staged}"
+        return 1
+    fi
+    { [ -f "${file}" ] && [ ! -L "${file}" ]; } || return 2
+}
+
+# Places the module catalogue of this release at CASA_MODULE_CATALOGUE_DIR/catalogue.json:
+# downloaded from the release, compared with the digest this script carries, and only then
+# put in place. Whatever is wrong with it stops the catalogue and nothing else: it is said,
+# ReCasaOS goes on, and MODULE_CATALOGUE_READY tells Install_Modules whether this run may
+# install any module. The file that is in place is the catalogue of an earlier release, which
+# says nothing of the release it is for, so one rule covers a release that has no catalogue
+# and a refresh that failed: the earlier file is removed (a module that is installed still
+# shows as installed, no longer offered by a catalogue).
+Install_Module_Catalogue() {
+    local sum="${CASAOS_MODULE_CATALOGUE_SHA256}"
+    local work reason="" placed
+
+    MODULE_CATALOGUE_READY=0
+    if [ -z "${sum}" ]; then
+        if Remove_Module_Catalogue; then
+            Show 2 "This release carries no module catalogue; the one of an earlier release was removed."
+        fi
+        return 0
+    fi
+    if [ "${#sum}" -ne 64 ] || [ -n "$(printf '%s' "${sum}" | tr -d '0123456789abcdef')" ]; then
+        reason="was not installed: the digest this installer carries for it is not a SHA-256 digest"
+    elif ! work="$(mktemp -d)"; then
+        reason="was not installed: no temporary directory could be made"
+    else
+        Show 2 "Downloading the module catalogue..."
+        GreyStart
+        if ! ${sudo_cmd} wget -t 3 -q -O "${work}/catalogue.json" "${CASAOS_RELEASE_BASE_URL}/modules-catalogue-${CASAOS_INSTALL_RELEASE_TAG}.json"; then
+            reason="could not be downloaded"
+        elif ! printf '%s  %s\n' "${sum}" "${work}/catalogue.json" | ${sudo_cmd} sha256sum --check --status -; then
+            reason="is not the file this installer expects (its SHA-256 digest differs)"
+        else
+            placed=0
+            Place_Module_Catalogue "${work}/catalogue.json" || placed=$?
+            case "${placed}" in
+            0) ;;
+            2) reason="could not be put in place: something that is not a plain file is where it goes" ;;
+            *) reason="could not be put in place" ;;
+            esac
+        fi
+        ColorReset
+        ${sudo_cmd} rm -rf "${work}"
+    fi
+
+    if [ -n "${reason}" ]; then
+        Show 3 "The module catalogue ${reason}. ReCasaOS itself is installed and is not affected; no module can be installed by this run. Run the installer again to try again."
+        if Remove_Module_Catalogue; then
+            Show 3 "The catalogue of an earlier release was removed, so that no module is offered from it; a module that is installed still shows as installed."
+        fi
+        return 0
+    fi
+    MODULE_CATALOGUE_READY=1
+    Show 0 "Module catalogue installed."
+}
+
+# One module, with the core's assistant: its lines as they come (the steps and
+# the sentences), then, when the install did not end well, the step and the
+# reason from its result line (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed>
+# <step> <code> <undo> <time>). Nothing here changes the exit status of this script.
+Install_One_Module() {
+    local name="$1" work status=0 line kind="" step="" code="" undo="" rname=""
+
+    work="$(mktemp -d)" || {
+        Show 3 "The module ${name} was not installed: no temporary directory could be made."
+        return 0
+    }
+    Show 2 "Installing the module ${name}..."
+    GreyStart
+    # no input, so that it cannot read the rest of a script piped into bash; the
+    # status of the assistant is kept in a file, the pipe's being tee's
+    { Run_Module_Assistant "${CASA_BIN}" module install "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
+    ColorReset
+    if [ -s "${work}/status" ]; then
+        read -r status <"${work}/status" || status=1
+    fi
+    # a run has one result line; were there more, the first would be final, as it is for the core
+    line="$(grep '^CASAOS_MODULE_RESULT ' "${work}/out" 2>/dev/null | head -n 1)" || line=""
+    ${sudo_cmd} rm -rf "${work}"
+    if [ -n "${line}" ]; then
+        read -r _ _ rname kind step code undo _ <<RESULT_LINE
+${line}
+RESULT_LINE
+        [ "${rname}" = "${name}" ] || kind=""
+        step="$(printf '%.40s' "${step}" | tr -c 'a-z0-9_-' '?')"
+        code="$(printf '%.60s' "${code}" | tr -c 'a-z0-9_-' '?')"
+    fi
+
+    if [ "${kind}" = ok ] && [ "${status}" = 0 ]; then
+        Show 0 "The module ${name} is installed."
+    elif [ "${kind}" = refused ]; then
+        Show 3 "The module ${name} was not installed: the assistant refused it (${code}). Nothing was changed."
+    else
+        if [ "${kind}" = failed ]; then
+            Show 3 "The module ${name} was not installed: it failed at the step ${step} (${code})."
+            [ "${undo}" != rollback_incomplete ] || Show 3 "What the install had done could not all be undone."
+        else
+            Show 3 "The module ${name} was not installed: the assistant did not report a success (exit status ${status})."
+        fi
+        Show 3 "To clean up what a failed install left, run: sudo casaos module remove ${name}   (the packages it installed stay)"
+    fi
+    return 0
+}
+
+# The modules asked for with --module, one after the other, once ReCasaOS is
+# installed and its services run. A module that fails is said and the next one is
+# tried: the exit status of this installer is the one ReCasaOS earned.
+Install_Modules() {
+    local name found shown
+
+    [ -n "${MODULES_REQUESTED}" ] || return 0
+    # (a catalogue digest that is not empty is what says this release was built with the
+    # check of the core it pins against CASAOS_MODULES_MIN_CORE_TAG)
+    if [ "${MODULE_CATALOGUE_READY}" != 1 ] || [ -z "${CASAOS_MODULE_CATALOGUE_SHA256}" ]; then
+        Show 3 "No module was installed: the module catalogue could not be installed by this run (see above). ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    # `module` is run only by the core this run has put in place, and only once that core
+    # says a version that has it: a core without it would start as a second server
+    if [ "${CORE_INSTALLED_NOW}" != 1 ]; then
+        Show 3 "No module was installed: this run did not put the core of this release in place, so ${CASA_BIN} is not known to have the module assistant. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    if [ ! -x "${CASA_BIN}" ]; then
+        Show 3 "No module was installed: ${CASA_BIN} is not there. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    found="$("${CASA_BIN}" -v </dev/null 2>/dev/null)" || found=""
+    if ! Version_At_Least "${found}" "${CASAOS_MODULES_MIN_CORE_TAG}"; then
+        shown="$(printf '%.40s' "${found}" | tr -c 'A-Za-z0-9._-' '?')"
+        Show 3 "No module was installed: ${CASA_BIN} did not report a version of ${CASAOS_MODULES_MIN_CORE_TAG} or later, the first that has the module assistant (it reported '${shown}'); an older one would start as a second server. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    for name in ${MODULES_REQUESTED}; do
+        Install_One_Module "${name}"
+    done
+}
+
+###############################################################################
 # Main                                                                        #
 ###############################################################################
 
@@ -1226,6 +1511,8 @@ Valid options are:
     --use-debian-archive    On Debian 11, when apt answers 404 Not Found for a package, take the
                             security repository from archive.debian.org and go on (same as
                             RECASAOS_DEBIAN_ARCHIVE=1); the first copy of sources.list is kept
+    --module <name>         Once ReCasaOS runs, install this optional module (repeat the option
+                            for more than one); the module catalogue of the release lists them
     -h                      Show this help message and exit
 
 Anonymous statistics: https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics
@@ -1251,6 +1538,15 @@ while getopts ":p:h-:" arg; do
         use-debian-archive)
             DEBIAN_ARCHIVE=1
             ;;
+        module)
+            # "--module name": getopts leaves the name as the next argument
+            eval "module_name=\${${OPTIND}:-}"
+            OPTIND=$((OPTIND + 1))
+            Add_Requested_Module "${module_name}"
+            ;;
+        module=*)
+            Add_Requested_Module "${OPTARG#module=}"
+            ;;
         *)
             usage 1
             ;;
@@ -1261,6 +1557,7 @@ while getopts ":p:h-:" arg; do
         ;;
     esac
 done
+Validate_Module_Request
 
 # Existing CasaOS releases start this installer inside casaos.service. Move the
 # real update into its own systemd unit before the installer stops CasaOS.
@@ -1303,6 +1600,10 @@ INSTALL_COMPLETED=1
 if ! [[ -t 1 ]]; then
     Show 0 "CasaOS upgrade successfully"
 fi
+
+# The modules asked for with --module; whatever happens to them, the exit status
+# of this script stays the one of the install above
+Install_Modules
 
 # Step 10: Clear Term and Show Welcome Banner
 Welcome_Banner
