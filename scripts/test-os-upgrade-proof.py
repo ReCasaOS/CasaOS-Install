@@ -128,7 +128,8 @@ class World:
         # each of these verbs, after every restore), the unit's death is seen by the core one look later and the interruption lasts one look, a start takes a minute and a half to answer
         self.cfg = dict(resume_fail_class="dpkg_broken", refresh_wants_reboot=True, refresh_touches_keyring=True, findings=False, block_seconds=dict(verify=3, timers=3, snapshot=6, sources=33, download=15, minimal=90, full=150,
                                                                                                                        prereboot=21), down_seconds=40, token_valid_s=10 ** 9,
-                        restore_lag=1800, ssh_drops={"kill_unit": 1, "route_cut": 1, "set_clock": 1, "dpkg_wait": 1}, ssh_lost={}, start_takes_s=90, interrupted_s=1, notice_s=2)
+                        restore_lag=1800, ssh_drops={"kill_unit": 1, "route_cut": 1, "set_clock": 1, "dpkg_wait": 1}, ssh_lost={}, start_takes_s=90, interrupted_s=1, notice_s=2,
+                        core_version="v0.4.80", core_rewrites=True)
         self.cfg.update(cfg or {})
         self.session_n, self.clock_lag, self.unit_gen, self.last_state = 0, 0.0, 0, ""
         self.ssh_calls, self.faultlog, self.starts, self.delay_taken = {}, [], [], 0.0
@@ -145,11 +146,12 @@ class World:
         self.apt = {"/etc/apt/sources.list": sha("deb bullseye"), "/etc/apt/sources.list.d/docker.list": sha("deb docker"), "/etc/apt/apt.conf.d/99oup-quiet": sha("quiet"),
                     "/etc/apt/apt.conf.d/20auto-upgrades": sha("auto"), "/etc/apt/trusted.gpg.d/debian-archive-bullseye-stable.gpg": sha("key1"), "/etc/apt/preferences.d/none": sha("none")}
         self.sources_text = "bullseye"
+        self.sec_kind, self.gap, self.r1_note, self.reboot_502_until = None, None, False, None
         self.timers = {u: ("active", "enabled") for u in UNITS}
         self.flag, self.run_dir, self.bk_dirs, self.run_bk, self.timers_state = False, False, [], [], False
         self.dpkg = {"libc6": ("2.31-13+deb11u7", "ii "), "systemd": ("247.3-7+deb11u4", "ii "), "apt": ("2.2.4", "ii "), "dash": ("0.5.11+git20200708+dd9ef66-5", "ii "), "fuse": ("2.9.9-5", "ii "),
                      "openssh-server": ("1:8.4p1-5+deb11u2", "ii "), "docker-ce": ("5:28.0.4-1~debian.11~bullseye", "ii "), "linux-image-" + KERNEL_11: ("5.10.209-2", "ii "),
-                     "curl": ("7.74.0-1.3+deb11u11", "ii "), "samba": ("2:4.13.13+dfsg-1~deb11u6", "ii ")}
+                     "curl": ("7.74.0-1.3+deb11u11", "ii "), "samba": ("2:4.13.13+dfsg-1~deb11u6", "ii "), "tzdata": ("2021a-1+deb11u11", "ii ")}
         self.services = {"ssh.service": "active", "casaos.service": "active", "casaos-gateway.service": "active", "casaos-app-management.service": "active",
                          "casaos-user-service.service": "active", "docker.service": "active", "containerd.service": "active", "smbd.service": "active", "cron.service": "active"}
         self.witnesses = ["p-always", "p-db", "p-unless-stopped", "p-web"]
@@ -509,6 +511,21 @@ class World:
         if refusal:
             return refusal
         self.take_time()
+        # the security line of Debian 11 at security.debian.org (C3b, C3c): a core with the rewrite moves a plain address to the archive and says so; an address it does not recognise (a port), or a
+        # core without the rewrite, meets the 404 of the mirror for the package that is one version behind, and the refresh stops with the hint
+        self.r1_note = self.sec_kind == "plain" and self.cfg["core_rewrites"] and not self.cfg.get("no_note")
+        if self.sec_kind and self.gap and (self.sec_kind == "port" or not self.cfg["core_rewrites"]):
+            failure = {"stage": "rupgrade", "class": self.cfg.get("gap_class", "network"), "rc": 100,
+                       "detail_line": "STOP: the download did not go through: security.debian.org answered 404 Not Found for packages of Debian 11, whose files were moved to the archive"}
+            if not self.cfg.get("no_hint"):
+                failure["hint"] = "security_archive_gap"
+            segs = [Seg("refreshing", 5, block=(1, "rcheck", REFRESH_BLOCKS[0][1]), enter="stop_timers", **self.f(state="refreshing", pnr=False, actions=["abort"])),
+                    Seg("refreshing", 30, block=(2, "rsources", REFRESH_BLOCKS[1][1]), enter="make_refresh_bk", **self.f(state="refreshing", pnr=False, actions=["abort"])),
+                    Seg("refreshing", 20, block=(3, "rupgrade", REFRESH_BLOCKS[2][1]), **self.f(state="refreshing", pnr=False, actions=[])),
+                    Seg("unwinding", 6, **self.f(state="unwinding")),
+                    Seg("failed", None, enter="refresh_unwound", **self.f(state="failed", busy=False, failure=failure, actions=["acknowledge"]))]
+            self.new_run("refresh", None, segs)
+            return self.answer(202, self.status())
         bs = dict(rcheck=5, rsources=30, rupgrade=120)
         segs = []
         for i, (bid, title) in enumerate(REFRESH_BLOCKS[:3], 1):
@@ -534,10 +551,20 @@ class World:
         self.bk_dirs = ["/var/backups/casaos-os-upgrade-refresh-" + self.run["id"][:8]]
         self.run_info[self.run["id"]]["bk"] = self.bk_dirs[0]
 
+    def refresh_unwound(self):
+        """a refresh that stopped before it installed anything: the timers are back, the backup folder is put away, and the sources are not touched"""
+        self.timers = {u: ("active", "enabled") for u in UNITS}
+        self.timers_state = False
+        self.bk_dirs = []
+        self.run_bk.append("/var/lib/casaos/os-upgrade/%s/bk-aborted" % self.run["id"])
+        self.at(25, "drop_flag")
+
     def upgrade_old(self):
         for n, (v, st) in list(self.dpkg.items()):
             if n in ("libc6", "systemd", "apt", "curl", "openssh-server"):
                 self.dpkg[n] = (v + "1", st)
+        if self.gap:
+            self.dpkg[self.gap[0]] = (self.gap[2], "ii ")
         self.dpkg["linux-image-" + KERNEL_11_NEW] = ("5.10.216-1", "ii ")
         self.reboot_required = self.cfg["refresh_wants_reboot"]
         self.cache_bytes += 200 << 20
@@ -638,10 +665,19 @@ class World:
         seg = self.cur()
         if seg.state not in ("awaiting_reboot", "reboot_first"):
             return self.refuse("not_awaiting_reboot", "the machine does not wait for its restart", {"state": seg.state})
+        # a core or a gateway that does not answer for a while (reboot_502_s, from the first try), and an answer that the shutdown cuts (reboot_lost_answer: the restart is made, the answer is a 502)
+        if self.cfg.get("reboot_502_s"):
+            if self.reboot_502_until is None:
+                self.reboot_502_until = self.t + self.cfg["reboot_502_s"]
+            if self.t < self.reboot_502_until:
+                return 502, {"success": 502, "message": "Bad Gateway"}
+            self.reboot_502_until = None
         if seg.state == "awaiting_reboot":
             self.reboot_for_hop = True
         self.reboot_at = self.t + 3
         self.go([Seg("rebooting", None, **self.f(state="rebooting", pnr=seg.kw.get("pnr", False)))])
+        if self.cfg.get("reboot_lost_answer"):
+            return 502, {"success": 502, "message": "Bad Gateway"}
         return self.answer(202, self.status())
 
     def post_resume(self, req):
@@ -860,6 +896,33 @@ class World:
             return 0, ("present" if had else "restored") + "\n"
         if verb == "net_check":
             return (0, "200\n") if not self.route_cut else (22, "")
+        if verb == "core_version":
+            return 0, self.cfg["core_version"] + "\n"
+        if verb == "gap_prepare":
+            if self.cfg.get("no_gap"):
+                return 1, "no package\n"
+            new = self.dpkg["tzdata"][0]
+            self.dpkg["tzdata"], self.gap = ("2021a-1+deb11u2", "ii "), ("tzdata", "2021a-1+deb11u2", new)
+            return 0, "ready tzdata 2021a-1+deb11u2 %s\n" % new
+        if verb == "gap_undo":
+            if not self.gap:
+                return 0, "nothing to undo\n"
+            self.dpkg[self.gap[0]], self.gap = (self.gap[2], "ii "), None
+            return 0, "undone\n"
+        if verb == "sources_set":
+            if arg not in ("plain", "port"):
+                return 2, "unknown kind: %s\n" % arg
+            self.sec_kind, self.apt["/etc/apt/sources.list"] = arg, sha("deb bullseye " + arg)
+            return 0, "set\n"
+        if verb == "sources_back":
+            if self.cfg.get("sources_back_fails"):
+                return 1, "sources.list is not as it was\n"
+            self.sec_kind, self.apt["/etc/apt/sources.list"] = None, sha("deb bullseye")
+            return 0, "restored\n"
+        if verb == "refresh_notes":
+            note = ("Note: /etc/apt/sources.list line 12: deb http://security.debian.org/debian-security bullseye-security main is read for the refresh as deb http://archive.debian.org/debian-security "
+                    "bullseye-security main (security.debian.org no longer serves the packages that its list names: the archive does). The file itself is not changed.\n") if self.r1_note else ""
+            return 0, "== run\n/var/lib/casaos/os-upgrade/x/\n== note\n%s== mark\n== end\n" % note
         if verb == "runfiles":
             return 0, "== /var/lib/casaos/os-upgrade\nCASAOS_OSU_UNIT_START NONCE 1 run\n"
         if verb == "diag":
@@ -1264,6 +1327,12 @@ def drop_rows(d, tag, state):
     rows_edit(d, tag, lambda rows: [r for r in rows if r[COL["state"]] != state])
 
 
+def tries(d, tag, rows):
+    """the tries of POST reboot (<tag>-post.tries), the last one at the time of the recorded call: (seconds before it, post or status, HTTP status)"""
+    t = float(read_out(d, tag + "-post.t0").strip())
+    write_out(d, tag + "-post.tries", "".join("%.6f\t%s\t%s\t0\n" % (t + dt, kind, c) for dt, kind, c in rows))
+
+
 def core_mutations():
     M = []
 
@@ -1316,6 +1385,26 @@ def core_mutations():
     m("C3: the refresh goes through a state it has not", fails("C3 refresh", "the states it went through are the engine's for this"), lambda d: map_rows(d, "c3-run", "refreshing", state="rehearsing"))
     m("C3: the restart is not accepted", fails("C3 refresh", "POST reboot is accepted"), lambda d: code(d, "c3-reboot-post", 409))
     m("C3: the guest does not come back", invalid_run("did not come back"), lambda d: write_out(d, "boot-c3-reboot.timeout", "1500\n"))
+    # C3b and C3c: the security line at security.debian.org
+    m("C3b: the refresh says nothing of the security line", fails("C3b refresh with the security line", "R1 says"), lambda d: write_out(d, "c3b.r1-output", "== run\nx\n== note\n== mark\n== end\n"))
+    m("C3b: the sources are not what they were", fails("C3b refresh with the security line", "as they were"), lambda d: subst(d, "snap-c3b-after.aptfiles", "/etc/apt/sources.list\t", "/etc/apt/sources.list\t0"))
+    m("C3b: the package that was behind is not upgraded", fails("C3b refresh with the security line", "one version behind"), lambda d: subst(d, "snap-c3b-after.dpkg", "tzdata\t2021a-1+deb11u11", "tzdata\t2021a-1+deb11u2"))
+    m("C3b: the refresh fails", fails("C3b refresh with the security line", "the refresh ends refreshed"), lambda d: set_last(d, "c3b-run", state="failed", fclass="network"))
+    m("C3b: the core is older than the rewrite", not_testable("C3b refresh with the security line", "no security-archive rewrite"), lambda d: write_out(d, "c3b.core-version", "v0.4.70\n"))
+    m("C3b: the version of the core cannot be read", not_testable("C3b refresh with the security line", "not known"), lambda d: write_out(d, "c3b.core-version", "\n"))
+    m("C3b: the run was not closed", invalid_run("C3b: the run was not closed"), lambda d: write_out(d, "c3b.closed", "state failed\n"))
+    m("C3c: the failure is not of the class network", fails("C3c refresh with a security line", "class network"), lambda d: jdata(d, "c3c-status-end", lambda x: x["failure"].update({"class": "apt_failed"})))
+    m("C3c: the failure has no hint", fails("C3c refresh with a security line", "the hint"), lambda d: jdata(d, "c3c-status-end", lambda x: x["failure"].pop("hint")))
+    m("C3c: a package was changed", fails("C3c refresh with a security line", "nothing was installed"), lambda d: subst(d, "snap-c3c-after.dpkg", "tzdata\t2021a-1+deb11u2", "tzdata\t2021a-1+deb11u11"))
+    m("C3c: the sources are not what they were", fails("C3c refresh with a security line", "as they were"), lambda d: subst(d, "snap-c3c-after.aptfiles", "/etc/apt/sources.list\t", "/etc/apt/sources.list\t0"))
+    m("C3c: the refresh goes through", not_testable("C3c refresh with a security line", "did not answer 404"), lambda d: set_last(d, "c3c-run", state="refreshed", fclass="-"))
+    m("C3c: the core is older than the rewrite", not_testable("C3c refresh with a security line", "no security-archive rewrite"), lambda d: write_out(d, "c3c.core-version", "v0.4.70\n"))
+    # the restart that is not answered at once
+    m("C7: the restart is accepted on a later try", passes("C7 the hop", "the core did not answer (HTTP 502)"), lambda d: tries(d, "c7-reboot", [(-45, "post", "502"), (-40, "status", "502"), (0, "post", "202")]))
+    m("C7: the restart is answered by a status 502 and the machine went down", passes("C7 the hop", "the answer to POST reboot was lost"),
+      lambda d: (code(d, "c7-reboot-post", 502), tries(d, "c7-reboot", [(0, "post", "502")]), write_out(d, "c7-reboot.lost-answer", "1.0\n")))
+    m("C7: the restart is never accepted", fails("C7 the hop", "POST reboot is accepted"), lambda d: (code(d, "c7-reboot-post", 502), tries(d, "c7-reboot", [(-180, "post", "502"), (-175, "status", "200"), (0, "post", "502")])))
+    m("C3: the restart is accepted on a later try", passes("C3 refresh", "the core did not answer"), lambda d: tries(d, "c3-reboot", [(-20, "post", "000"), (0, "post", "202")]))
     m("C3: the close is refused", fails("C3 refresh", "acknowledge is accepted"), lambda d: code(d, "c3-ack", 409))
 
     # C4
@@ -1514,6 +1603,26 @@ def faults_mutations():
     m("F4: the clock was not set after the reset", invalid_run("the clock of the restored guest was not set"), lambda d: os.remove(os.path.join(d, "F4-reset.clock")))
     m("F4: the boot id did not change", fails("F4 a power cut", "another boot id after the reset"), lambda d: write_out(d, "boot-f4-reset.tsv", "".join("%s\t%s\t%s\n" % (r.split("\t")[0], r.split("\t")[1], read_out(d, "f4.boot-old").strip()) for r in read_out(d, "boot-f4-reset.tsv").splitlines())))
     return M
+
+
+def reboot_cascade_checks(base_core, base_faults):
+    """a restart that is never accepted is one FAIL that says once that what follows was not reached: not a FAIL and a row of INVALID for the polls that were never made"""
+    for label, base, leg, tag in (("C7", base_core, "core", "c7-reboot"), ("F2", base_faults, "faults", "f2-reboot"), ("F4", base_faults, "faults", "f4-reboot")):
+        if not wanted("%s: the restart is never accepted" % label):
+            continue
+        d = copytree(base)
+        try:
+            code(d, tag + "-post", 502)
+            tries(d, tag, [(-180, "post", "502"), (0, "post", "502")])
+            for n in os.listdir(d):
+                if n.startswith("polls-%s" % tag.split("-")[0]) and n.endswith("-verify.tsv"):
+                    os.remove(os.path.join(d, n))
+            os.remove(os.path.join(d, "boot-%s.tsv" % tag))
+            rc, text = report(d, leg)
+            check("%s: a restart that is never accepted is one FAIL, with no INVALID and one 'not reached'" % label, rc == 1 and head(text) == "FAIL" and not invalid_lines(text) and text.count("not reached") == 1,
+                  head(text) + "\n" + text[:1500])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def run_mutations(label, base_out, leg, mutations):
@@ -2033,7 +2142,7 @@ def static_checks():
         perms = wf.get("permissions")
         check("the workflow reads the repository and nothing else", perms == {"contents": "read"}, str(perms))
     check("the preparation of the guest keeps cloud-init from rewriting /etc/hosts (sudo would say it cannot look the name up, to every command)", "manage_etc_hosts: false" in script and "/etc/cloud/cloud.cfg.d/" in script, "")
-    check("the start and the refresh wait five minutes for their answer", script.count('"${START_PATH}" "${body}" 300') == 2 and script.count("""POST "${REFRESH_PATH}" '{}' 300""") == 2, "")
+    check("the start and the refresh wait five minutes for their answer", script.count('"${START_PATH}" "${body}" 300') == 2 and script.count("""POST "${REFRESH_PATH}" '{}' 300""") == 3, "")
     # the names the report gates on are the markers the script writes
     for cid in ("C1", "C2", "C3", "C4", "C5", "C6", "C7"):
         check("the script writes the markers of %s" % cid, ("marker case_%s_start" % cid) in script and ("marker case_%s_done" % cid) in script, "")
@@ -2068,7 +2177,7 @@ def main():
         check("the runner kills the second unit and resets the machine in the middle of dpkg, and kills the first before dpkg", w_faults.faultlog == [("kill", False), ("kill", True), ("reset", True)], str(w_faults.faultlog))
     rc, text = report(base_core, "core")
     check("a healthy core leg passes, every case by name", rc == 0 and head(text) == "PASS" and all(verdict_line(text, n) and verdict_line(text, n)[0] == "PASS" for n in (
-        "C1 flag off", "C2 switch on", "C3 refresh", "C4 plan and rehearsal", "C5 hostname_mismatch", "C5 acks_missing", "C5 dpkg lock", "C5 run_open", "C5 os_upgrade_open",
+        "C1 flag off", "C2 switch on", "C3 refresh", "C3b refresh with the security line", "C3c refresh with a security line", "C4 plan and rehearsal", "C5 hostname_mismatch", "C5 acks_missing", "C5 dpkg lock", "C5 run_open", "C5 os_upgrade_open",
         "C5 nothing left behind", "C6 call-off", "C7 the hop")), text[:2500])
     check("a healthy core leg prints the first real-guest numbers", all(k in text for k in ("seconds per block", "downloaded:", "free space:", "kernel:", "away at the restart:", "restart to the verdict:", "refresh:", "rehearsal:")), text[-1800:])
     rc, text = report(base_faults, "faults")
@@ -2078,6 +2187,7 @@ def main():
     check("a healthy faults leg prints the clock it corrected and the dpkg it saw", all(k in text for k in ("F1 clock:", "F2 clock:", "F4 clock:", "F4-reset clock:", "F2 dpkg:", "F4 dpkg:")), text[-1800:])
     run_mutations("core", base_core, "core", core_mutations())
     run_mutations("faults", base_faults, "faults", faults_mutations())
+    reboot_cascade_checks(base_core, base_faults)
     if os.environ.get("REPORT_ONLY") or os.environ.get("BASE_ONLY"):
         return
     # the scenarios
@@ -2107,6 +2217,25 @@ def scenarios_core():
     scenario("scenario: a refresh that answers after the runner stopped waiting", "core", "c2,c3", {"start_takes_s": 400}, invalid_run("a run is open that the runner does not know of (run 0b1c2d3e-0001"))
     scenario("scenario: a hop that ends with findings of every severity but error", "core", "c2,c4,c7", {"findings": "mixed"}, passes("C7 the hop", "info docker_source_paused"))
 
+    # the security line of Debian 11 at security.debian.org (C3b, C3c)
+    scenario("scenario: a security line at security.debian.org that the refresh reads from the archive", "core", "c2,c3b", {}, passes("C3b refresh with the security line"))
+    scenario("scenario: a security line with a port, which the refresh stops on", "core", "c2,c3c", {}, passes("C3c refresh with a security line"))
+    _, _, text = scenario("scenario: a core without the security-archive rewrite", "core", "c2,c3b,c3c", {"core_version": "v0.4.70"}, not_testable("C3b refresh with the security line", "no security-archive rewrite"))
+    check("scenario: a core without the rewrite leaves C3c not testable too", "- **NOT TESTABLE** C3c" in (text or ""), (text or "")[:800])
+    scenario("scenario: a core whose version cannot be read", "core", "c2,c3b", {"core_version": ""}, not_testable("C3b refresh with the security line", "not known"))
+    scenario("scenario: a refresh that moves the line and does not say so", "core", "c2,c3b", {"no_note": True}, fails("C3b refresh with the security line", "R1 says"))
+    scenario("scenario: a core that does not move the line", "core", "c2,c3b", {"core_rewrites": False}, fails("C3b refresh with the security line", "the refresh ends refreshed"))
+    scenario("scenario: a 404 that stops the refresh without the hint", "core", "c2,c3c", {"no_hint": True}, fails("C3c refresh with a security line", "the hint"))
+    scenario("scenario: a 404 that stops the refresh with another class", "core", "c2,c3c", {"gap_class": "apt_failed"}, fails("C3c refresh with a security line", "class network"))
+    scenario("scenario: a guest with no security package to download (C3c)", "core", "c2,c3c", {"no_gap": True}, not_testable("C3c refresh with a security line", "no security package to download"))
+    scenario("scenario: a guest with no security package to download (C3b)", "core", "c2,c3b", {"no_gap": True}, passes("C3b refresh with the security line", "nothing to download"))
+    scenario("scenario: sources that cannot be put back", "core", "c2,c3b", {"sources_back_fails": True}, invalid_run("could not be put back"))
+    # a restart that is not answered at once
+    scenario("scenario: a core that does not answer POST reboot for 40 s", "core", "c2,c4,c7", {"reboot_502_s": 40}, passes("C7 the hop", "the core did not answer (HTTP 502)"), env_extra=env)
+    scenario("scenario: an answer to POST reboot that the shutdown cuts", "core", "c2,c4,c7", {"reboot_lost_answer": True}, passes("C7 the hop", "the answer to POST reboot was lost"), env_extra=env)
+    _, _, text = scenario("scenario: a core that never accepts the restart", "core", "c2,c4,c7", {"reboot_502_s": 10 ** 6}, fails("C7 the hop", "POST reboot is accepted"), env_extra=env)
+    check("scenario: a core that never accepts the restart is one FAIL, no INVALID", not text or ("INVALID" not in head(text) and text.count("not reached") == 1), (text or "")[:1200])
+
 
 def scenarios_faults(base):
     """each fault, on a fake that does it wrong, from the snapshot of the healthy faults run"""
@@ -2126,6 +2255,11 @@ def scenarios_faults(base):
     scenario("scenario: a clock that no ssh reaches", "faults", "f1", {"ssh_drops": {"set_clock": 3}}, invalid_run("the clock of the restored guest could not be set"), base=base)
     scenario("scenario: a dpkg that is never seen at work after the point of no return", "faults", "f2", {"dpkg_never": True}, not_testable("F2 the unit killed after", "dpkg was not seen"), base=base)
     scenario("scenario: a dpkg that is never seen at work in block 6", "faults", "f4", {"dpkg_never": True}, not_testable("F4 a power cut", "dpkg was not seen"), base=base)
+    # the restart that the core does not answer after a repair
+    scenario("scenario: a core that does not answer POST reboot for 40 s after a repair", "faults", "f2", {"reboot_502_s": 40}, passes("F2 the unit killed after", "the core did not answer (HTTP 502)"), base=base)
+    scenario("scenario: an answer to POST reboot that the shutdown cuts, after a power cut", "faults", "f4", {"reboot_lost_answer": True}, passes("F4 a power cut", "the answer to POST reboot was lost"), base=base)
+    _, _, text = scenario("scenario: a core that never accepts the restart after a repair", "faults", "f2", {"reboot_502_s": 10 ** 6}, fails("F2 the unit killed after", "POST reboot is accepted"), base=base)
+    check("scenario: a core that never accepts the restart after a repair is one FAIL, no INVALID", not text or ("INVALID" not in head(text) and text.count("not reached") == 1), (text or "")[:1200])
 
 
 if __name__ == "__main__":

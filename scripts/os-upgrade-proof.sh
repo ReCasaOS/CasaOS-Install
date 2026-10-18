@@ -23,6 +23,8 @@
 #                    engine may have been made or started
 #   C2 switch on     POST beta
 #   C3 refresh       the refresh of Debian 11 (and the restart it may ask for)
+#   C3b security line   the security line of Debian 11 at security.debian.org: the refresh reads it from the archive (a Note in R1, the owner's files untouched); C3c: a line the rewrite does
+#                    not recognise (a port) ends the refresh failed, class network, hint security_archive_gap. Both need the core of SECURITY_ARCHIVE_MIN_CORE or later (else not testable)
 #   C4 plan, rehearsal   the plan, a rehearsal to `rehearsed` (the sources of Debian 12 in place, the timers stopped), the discard, the close
 #   C5 refusals      a wrong hostname, a missing acknowledgement, dpkg's lock held, a second start while a run is open, the page's restart while the unit works
 #   C6 call-off      the hop is started and called off in block 3 or 4: the machine is put back
@@ -36,7 +38,7 @@
 # Needs, on the runner: bash 5 (EPOCHREALTIME), curl, python3, ssh, timeout. On the guest: what the preparation installs.
 #
 # Environment (runner): OUT (default ./oup-out), WORK (default ./oup-work: the token, never in OUT), SSH_CONFIG (ssh_config) and SSH_HOST (vm), GW_PORT (8080: the runner's end of the
-# forward to the guest's port 80), MON_SOCK (mon.sock: the QEMU monitor), CASES (a comma list of the cases to run, c1..c7 or f1..f4; all by default), OUP_FAST and OUP_TICK (the tests of
+# forward to the guest's port 80), MON_SOCK (mon.sock: the QEMU monitor), CASES (a comma list of the cases to run, c1..c7, c3b, c3c or f1..f4; all by default), OUP_FAST and OUP_TICK (the tests of
 # this script skip the sleeps and tell their stand-in of the guest how much time went by), and the waits and sleeps below.
 
 # shellcheck disable=SC2034
@@ -315,6 +317,100 @@ diag() {
     dpkg --audit 2>&1 | head -n 30
 }
 
+# ---- the sources and the packages of the security cases (C3b, C3c) --------------------------------------------------------------------------
+SRCSAVE=$LIB/apt-sources.save
+GAPFILE=$LIB/gap.pkg
+
+# src_save: the sources of the machine, kept once with their modes and times, to be put back byte for byte
+src_save() {
+    [ -d "$SRCSAVE" ] && return 0
+    mkdir -p "$SRCSAVE/sources.list.d" || return 1
+    cp -p /etc/apt/sources.list "$SRCSAVE/sources.list" || return 1
+    cp -p /etc/apt/sources.list.d/* "$SRCSAVE/sources.list.d/" 2>/dev/null
+    [ "$(ls /etc/apt/sources.list.d | wc -l)" = "$(ls "$SRCSAVE/sources.list.d" | wc -l)" ] || { rm -rf "$SRCSAVE"; return 1; }
+    return 0
+}
+
+# sources_set <plain|port>: the only security line of the machine is one that names security.debian.org (plain), or names it with a port (port), which is what an owner who never used the archive has
+sources_set() {
+    case "$1" in
+    plain) line='deb http://security.debian.org/debian-security bullseye-security main' ;;
+    port) line='deb http://security.debian.org:80/debian-security bullseye-security main' ;;
+    *) echo "unknown kind: $1"; return 2 ;;
+    esac
+    src_save || { echo "the sources could not be kept"; return 1; }
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+        [ -f "$f" ] || continue
+        sed -i -E '/^[[:space:]]*deb(-src)?[[:space:]].*(bullseye-security|bullseye\/updates)/d' "$f" || return 1
+    done
+    printf '%s\n' "$line" >> /etc/apt/sources.list || return 1
+    echo "set $line"
+}
+
+# sources_back: the sources as they were kept, read back and compared
+sources_back() {
+    [ -d "$SRCSAVE" ] || { echo "nothing was kept"; return 1; }
+    cp -p "$SRCSAVE/sources.list" /etc/apt/sources.list || return 1
+    cp -p "$SRCSAVE"/sources.list.d/* /etc/apt/sources.list.d/ 2>/dev/null
+    cmp -s "$SRCSAVE/sources.list" /etc/apt/sources.list || { echo "sources.list is not as it was"; return 1; }
+    for f in "$SRCSAVE"/sources.list.d/*; do
+        [ -e "$f" ] || continue
+        cmp -s "$f" "/etc/apt/sources.list.d/$(basename "$f")" || { echo "$f is not as it was"; return 1; }
+    done
+    rm -rf "$SRCSAVE"
+    echo restored
+}
+
+# gap_prepare: a package of the security updates that is one version behind (an older one of the release itself put in its place), so that the refresh has something to download. "ready <package> <old> <new>"
+gap_prepare() {
+    rm -f "$GAPFILE"
+    for p in tzdata ca-certificates tar rsync sudo; do
+        dpkg-query -W -f '${Status}\n' "$p" 2>/dev/null | grep -qx 'install ok installed' || continue
+        have="$(dpkg-query -W -f '${Version}' "$p" 2>/dev/null)"
+        new="$(apt-cache madison "$p" 2>/dev/null | awk -F' [|] ' '$3 ~ /bullseye-security/ { print $2; exit }')"
+        [ -n "$new" ] && [ "$new" = "$have" ] || continue
+        old="$(apt-cache madison "$p" 2>/dev/null | awk -F' [|] ' -v n="$new" '$2 != n && $3 !~ /bullseye-security/ { print $2; exit }')"
+        [ -n "$old" ] || continue
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades "$p=$old" >/dev/null 2>&1; then
+            printf '%s %s %s\n' "$p" "$old" "$new" > "$GAPFILE"
+            echo "ready $p $old $new"
+            return 0
+        fi
+    done
+    echo "no package"
+    return 1
+}
+
+# gap_undo: the package of gap_prepare at the version of the security updates again (it may be there already: the refresh brought it)
+gap_undo() {
+    [ -s "$GAPFILE" ] || { echo "nothing to undo"; return 0; }
+    read -r p old new < "$GAPFILE"
+    have="$(dpkg-query -W -f '${Version}' "$p" 2>/dev/null)"
+    if [ "$have" != "$new" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades "$p=$new" >/dev/null 2>&1 || { echo "$p could not be put forward to $new"; return 1; }
+    fi
+    have="$(dpkg-query -W -f '${Version}' "$p" 2>/dev/null)"
+    [ "$have" = "$new" ] || { echo "$p is $have, not $new"; return 1; }
+    rm -f "$GAPFILE"
+    echo "undone $p $new"
+}
+
+# refresh_notes: what the newest run said that has Note: in it, and the mark that the refresh leaves of the lines it moved to the archive
+refresh_notes() {
+    l="$(ls -td "$RUN"/*/ 2>/dev/null | sed -n 1p)"
+    echo "== run"
+    echo "${l:-none}"
+    echo "== note"
+    if [ -n "$l" ]; then grep -h 'Note: ' "${l}output.log" 2>/dev/null; fi
+    echo "== mark"
+    cat /var/backups/casaos-os-upgrade-*/security-archive 2>/dev/null
+    if [ -n "$l" ]; then cat "${l}bk-done/security-archive" "${l}bk-aborted/security-archive" 2>/dev/null; fi
+    echo "== end"
+    return 0
+}
+
+core_version() { casaos -v 2>/dev/null | head -n 1; return 0; }
+
 verb="${1:-}"
 [ "$#" -eq 0 ] || shift
 case "${verb}" in
@@ -335,6 +431,12 @@ route_restore) route_restore ;;
 net_check) curl -fsS -m 20 -o /dev/null -w '%{http_code}\n' http://deb.debian.org/debian/dists/bookworm/InRelease ;;
 runfiles) runfiles ;;
 diag) diag ;;
+sources_set) sources_set "$@" ;;
+sources_back) sources_back ;;
+gap_prepare) gap_prepare ;;
+gap_undo) gap_undo ;;
+refresh_notes) refresh_notes ;;
+core_version) core_version ;;
 *) echo "unknown verb: ${verb}" >&2; exit 2 ;;
 esac
 OUP_GUEST
@@ -773,11 +875,43 @@ wait_boot() {
 
 # reboot_cycle <tag>: POST reboot, then wait for the guest to go away and come back with another boot id. Status 1: the restart was not accepted (the call is <tag>-post, the report judges it);
 # 2: the guest did not come back.
+#
+# An answer of 502, 503, 504 or none is not a refusal: the core asks systemd for the restart (--no-block) once the call is accepted, and the shutdown can stop the core and the gateway before the
+# answer is out (a 502 from the gateway, and a machine that goes down at the same time); a core that restarts answers the same way. So for REBOOT_RETRY_SECONDS the machine is looked at
+# (another boot id: the restart was made and its answer was lost: <tag>.lost-answer), the status is read again (a new login on 401 is the call's own), and the call is said again. Every try is a
+# row of <tag>-post.tries (time, post or status, HTTP status, curl status): the report says when the core did not answer. An answer that is a refusal (409...) ends the tries at once.
+reboot_transient() { case "$1" in 000 | 502 | 503 | 504) return 0 ;; esac; return 1; }
+reboot_try() { printf '%s\t%s\t%s\t%s\n' "$(cat "${OUT}/$1.t0")" "$2" "${CALL_CODE}" "${CALL_RC}" >>"${OUT}/${3}-post.tries"; }
 reboot_cycle() {
-    local tag="$1" old
+    local tag="$1" old end id=""
     old="$(boot_id)"
     echo "${old:--}" >"${OUT}/${tag}.boot-old"
+    rm -f "${OUT}/${tag}.lost-answer" "${OUT}/${tag}-post.tries"
     call "${tag}-post" POST "${REBOOT_PATH}" '{}' 30
+    reboot_try "${tag}-post" post "${tag}"
+    now_s
+    end=$((NOW_S + REBOOT_RETRY_SECONDS))
+    while [ "${CALL_CODE}" != 202 ] && reboot_transient "${CALL_CODE}"; do
+        now_s
+        [ "${NOW_S}" -lt "${end}" ] || break
+        nap 5
+        id="$(boot_id)"
+        if [ -n "${id}" ] && [ "${id}" != "${old}" ]; then
+            now >"${OUT}/${tag}.lost-answer"
+            wait_boot "${tag}" "${old}" "${WAIT_BOOT:-1500}" || return 2
+            return 0
+        fi
+        call "${tag}-status" GET "${STATUS_PATH}" "" 20
+        reboot_try "${tag}-status" status "${tag}"
+        call "${tag}-post" POST "${REBOOT_PATH}" '{}' 30
+        reboot_try "${tag}-post" post "${tag}"
+    done
+    if [ "${CALL_CODE}" != 202 ] && reboot_transient "${CALL_CODE}" && [ -z "${id}" ]; then
+        # the time is up while the machine is away (the last look found nothing): it is restarting, and the answer was lost
+        now >"${OUT}/${tag}.lost-answer"
+        wait_boot "${tag}" "${old}" "${WAIT_BOOT:-1500}" || return 2
+        return 0
+    fi
     [ "${CALL_CODE}" = 202 ] || return 1
     wait_boot "${tag}" "${old}" "${WAIT_BOOT:-1500}" || return 2
     return 0
@@ -867,6 +1001,10 @@ WAIT_VERIFY="${WAIT_VERIFY:-3000}"
 WAIT_UNWIND="${WAIT_UNWIND:-900}"
 CONTROL_SECONDS="${CONTROL_SECONDS:-200}"
 FLAG_SECONDS="${FLAG_SECONDS:-120}"
+# how long a restart that was not answered is asked for again (see reboot_cycle)
+REBOOT_RETRY_SECONDS="${REBOOT_RETRY_SECONDS:-180}"
+# the first release of the core that moves the security line of Debian 11 to the archive during a refresh
+SECURITY_ARCHIVE_MIN_CORE="${SECURITY_ARCHIVE_MIN_CORE:-v0.4.76}"
 # the states from which a case that waits for something else will not get there on its own
 STOP_STATES="failed needs_attention stopped_at_waypoint interrupted manual manual_done"
 
@@ -925,6 +1063,66 @@ case_c3() {
     fi
     marker case_C3_done
 }
+
+# C3b and C3c: the security line of Debian 11 as an owner who never used the archive has it (the guests are installed with --use-debian-archive, so theirs already points at the archive). C3b: the
+# plain address, which the refresh moves to the archive in its temporary sources (the owner's files are not touched); C3c: an address with a port, which it does not recognise, and the refresh stops
+# with the hint security_archive_gap when the mirror answers 404. Both begin with a package of the security updates one version behind, so that there is something to download. The core that does
+# this is v0.4.76 or later (SECURITY_ARCHIVE_MIN_CORE): the version is written for the report, which makes the case not testable on an older one, and nothing is run.
+sec_core_ok() {
+    local v min="${SECURITY_ARCHIVE_MIN_CORE}"
+    v="$(tr -d '\r\n ' <"${OUT}/$1.core-version" 2>/dev/null)"
+    [[ "${v}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [ "$(printf '%s\n%s\n' "${min#v}" "${v#v}" | sort -V | head -n 1)" = "${min#v}" ]
+}
+
+# sec_case <name> <case id> <plain|port>
+sec_case() {
+    local t="$1" id="$2" kind="$3"
+    marker "case_${id}_start"
+    g core_version >"${OUT}/${t}.core-version" 2>/dev/null || true
+    printf '%s\n' "${SECURITY_ARCHIVE_MIN_CORE}" >"${OUT}/${t}.min-core"
+    if ! sec_core_ok "${t}"; then
+        marker "case_${id}_done"
+        return 0
+    fi
+    if g3 "${OUT}/${t}.gap-prepare" gap_prepare; then
+        grep '^ready ' "${OUT}/${t}.gap-prepare" | tail -n 1 | cut -d' ' -f2- >"${OUT}/${t}.gap"
+    fi
+    if ! g3 "${OUT}/${t}.sources-set" sources_set "${kind}"; then
+        harness_invalid "${id}" "the sources of the machine could not be set: $(grep -v '^#' "${OUT}/${t}.sources-set" | tr -d '\r' | tr '\n' ' ' | cut -c1-200)"
+        if [ -s "${OUT}/${t}.gap" ]; then g3 "${OUT}/${t}.gap-undo" gap_undo || harness_invalid "${id}" "the package that was set back could not be put forward again"; fi
+        marker "case_${id}_done"
+        return 0
+    fi
+    echo pending >"${WORK}/pending-sources"
+    snap "${t}-before" || return 1
+    call "${t}-refresh" POST "${REFRESH_PATH}" '{}' 300
+    after_silence "${t}-refresh"
+    if [ "${CALL_CODE}" = 202 ]; then
+        wait_for "${t}-run" "${WAIT_REFRESH}" "refreshed reboot_first failed" "" "needs_attention stopped_at_waypoint interrupted manual manual_done"
+        evidence "${t}-run"
+        g refresh_notes >"${OUT}/${t}.r1-output" 2>/dev/null || true
+        if [ "${P_STATE}" = reboot_first ]; then
+            call "${t}-status-reboot-first" GET "${STATUS_PATH}"
+            if reboot_cycle "${t}-reboot"; then
+                wait_for "${t}-after-reboot" 600 "refreshed" "" "${STOP_STATES}"
+            fi
+        fi
+        call "${t}-status-end" GET "${STATUS_PATH}"
+        snap "${t}-after" || return 1
+        close_run "${t}" 900 || true
+    fi
+    if g3 "${OUT}/${t}.sources-back" sources_back; then
+        rm -f "${WORK}/pending-sources"
+    else
+        harness_invalid "${id}" "the sources of the machine could not be put back: $(grep -v '^#' "${OUT}/${t}.sources-back" | tr -d '\r' | tr '\n' ' ' | cut -c1-200)"
+    fi
+    if [ -s "${OUT}/${t}.gap" ]; then g3 "${OUT}/${t}.gap-undo" gap_undo || harness_invalid "${id}" "the package that was set back could not be put forward again"; fi
+    marker "case_${id}_done"
+}
+
+case_c3b() { sec_case c3b C3b plain; }
+case_c3c() { sec_case c3c C3c port; }
 
 # the plan, a rehearsal to `rehearsed`, the discard, the close
 case_c4() {
@@ -1340,7 +1538,8 @@ cleanup() {
         # an undo that is pending is made once more: the guest is not left with its network cut or dpkg's lock held
         if [ -e "${WORK}/pending-lock" ]; then g lock_stop >/dev/null 2>&1 && rm -f "${WORK}/pending-lock"; fi
         if [ -e "${WORK}/pending-route" ]; then g route_restore >/dev/null 2>&1 && rm -f "${WORK}/pending-route"; fi
-        if [ -e "${WORK}/pending-lock" ] || [ -e "${WORK}/pending-route" ]; then harness_invalid run "an undo was still pending when the run ended"; fi
+        if [ -e "${WORK}/pending-sources" ]; then g sources_back >/dev/null 2>&1 && rm -f "${WORK}/pending-sources"; fi
+        if [ -e "${WORK}/pending-lock" ] || [ -e "${WORK}/pending-route" ] || [ -e "${WORK}/pending-sources" ]; then harness_invalid run "an undo was still pending when the run ended"; fi
         if [ "${rc}" -ne 0 ] && [ ! -s "${OUT}/aborted" ]; then
             echo "the runner script ended on exit ${rc} (its output says where)" >>"${OUT}/aborted"
         fi
@@ -1372,6 +1571,8 @@ runner_run() {
         run_case c1 case_c1
         run_case c2 case_c2
         run_case c3 case_c3
+        run_case c3b case_c3b
+        run_case c3c case_c3c
         run_case c4 case_c4
         run_case c5 case_c5
         run_case c6 case_c6
