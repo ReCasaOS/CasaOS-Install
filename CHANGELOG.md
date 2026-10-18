@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.32] - 2026-10-18
+
+Components: CasaOS `v0.4.76`. Unchanged from v0.5.31: CasaOS-UI `v0.4.90`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The refresh of Debian 11 no longer stops on the security updates that moved to the archive.** The security index of bullseye on `security.debian.org` still lists packages whose files are gone (404), so `apt-get dist-upgrade` failed on a box whose sources still named it, and the guide told you to edit them. The refresh now reads those lines as `archive.debian.org/debian-security` in the temporary sources it writes (your own files are never changed, and it checks they come back byte for byte), and says what it moved. When a download still gets a 404 from `security.debian.org` the refresh stops with the hint `security_archive_gap`.
+
 ## [0.5.31] - 2026-10-18
 
 Components: CasaOS `v0.4.75`, CasaOS-UI `v0.4.90`. Unchanged from v0.5.30: CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

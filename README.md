@@ -118,6 +118,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.32
+
+**A fix for the refresh of Debian 11**: the security updates of bullseye now come from the archive during a refresh, with no change to your own sources.
+
 ## What is in v0.5.31
 
 **The groundwork for optional modules**: an assistant that installs and removes a module from a catalogue pinned by the release, its API, a *Modules* page, and `install.sh --module`. The catalogue is empty in this release, so nothing is offered yet.
