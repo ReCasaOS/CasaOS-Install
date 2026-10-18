@@ -36,10 +36,16 @@
 #                         this release
 #   release-notes.md      that same section, the body of the GitHub release
 #   components.lock       the exact commits and tags this release was cut from
+#   modules-catalogue-<tag>.json
+#                         the modules this release can install, only when
+#                         release/modules.env lists any; install.sh carries the
+#                         digest of it, and carries none when there is no file
 #   checksums.txt         digests of everything above
 #
 # Inputs:
 #   release/components.env   tags and commits of every component
+#   release/modules.env      tag, commit, repository and tier of every module
+#                            (comments only while no module is offered)
 #   WORKSPACE_ROOT           directory holding the six component checkouts,
 #                            each at the commit pinned in components.env
 #                            (default: the parent of this repository)
@@ -52,6 +58,11 @@
 #                            thing be exercised before any release exists.
 #   UPSTREAM_BASE_URL        where to fetch the App Store seed tarball from
 #                            (default: https://github.com/IceWhaleTech)
+#   MODULES_GIT_BASE_URL     where the repositories of the modules are, to read
+#                            the commit a module's tag names (default:
+#                            CHECKSUMS_BASE_URL)
+#   PYTHON                   the interpreter of scripts/build-modules-catalogue.py,
+#                            which only runs when there is a module (python3)
 
 set -euo pipefail
 
@@ -59,10 +70,13 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly INSTALLER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "${INSTALLER_ROOT}/.." && pwd)}"
 readonly COMPONENT_LOCK="${INSTALLER_ROOT}/release/components.env"
+readonly MODULES_LOCK="${INSTALLER_ROOT}/release/modules.env"
 readonly GITHUB_OWNER="${GITHUB_OWNER:-ReCasaOS}"
 readonly CHECKSUMS_BASE_URL="${CHECKSUMS_BASE_URL:-https://github.com/${GITHUB_OWNER}}"
 readonly UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-https://github.com/IceWhaleTech}"
 readonly RCLONE_BASE_URL="${RCLONE_BASE_URL:-https://github.com/rclone}"
+readonly MODULES_GIT_BASE_URL="${MODULES_GIT_BASE_URL:-${CHECKSUMS_BASE_URL}}"
+readonly PYTHON="${PYTHON:-python3}"
 
 # shellcheck source=../release/components.env
 source "${COMPONENT_LOCK}"
@@ -189,6 +203,57 @@ package_overlay() {
     echo "Packaged compatibility overlay as ${OVERLAY_FILE}"
 }
 
+# build_modules_catalogue
+# Writes OUTPUT_DIR/modules-catalogue-<release tag>.json from release/modules.env
+# and sets MODULES_CATALOGUE_FILE to it. With no module in modules.env there is no
+# catalogue: the variable stays empty and nothing is fetched. For each module the
+# checksums.txt of its release and the two archives that file names are fetched
+# the way the components' are (curl -fsSL from CHECKSUMS_BASE_URL, the digest of
+# an archive being the one its own release publishes), and
+# build-modules-catalogue.py judges what came: one module that cannot be fetched
+# or does not hold stops the whole bundle, and no half catalogue is left behind.
+build_modules_catalogue() {
+    local list stage name component tag commit tier archives archive
+    local file="${OUTPUT_DIR}/modules-catalogue-${RELEASE_TAG}.json"
+
+    MODULES_CATALOGUE_FILE=""
+    rm -f "${OUTPUT_DIR}"/modules-catalogue-*.json
+
+    # only comments and blank lines: this release offers no module
+    grep -qvE '^[[:space:]]*(#|$)' "${MODULES_LOCK}" || return 0
+
+    list="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" list "${MODULES_LOCK}")" || fail "release/modules.env is not valid."
+    stage="${STAGING_ROOT}/modules"
+    while read -r name component tag commit tier; do
+        mkdir -p "${stage}/${name}"
+        curl -fsSL -o "${stage}/${name}/checksums.txt" "${CHECKSUMS_BASE_URL}/${component}/releases/download/${tag}/checksums.txt" ||
+            fail "Failed to download the checksums of module ${name} (${component} ${tag})."
+        archives="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" archives "${stage}/${name}/checksums.txt" "${tag}")" ||
+            fail "Module ${name}: its checksums.txt names no usable archives."
+        for archive in ${archives}; do
+            compute_checksum "${CHECKSUMS_BASE_URL}" "${component}" "${tag}" "${archive}" "${stage}/${name}" >/dev/null
+        done
+    done <<<"${list}"
+
+    "${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" build --git-base "${MODULES_GIT_BASE_URL}" --out "${file}" "${MODULES_LOCK}" "${stage}" ||
+        fail "The module catalogue was not built."
+    MODULES_CATALOGUE_FILE="${file}"
+}
+
+# fill_catalogue_digest <install.sh>
+# The digest of the catalogue goes into install.sh like the others, and is empty
+# when this release has none: install.sh then installs no catalogue and refuses
+# --module before it changes anything.
+fill_catalogue_digest() {
+    local target="$1" sum=""
+
+    if [[ -n "${MODULES_CATALOGUE_FILE}" ]]; then
+        sum="$(sha256sum "${MODULES_CATALOGUE_FILE}" | awk '{ print $1 }')"
+        [[ "${sum}" =~ ^[0-9a-f]{64}$ ]] || fail "No digest for ${MODULES_CATALOGUE_FILE}."
+    fi
+    sed -i "s|__CASAOS_MODULE_CATALOGUE_SHA256__|${sum}|g" "${target}"
+}
+
 # fill_installer <output install.sh>
 # Every value install.sh needs at run time is a placeholder in the committed
 # script and is written here from components.env and the published checksums.
@@ -257,6 +322,8 @@ fill_installer() {
     sum="$(compute_checksum "${UPSTREAM_BASE_URL}" CasaOS-AppStore "${CASAOS_APPSTORE_TAG}" "${APPSTORE_SEED_FILE}" "${OUTPUT_DIR}")"
     sed -i "s|__CASAOS_APPSTORE_SHA256__|${sum}|g" "${target}"
 
+    fill_catalogue_digest "${target}"
+
     if grep -qE '__[A-Z][A-Z0-9_]*__' "${target}"; then
         echo "Unfilled placeholders remain in install.sh:" >&2
         grep -oE '__[A-Z][A-Z0-9_]*__' "${target}" | sort -u >&2
@@ -313,13 +380,14 @@ write_version_manifest() {
 write_checksums() {
     (
         cd "${OUTPUT_DIR}"
-        sha256sum "${OVERLAY_FILE}" "${APPSTORE_SEED_FILE}" install.sh casaos-uninstall components.lock version.json >checksums.txt
+        sha256sum "${OVERLAY_FILE}" "${APPSTORE_SEED_FILE}" install.sh casaos-uninstall components.lock version.json ${MODULES_CATALOGUE_FILE:+"${MODULES_CATALOGUE_FILE##*/}"} >checksums.txt
         sha256sum install.sh >install.sh.sha256
     )
 }
 
 package_overlay
 install -m 0755 "${INSTALLER_ROOT}/casaos-uninstall" "${OUTPUT_DIR}/casaos-uninstall"
+build_modules_catalogue
 fill_installer "${OUTPUT_DIR}/install.sh"
 install -m 0644 "${COMPONENT_LOCK}" "${OUTPUT_DIR}/components.lock"
 write_version_manifest
