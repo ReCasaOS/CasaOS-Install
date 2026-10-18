@@ -13,6 +13,10 @@ the ones that were also run through the core's own ParseCatalogue when the copy 
 
 BUILDER=<path> and BUILD_SCRIPT=<path> run the cases against other copies, to see that a broken one is caught. TEST_BASH names a bash where plain `bash` is not
 the one (on Windows: the MSYS bash of Git, with a PATH that has no WindowsApps stub of python3). CASES=<regex> runs the cases whose name matches, FAILFAST=1 stops at the first that fails.
+
+CORE_SOURCE=<path> is a checkout of the core (the one release/components.env pins): the rules the builder copies are held to its Go source. Without it the
+sibling CasaOS directory is looked at; with no source the cases are skipped, unless release/modules.env lists a module, when the build of that release needs the source
+and so do these. Run with Python 3.12: its Unicode tables (15.0) are the Go's, and the case about them fails on 3.10 (13.0), which refuses characters the core takes.
 """
 import contextlib
 import hashlib
@@ -27,7 +31,9 @@ import sys
 import shlex
 import tarfile
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILDER = os.environ.get("BUILDER") or os.path.join(HERE, "build-modules-catalogue.py")
@@ -65,6 +71,9 @@ EXPECTED_MIN_CORE = "v0.4.75"
 COMPONENT = "CasaOS-VirtManagement"
 ARCHIVE = "linux-%s-casaos-virt-management-v0.1.1.tar.gz"
 BRAILLE_BLANK = chr(0x2800)
+SAME = object()  # (the module.json of the repository is the one the archives carry)
+NO_MANIFEST = b"<no module.json>"
+UNSET = b"<unset>"
 
 GOOD_MANIFEST = {
     "schema": 1,
@@ -89,6 +98,10 @@ GOOD_MANIFEST = {
 }
 
 
+def without_upgrade(manifest):
+    return {k: v for k, v in manifest.items() if k != "os_upgrade"}
+
+
 def sh(path):
     """A path as the MSYS bash and the curl of a Windows machine take it."""
     return os.path.abspath(path).replace("\\", "/")
@@ -101,7 +114,7 @@ def file_url(path):
 
 def git(cwd, *args):
     return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"] + list(args),
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false"] + list(args),
         cwd=cwd, check=True, capture_output=True, text=True,
     ).stdout.strip()
 
@@ -123,15 +136,20 @@ def jbytes(obj):
 
 
 def tarball(path, members):
-    """members: (name, bytes) for a file, (name, None) for a directory, (name, ('link', target)) for a symbolic link."""
-    with tarfile.open(path, "w:gz") as tf:
+    """members: (name, bytes) for a file, (name, None) for a directory, (name, ('link', target)) for a symbolic link, (name, ('hard', target)), (name, ('chr',)) and
+    (name, ('fifo',)) for the entries that a box refuses, (name, ('sparse',)) for a file that the tar format holds as holes."""
+    with tarfile.open(path, "w:gz", format=tarfile.PAX_FORMAT) as tf:
         for name, data in members:
             ti = tarfile.TarInfo(name)
             if data is None:
                 ti.type = tarfile.DIRTYPE
                 tf.addfile(ti)
+            elif isinstance(data, tuple) and data[0] == "sparse":
+                ti.pax_headers = {"GNU.sparse.major": "1"}
+                tf.addfile(ti)
             elif isinstance(data, tuple):
-                ti.type, ti.linkname = tarfile.SYMTYPE, data[1]
+                ti.type = {"link": tarfile.SYMTYPE, "hard": tarfile.LNKTYPE, "chr": tarfile.CHRTYPE, "fifo": tarfile.FIFOTYPE}[data[0]]
+                ti.linkname = data[1] if len(data) > 1 else ""
                 tf.addfile(ti)
             else:
                 ti.size = len(data)
@@ -143,17 +161,34 @@ class Release:
     <root>/<component>/releases/download/<tag>/ (which is where a file:// tree has them for curl)."""
 
     def __init__(self, root, component=COMPONENT, tag="v0.1.1", stem="virt-management", annotated=True):
-        self.root, self.component, self.tag, self.stem = root, component, tag, stem
+        self.root, self.component, self.tag, self.stem, self.annotated = root, component, tag, stem, annotated
         self.repo = os.path.join(root, component)
         os.makedirs(self.repo)
         git(self.repo, "init", "-q")
-        git(self.repo, "commit", "-q", "--allow-empty", "-m", "release")
-        self.commit = git(self.repo, "rev-parse", "HEAD")
-        git(self.repo, *(["tag", "-a", "-m", tag, tag] if annotated else ["tag", tag]))
-        git(self.repo, "commit", "-q", "--allow-empty", "-m", "later")
-        self.later = git(self.repo, "rev-parse", "HEAD")
+        self.repo_manifest = UNSET
+        self.set_repo_manifest(jbytes(GOOD_MANIFEST))
         self.dir = os.path.join(self.repo, "releases", "download", tag)
         os.makedirs(self.dir)
+
+    def set_repo_manifest(self, raw):
+        """The module.json at the root of the repository at the tag: a commit that holds these bytes (None: no module.json at all), the tag on it, and a later commit. The
+        commits are made only when the repository does not hold these bytes already."""
+        want = NO_MANIFEST if raw is None else raw
+        if want == self.repo_manifest:
+            return
+        if raw is None:
+            git(self.repo, "rm", "-q", "--ignore-unmatch", "module.json")
+            git(self.repo, "commit", "-q", "--allow-empty", "-m", "no module.json")
+        else:
+            with open(os.path.join(self.repo, "module.json"), "wb") as f:
+                f.write(raw)
+            git(self.repo, "add", "module.json")
+            git(self.repo, "commit", "-q", "--allow-empty", "-m", "release")
+        self.commit = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, *(["tag", "-f", "-a", "-m", self.tag, self.tag] if self.annotated else ["tag", "-f", self.tag]))
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", "later")
+        self.later = git(self.repo, "rev-parse", "HEAD")
+        self.repo_manifest = want
 
     def archive_name(self, arch):
         return "linux-%s-casaos-%s-%s.tar.gz" % (arch, self.stem, self.tag)
@@ -163,9 +198,14 @@ class Release:
             os.remove(os.path.join(self.dir, entry))
         return self
 
-    def publish(self, manifest=GOOD_MANIFEST, manifest_arm=None, members=None, members_arm=None, sums=None):
-        """Writes the archives and checksums.txt. manifest is a dict or the bytes of module.json; members replace the whole content of an archive."""
+    def publish(self, manifest=GOOD_MANIFEST, manifest_arm=None, members=None, members_arm=None, sums=None, repo=SAME):
+        """Writes the archives and checksums.txt. manifest is a dict or the bytes of module.json; members replace the whole content of an archive. The repository is
+        made to hold the same module.json at the tag, unless repo says what it holds: the bytes, None for no module.json at all, or False for what it holds already."""
         raw = manifest if isinstance(manifest, bytes) else jbytes(manifest)
+        if repo is SAME:
+            self.set_repo_manifest(raw)
+        elif repo is not False:
+            self.set_repo_manifest(repo)
         raw_arm = raw if manifest_arm is None else (manifest_arm if isinstance(manifest_arm, bytes) else jbytes(manifest_arm))
         lines = []
         for arch, text in (("amd64", raw), ("arm64", raw_arm)):
@@ -418,6 +458,45 @@ class ModulesEnv(Base):
                     builder.read_modules_env(self.env)
 
 
+    def test_a_byte_that_is_not_printable_ascii_is_refused_where_it_is(self):
+        good = env_text(commit="a" * 40)
+        cases = {
+            "U+2028 between a comment and a module": "# nothing\u2028" + good,
+            "U+0085": "# nothing\u0085" + good,
+            "a vertical tab": "# nothing\x0b" + good,
+            "a form feed": "# nothing\x0c" + good,
+            "a file separator": "# nothing\x1c" + good,
+            "a group separator": "# nothing\x1d" + good,
+            "a record separator": "# nothing\x1e" + good,
+            "a lone carriage return": "# nothing\r" + good,
+            "a carriage return in the middle of a line": good.replace("MODULE_VIRT_TAG", "MODULE_VIRT_T\rAG"),
+            "a carriage return that ends the file": good + "\r",
+            "a NUL": "# nothing\x00\n" + good,
+            "a byte order mark": "\ufeff" + good,
+            "a letter that is not ASCII, in a comment": "# \u00e9\n" + good,
+            "DEL": "# x\x7f\n" + good,
+            "a no-break space": "# a\u00a0b\n" + good,
+        }
+        for what, text in cases.items():
+            with self.subTest(what):
+                with open(self.env, "wb") as f:
+                    f.write(text.encode("utf-8"))
+                with self.assertRaises(builder.Refused) as raised:
+                    builder.read_modules_env(self.env)
+                self.assertIn("modules.env line", str(raised.exception))
+        # and what is allowed: tabs, spaces, a carriage return before a line feed, a comment, a last line with no line end
+        with open(self.env, "wb") as f:
+            f.write(b"\t# a comment\r\n  \r\n" + good.replace("\n", "\r\n").encode() + b"\r\n# the last line")
+        self.assertEqual(len(builder.read_modules_env(self.env)), 1)
+
+    def test_a_file_that_cannot_be_read_is_refused(self):
+        for what, path in (("a file that is not there", os.path.join(self.tmp, "nowhere")), ("a folder", self.tmp)):
+            with self.subTest(what):
+                with self.assertRaises(builder.Refused) as raised:
+                    builder.read_modules_env(path)
+                self.assertIn("cannot be read", str(raised.exception))
+
+
 class Checksums(unittest.TestCase):
     def lines(self, *names, digest="a" * 64):
         return "\n".join("%s  %s" % (digest, n) for n in names) + "\n"
@@ -620,7 +699,7 @@ class Build(Base):
     def test_the_manifest(self):
         for what, manifest in manifest_cases().items():
             with self.subTest(what):
-                self.offer(manifest if isinstance(manifest, bytes) else json.dumps(manifest).encode())
+                self.offer(manifest if isinstance(manifest, bytes) else json.dumps(manifest).encode(), repo=False)
                 self.refused("module.json")
 
     def test_a_manifest_that_the_reader_takes(self):
@@ -647,6 +726,73 @@ class Build(Base):
         with self.assertRaises(builder.Refused):
             builder.parse_catalogue(json.dumps(good).encode() + b" " * (1 << 20))
         builder.parse_catalogue(json.dumps(good).encode() + b" " * ((1 << 20) - len(json.dumps(good))))  # (1 MiB exactly is the most)
+
+
+    def test_the_module_json_of_the_archives_is_the_one_of_the_repository_at_the_tag(self):
+        different = jbytes(dict(GOOD_MANIFEST, description="Another text, in the repository."))
+        cases = {
+            "another text": different,
+            "the same text with another line end": jbytes(GOOD_MANIFEST).replace(b"\n", b"\r\n"),
+            "the same text and a line end more": jbytes(GOOD_MANIFEST) + b"\n",
+            "the same text, compact": json.dumps(GOOD_MANIFEST).encode(),
+        }
+        for what, repo in cases.items():
+            with self.subTest(what):
+                r = self.virt.clear().publish(repo=repo)
+                shutil.rmtree(self.stage_dir, ignore_errors=True)
+                r.stage(self.stage_dir)
+                self.write_env(env_text(commit=r.commit))
+                self.refused("byte for byte")
+        # (and the archives that are the repository's own are taken, as every other case of this file shows)
+
+    def test_a_repository_with_no_module_json_at_the_tag(self):
+        r = self.virt.clear().publish(repo=None)
+        shutil.rmtree(self.stage_dir, ignore_errors=True)
+        r.stage(self.stage_dir)
+        self.write_env(env_text(commit=r.commit))
+        self.refused("has no module.json at %s" % r.commit)
+
+    def test_the_repository_is_looked_at_for_the_tag_and_not_for_a_branch_of_its_name(self):
+        r = self.release().publish()
+        r.stage(self.stage_dir)
+        self.write_env(env_text(commit=r.commit))
+        git(r.repo, "branch", "-f", "other", r.later)
+        self.build(git_base=file_url(os.path.join(self.tmp, "own")))
+        self.assertEqual(builder.parse_catalogue(self.catalogue())["modules"][0]["commit"], r.commit)
+
+    def test_modules_may_not_share_a_unit_a_route_or_a_component(self):
+        def entry(name, unit="casaos-%s.service", route="/v1/%s_x", component="CasaOS-%s"):
+            return {"name": name, "component": component.replace("%s", name), "manifest": {"unit": unit.replace("%s", name), "gateway_route": route.replace("%s", name)}}
+
+        builder.check_distinct([entry("a"), entry("b")])
+        builder.check_distinct([])
+        cases = {
+            "a unit": ([entry("a"), entry("b", unit="casaos-a.service")], "share the unit casaos-a.service"),
+            "a route": ([entry("a"), entry("b", route="/v1/a_x")], "share the gateway route /v1/a_x"),
+            "a component": ([entry("a"), entry("b", component="CasaOS-a")], "share the component"),
+            "a component that differs by its case only": ([entry("a"), entry("b", component="casaos-A")], "share the component"),
+            "a unit, the second of three": ([entry("a"), entry("b"), entry("c", unit="casaos-b.service")], "modules b and c share the unit"),
+        }
+        for what, (entries, reason) in cases.items():
+            with self.subTest(what):
+                with self.assertRaises(builder.Refused) as raised:
+                    builder.check_distinct(entries)
+                self.assertIn(reason, str(raised.exception))
+
+    def test_two_real_modules_that_share_a_unit_or_a_route_are_no_catalogue(self):
+        r1 = self.good()
+        base = without_upgrade(dict(GOOD_MANIFEST, name="other", component="CasaOS-Other"))
+        cases = {
+            "a unit": (dict(base, gateway_route="/v1/other_thing"), "share the unit"),
+            "a route": (dict(base, unit="casaos-other.service"), "share the gateway route"),
+        }
+        for what, (manifest, reason) in cases.items():
+            with self.subTest(what):
+                r2 = self.other.clear().publish(manifest=manifest)
+                shutil.rmtree(os.path.join(self.stage_dir, "other"), ignore_errors=True)
+                r2.stage(self.stage_dir, "other")
+                self.write_env(env_text(commit=r1.commit) + env_text(name="OTHER", commit=r2.commit, component="CasaOS-Other"))
+                self.refused(reason)
 
 
 class Units(Base):
@@ -677,10 +823,11 @@ class Units(Base):
     def test_the_number_of_modules(self):
         def entry(module, stage, git_base):
             name = module["name"]
+            component = "CasaOS-" + name
             return {
-                "name": name, "component": COMPONENT, "tier": "community", "tag": "v0.1.1", "commit": module["commit"],
-                "assets": {arch: {"url": "https://github.com/ReCasaOS/%s/releases/download/v0.1.1/%s" % (COMPONENT, ARCHIVE % arch), "sha256": "b" * 64} for arch in ("amd64", "arm64")},
-                "manifest": dict(GOOD_MANIFEST, name=name),
+                "name": name, "component": component, "tier": "community", "tag": "v0.1.1", "commit": module["commit"],
+                "assets": {arch: {"url": "https://github.com/ReCasaOS/%s/releases/download/v0.1.1/%s" % (component, ARCHIVE % arch), "sha256": "b" * 64} for arch in ("amd64", "arm64")},
+                "manifest": dict(without_upgrade(GOOD_MANIFEST), name=name, component=component, unit="casaos-%s.service" % name, gateway_route="/v1/%s_x" % name),
             }
 
         original = builder.entry_of
@@ -692,6 +839,380 @@ class Units(Base):
         os.remove(self.out)
         self.write_env("".join(env_text(name="M%02d" % i, commit="a" * 40) for i in range(65)))
         self.refused("too many")
+
+
+    def test_the_bounds_of_a_manifest_on_both_sides(self):
+        bare = without_upgrade(GOOD_MANIFEST)
+
+        def takes(manifest, name="virt"):
+            builder.parse_manifest(jbytes(manifest), name)
+
+        def refuses(manifest):
+            with self.assertRaises(builder.Refused):
+                builder.parse_manifest(jbytes(manifest), "virt")
+
+        takes(dict(bare, title="t" * 60))
+        refuses(dict(bare, title="t" * 61))
+        takes(dict(bare, description="d" * 300))
+        refuses(dict(bare, description="d" * 301))
+        takes(dict(bare, description=""))
+        takes(dict(bare, packages={"common": ["pkg%02d" % i for i in range(32)]}))
+        refuses(dict(bare, packages={"common": ["pkg%02d" % i for i in range(33)]}))
+        takes(dict(bare, packages={"common": ["pkg%02d" % i for i in range(20)], "amd64": ["amd%02d" % i for i in range(20)]}))
+        refuses(dict(bare, packages={"common": ["pkg%02d" % i for i in range(20)], "amd64": ["amd%02d" % i for i in range(21)]}))
+        takes(dict(bare, packages={"common": ["ab"]}))
+        takes(dict(bare, packages={"common": ["a" + "b" * 63]}))
+        refuses(dict(bare, packages={"common": ["a" + "b" * 64]}))
+        takes(dict(bare, os=["debian:%d" % i for i in range(10, 26)]))
+        refuses(dict(bare, os=["debian:%d" % i for i in range(10, 27)]))
+        takes(dict(bare, os=["debian:99", "ubuntu:24.04"]))
+        refuses(dict(bare, os=["debian:100"]))
+        takes(dict(bare, min_recasaos="9999.9999.9999"))
+        refuses(dict(bare, min_recasaos="10000.0.0"))
+        takes(dict(bare, gateway_route="/v99/" + "a" * 40))
+        refuses(dict(bare, gateway_route="/v100/a"))
+        refuses(dict(bare, gateway_route="/v2/" + "a" * 41))
+        takes(dict(bare, unit="a" * 64 + ".service"))
+        refuses(dict(bare, unit="a" * 65 + ".service"))
+        takes(dict(bare, component="C" * 64))
+        refuses(dict(bare, component="C" * 65))
+        for seconds in (1, 3600):
+            takes(dict(GOOD_MANIFEST, os_upgrade=dict(GOOD_MANIFEST["os_upgrade"], stop_timeout_seconds=seconds)))
+        for seconds in (0, 3601, -1):
+            refuses(dict(GOOD_MANIFEST, os_upgrade=dict(GOOD_MANIFEST["os_upgrade"], stop_timeout_seconds=seconds)))
+        takes(dict(bare, name="a" * 32), name="a" * 32)
+
+    def test_a_unit_that_is_one_of_the_box(self):
+        bare = without_upgrade(GOOD_MANIFEST)
+        self.assertEqual(len(builder.RESERVED_UNITS), 15)
+        for unit in builder.RESERVED_UNITS + ("casaos-module-virt.service", "casaos-module-.service", "usb-mount@sdb1.service", "usb-mount@.service"):
+            with self.subTest(unit):
+                self.assertFalse(builder.valid_unit(unit))
+                with self.assertRaises(builder.Refused):
+                    builder.parse_manifest(jbytes(dict(bare, unit=unit)), "virt")
+        for unit in ("casaos-virt-management.service", "casaos-modules.service", "usb-mount.service", "casaos-gateway-x.service", "my-casaos.service", "Casaos.service"):
+            with self.subTest(unit):
+                self.assertTrue(builder.valid_unit(unit))
+                builder.parse_manifest(jbytes(dict(bare, unit=unit)), "virt")
+
+    def test_unicode_tables_are_those_of_the_core(self):
+        # characters that Unicode 14 and 15 assigned, which the Go that builds the core (Unicode 15.0) takes in a title, and that Python 3.10 (Unicode 13.0) refuses
+        for code in (0x1F6DD, 0x1FAE8, 0x1E030, 0x0CF3):
+            with self.subTest(hex(code)):
+                builder.parse_manifest(jbytes(dict(GOOD_MANIFEST, title="Virt " + chr(code))), "virt")
+
+
+class Archives(Base):
+    """What a box unpacks of an archive, and what makes it refuse the whole of it (pkg/osmodule unpack.go, files.go)."""
+
+    UNIT = GOOD_MANIFEST["unit"]
+
+    def members(self, *extra):
+        """The entries of an archive made of module.json, the directories above the sysroot and these: as the tar reader reads them."""
+        path = os.path.join(self.tmp, "members.tar.gz")
+        tarball(path, [("module.json", jbytes(GOOD_MANIFEST)), ("build/", None), ("build/sysroot/", None)] + list(extra))
+        return builder.read_archive(path)[1]
+
+    def rejects(self, *extra, reason="a box would refuse the archive for this entry"):
+        with self.assertRaises(builder.Refused) as raised:
+            builder.check_members(self.members(*extra), self.UNIT)
+        self.assertIn(reason, str(raised.exception))
+
+    def test_what_a_box_takes(self):
+        unit = self.UNIT
+        accepted = {
+            "a program": [("build/sysroot/usr/bin/casaos-virt-management", b"#!/bin/sh\n")],
+            "the directories above it": [("build/sysroot/usr/", None), ("build/sysroot/usr/bin/", None), ("build/sysroot/usr/bin/x", b"x")],
+            "every directory above the allowed ones": [("build/sysroot/%s/" % d, None) for d in ("usr", "usr/bin", "usr/lib", "usr/lib/systemd", "usr/lib/systemd/system", "lib", "lib/systemd", "lib/systemd/system", "etc", "etc/casaos")],
+            "a link to a program beside it": [("build/sysroot/usr/bin/x", b"x"), ("build/sysroot/usr/bin/y", ("link", "x"))],
+            "a link that says where it is": [("build/sysroot/usr/bin/y", ("link", "./x"))],
+            "the unit under usr/lib": [("build/sysroot/usr/lib/systemd/system/" + unit, b"[Unit]\n")],
+            "the unit under lib": [("build/sysroot/lib/systemd/system/" + unit, b"[Unit]\n")],
+            "a sample": [("build/sysroot/etc/casaos/virt-management.conf.sample", b"x")],
+            "the licence and the notice": [("LICENSE", b"x"), ("NOTICE", b"x")],
+            "every character of a name": [("build/sysroot/usr/bin/aZ09._+@:-x", b"x")],
+            "a name of 255 characters": [("build/sysroot/usr/bin/" + "a" * 255, b"x")],
+            "nothing but the manifest": [],
+        }
+        for what, extra in accepted.items():
+            with self.subTest(what):
+                builder.check_members(self.members(*extra), unit)
+
+    def test_what_makes_a_box_refuse_the_archive(self):
+        unit = self.UNIT
+        usr_unit = "build/sysroot/usr/lib/systemd/system/" + unit
+        lib_unit = "build/sysroot/lib/systemd/system/" + unit
+        refused = {
+            "a path outside the sysroot": [("evil", b"x")],
+            "a file at the root": [("README", b"x")],
+            "a file under build": [("build/x", b"x")],
+            "outside the allowed directories": [("build/sysroot/etc/passwd", b"x")],
+            "the configuration itself, not a sample": [("build/sysroot/etc/casaos/virt-management.conf", b"x")],
+            "a file in the state directory": [("build/sysroot/var/lib/casaos/x", b"x")],
+            "a file in the shared directory": [("build/sysroot/usr/share/casaos/x", b"x")],
+            "a file in usr": [("build/sysroot/usr/x", b"x")],
+            "a subdirectory of an allowed directory": [("build/sysroot/usr/bin/sub/x", b"x")],
+            "a directory in an allowed directory": [("build/sysroot/usr/bin/sub/", None)],
+            "a directory in the sample directory": [("build/sysroot/etc/casaos/sub/", None)],
+            "a directory in the state directory": [("build/sysroot/var/lib/casaos/", None)],
+            "a directory in the shared directory": [("build/sysroot/usr/share/", None)],
+            "a directory beside the units": [("build/sysroot/usr/lib/other/", None)],
+            "a directory of another tree of units": [("build/sysroot/etc/systemd/", None)],
+            "a directory of its own": [("build/sysroot/opt/", None)],
+            "a drop-in of the unit": [("build/sysroot/usr/lib/systemd/system/%s.d/x.conf" % unit, b"x")],
+            "a unit that is not the module's": [("build/sysroot/usr/lib/systemd/system/other.service", b"x")],
+            "a timer": [("build/sysroot/usr/lib/systemd/system/casaos-virt-management.timer", b"x")],
+            "the unit as a link": [(usr_unit, ("link", "x"))],
+            "the unit as a directory": [(usr_unit, None)],
+            "a sample as a link": [("build/sysroot/etc/casaos/x.sample", ("link", "y"))],
+            "a program of the system's own: systemctl": [("build/sysroot/usr/bin/systemctl", b"x")],
+            "a program of the system's own: env": [("build/sysroot/usr/bin/env", b"x")],
+            "a program of the system's own: a link named sh": [("build/sysroot/usr/bin/sh", ("link", "x"))],
+            "a path that goes up": [("build/sysroot/usr/bin/../../x", b"x")],
+            "an absolute path": [("/etc/x", b"x")],
+            "a name with a space": [("build/sysroot/usr/bin/a b", b"x")],
+            "a name with a character outside ASCII": [("build/sysroot/usr/bin/\u00e9", b"x")],
+            "a name with a backslash": [("build/sysroot/usr/bin/a" + chr(92) + "b", b"x")],
+            "a name of 256 characters": [("build/sysroot/usr/bin/" + "a" * 256, b"x")],
+            "a name of dots": [("build/sysroot/usr/bin/...", b"x")],
+            "a name with an empty part": [("build/sysroot/usr//bin/x", b"x")],
+            "a link to an absolute path": [("build/sysroot/usr/bin/y", ("link", "/etc/passwd"))],
+            "a link that goes up": [("build/sysroot/usr/bin/y", ("link", "../x"))],
+            "a link that goes up after going down": [("build/sysroot/usr/bin/y", ("link", "a/../b"))],
+            "a link with an empty part": [("build/sysroot/usr/bin/y", ("link", "a//b"))],
+            "a link with no target": [("build/sysroot/usr/bin/y", ("link", ""))],
+            "a link of a target of 256 characters": [("build/sysroot/usr/bin/y", ("link", "a" * 256))],
+            "a hard link": [("build/sysroot/usr/bin/y", ("hard", "x"))],
+            "a device": [("build/sysroot/usr/bin/y", ("chr",))],
+            "a fifo": [("build/sysroot/usr/bin/y", ("fifo",))],
+            "a file made of holes": [("build/sysroot/usr/bin/y", ("sparse",))],
+            "the licence as a directory": [("LICENSE", None)],
+            "the notice as a link": [("NOTICE", ("link", "x"))],
+            "the sysroot as a file": [("build/sysroot", b"x")],
+            "the sysroot as a link": [("build/sysroot", ("link", "x"))],
+            "a name twice": [("build/sysroot/usr/bin/x", b"x"), ("build/sysroot/usr/bin/x", b"y")],
+            "names that differ only by the case": [("build/sysroot/usr/bin/Foo", b"x"), ("build/sysroot/usr/bin/foo", b"x")],
+            "the unit under both directories": [(usr_unit, b"x"), (lib_unit, b"x")],
+            "a directory twice": [("build/sysroot/usr/", None), ("build/sysroot/usr/", None)],
+        }
+        for what, extra in refused.items():
+            with self.subTest(what):
+                self.rejects(*extra)
+        for program in builder.RESERVED_PROGRAMS:
+            with self.subTest("the program " + program):
+                self.rejects(("build/sysroot/usr/bin/" + program, b"x"))
+
+    def test_the_kind_of_an_entry_is_what_the_tar_says(self):
+        members = self.members(("build/sysroot/usr/bin/f", b"x"), ("build/sysroot/usr/bin/l", ("link", "f")), ("build/sysroot/usr/bin/h", ("hard", "f")),
+                               ("build/sysroot/usr/bin/c", ("chr",)), ("build/sysroot/usr/bin/p", ("fifo",)), ("build/sysroot/usr/bin/s", ("sparse",)))
+        self.assertEqual(
+            [(n, k) for n, k, _ in members],
+            [("module.json", "file"), ("build", "dir"), ("build/sysroot", "dir"), ("build/sysroot/usr/bin/f", "file"), ("build/sysroot/usr/bin/l", "link"),
+             ("build/sysroot/usr/bin/h", "other"), ("build/sysroot/usr/bin/c", "other"), ("build/sysroot/usr/bin/p", "other"), ("build/sysroot/usr/bin/s", "other")],
+        )
+
+    def test_the_bounds_of_an_archive_on_both_sides(self):
+        path = os.path.join(self.tmp, "bounds.tar.gz")
+        good = jbytes(GOOD_MANIFEST)
+        # 5000 entries are the most
+        tarball(path, [("module.json", good)] + [("build/sysroot/usr/bin/f%04d" % i, b"") for i in range(4999)])
+        self.assertEqual(len(builder.read_archive(path)[1]), 5000)
+        tarball(path, [("module.json", good)] + [("build/sysroot/usr/bin/f%04d" % i, b"") for i in range(5000)])
+        with self.assertRaises(builder.Refused) as raised:
+            builder.read_archive(path)
+        self.assertIn("more than 5000 entries", str(raised.exception))
+        # the size of the archive, and the bytes of its files, are bounded by what a box downloads and unpacks
+        tarball(path, [("module.json", good), ("build/sysroot/usr/bin/x", b"x" * 1000)])
+        size = os.path.getsize(path)
+        with mock.patch.object(builder, "MAX_ARCHIVE_BYTES", size):
+            builder.read_archive(path)
+        with mock.patch.object(builder, "MAX_ARCHIVE_BYTES", size - 1):
+            with self.assertRaises(builder.Refused) as raised:
+                builder.read_archive(path)
+            self.assertIn("download_too_large", str(raised.exception))
+        total = len(good) + 1000
+        with mock.patch.object(builder, "MAX_TOTAL_BYTES", total):
+            builder.read_archive(path)
+        with mock.patch.object(builder, "MAX_TOTAL_BYTES", total - 1):
+            with self.assertRaises(builder.Refused) as raised:
+                builder.read_archive(path)
+            self.assertIn("unpack_limits", str(raised.exception))
+
+    def test_both_archives_are_looked_at_when_the_catalogue_is_built(self):
+        good = jbytes(GOOD_MANIFEST)
+        fine = [("module.json", good), ("build/", None), ("build/sysroot/usr/bin/casaos-virt-management", b"#!/bin/sh\n")]
+        evil = fine + [("build/sysroot/etc/passwd", b"x")]
+        self.offer(members=fine)
+        self.build()
+        os.remove(self.out)
+        for what, amd64, arm64 in (("the amd64 archive", evil, fine), ("the arm64 archive", fine, evil)):
+            with self.subTest(what):
+                self.offer(members=amd64, members_arm=arm64)
+                self.refused("a box would refuse the archive for this entry")
+                with self.assertRaises(builder.Refused) as raised:
+                    self.build()
+                self.assertIn("linux-%s-" % ("amd64" if amd64 is evil else "arm64"), str(raised.exception))
+
+
+class Proof(Base):
+    """The check of what the core's own `casaos module list` printed on the catalogue that was built."""
+
+    MODULES = [{"name": "virt", "component": COMPONENT, "tag": "v0.1.1", "commit": "a" * 40, "tier": "community"}]
+
+    def output(self, **kw):
+        listing = {"catalogue": {"ok": True}, "modules": [{"name": "virt", "title": "Virtual machines", "tag": "v0.1.1", "tier": "community", "installed": None}]}
+        listing.update(kw)
+        return json.dumps(listing).encode()
+
+    def refused(self, raw, reason):
+        with self.assertRaises(builder.Refused) as raised:
+            builder.check_list_output(raw, self.MODULES)
+        self.assertIn(reason, str(raised.exception))
+
+    def test_one_object_that_says_the_catalogue_is_fine_and_lists_the_modules(self):
+        builder.check_list_output(self.output(), self.MODULES)
+        builder.check_list_output(self.output() + b"\n", self.MODULES)
+        builder.check_list_output(self.output(modules=[{"name": "other"}, {"name": "virt", "tag": "v0.1.1", "tier": "community"}]), self.MODULES)  # (more is not less)
+        two = self.MODULES + [dict(self.MODULES[0], name="other", tier="core", tag="v2.0.0")]
+        builder.check_list_output(self.output(modules=[{"name": "virt", "tag": "v0.1.1", "tier": "community"}, {"name": "other", "tag": "v2.0.0", "tier": "core"}]), two)
+
+    def test_what_is_not_that(self):
+        ok = {"ok": True}
+        cases = {
+            "junk": (b"hello", "did not print one JSON object"),
+            "nothing": (b"", "did not print one JSON object"),
+            "a list": (b"[1]", "did not print one JSON object"),
+            "text after the object": (self.output() + b" hello", "did not print one JSON object"),
+            "two objects": (self.output() + b"\n" + self.output(), "did not print one JSON object"),
+            "a key twice": (b'{"catalogue": {"ok": false}, "catalogue": {"ok": true}, "modules": []}', "did not print one JSON object"),
+            "NaN": (self.output().replace(b"null", b"NaN"), "did not print one JSON object"),
+            "bytes that are not UTF-8": (self.output().replace(b"Virtual", b"Virt\xe9"), "did not print one JSON object"),
+            "a catalogue that is not ok": (self.output(catalogue={"ok": False, "error": "none"}), "does not take the catalogue"),
+            "an ok that is text": (self.output(catalogue={"ok": "true"}), "does not take the catalogue"),
+            "an ok that is one": (self.output(catalogue={"ok": 1}), "does not take the catalogue"),
+            "no catalogue": (b'{"modules": []}', "does not take the catalogue"),
+            "a catalogue that is a list": (self.output(catalogue=[ok]), "does not take the catalogue"),
+            "no module": (self.output(modules=[]), "does not list module virt"),
+            "modules that is null": (self.output(modules=None), "does not list module virt"),
+            "modules that is an object": (self.output(modules={"virt": {}}), "does not list module virt"),
+            "another module only": (self.output(modules=[{"name": "other"}]), "does not list module virt"),
+            "an entry that is not an object": (self.output(modules=["virt"]), "does not list module virt"),
+            "a name that is not text": (self.output(modules=[{"name": 5}]), "does not list module virt"),
+            "another tag": (self.output(modules=[{"name": "virt", "tag": "v9.9.9", "tier": "community"}]), "not at the pinned"),
+            "another tier": (self.output(modules=[{"name": "virt", "tag": "v0.1.1", "tier": "core"}]), "not at the pinned"),
+            "no tag": (self.output(modules=[{"name": "virt", "tier": "community"}]), "not at the pinned"),
+            "more than 1 MiB": (self.output() + b" " * (1 << 20), "larger than 1 MiB"),
+        }
+        for what, (raw, reason) in cases.items():
+            with self.subTest(what):
+                self.refused(raw, reason)
+
+    def run_builder(self, *args):
+        p = subprocess.run([sys.executable, "-I", BUILDER] + list(args), capture_output=True)
+        return p.returncode, p.stdout.decode("utf-8"), p.stderr.decode("utf-8")
+
+    def test_the_command(self):
+        self.write_env(env_text(commit="a" * 40))
+        out = os.path.join(self.tmp, "out.json")
+        with open(out, "wb") as f:
+            f.write(self.output())
+        self.assertEqual(self.run_builder("proof", self.env, out), (0, "", ""))
+        with open(out, "wb") as f:
+            f.write(b"hello")
+        code, stdout, stderr = self.run_builder("proof", self.env, out)
+        self.assertEqual((code, stdout), (1, ""))
+        self.assertIn("error: the core did not print one JSON object", stderr)
+        self.assertEqual(self.run_builder("proof", self.env, os.path.join(self.tmp, "nothing"))[0], 1)
+        self.write_env("# nothing\n")
+        self.assertEqual(self.run_builder("proof", self.env, out)[0], 1)
+        self.assertEqual(self.run_builder("proof", self.env)[0], 2)
+
+
+def lists_modules():
+    with open(os.path.join(RELEASE_DIR, "modules.env"), "rb") as f:
+        return any(line.strip() and not line.strip().startswith(b"#") for line in f.read().splitlines())
+
+
+class AgainstTheCore(unittest.TestCase):
+    """The rules that the builder copies are held to the Go source of the core they were copied from: a rule that changes there and not here fails this."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = os.path.join(os.environ.get("CORE_SOURCE") or os.path.join(HERE, "..", "..", "CasaOS"), "pkg", "osmodule")
+        if not os.path.isfile(os.path.join(cls.dir, "manifest.go")):
+            if lists_modules():
+                raise AssertionError("release/modules.env lists modules, and there is no source of the core at %s (CORE_SOURCE)" % cls.dir)
+            raise unittest.SkipTest("no source of the core at %s (CORE_SOURCE names one); it is needed once release/modules.env lists a module" % cls.dir)
+        cls.go = {}
+        for name in ("manifest.go", "catalogue.go", "files.go", "unpack.go", "plan.go"):
+            with open(os.path.join(cls.dir, name), encoding="utf-8") as f:
+                cls.go[name] = f.read()
+
+    def text(self, name):
+        return self.go[name]
+
+    def strings(self, name, var):
+        found = re.search(r"\b%s\s*=\s*\[\]string\{(.*?)\}" % var, self.text(name), re.S)
+        self.assertIsNotNone(found, "%s is not in %s" % (var, name))
+        return tuple(re.findall(r'"([^"]*)"', found.group(1)))
+
+    def regex(self, name, var):
+        found = re.search(r"\b%s\s*=\s*regexp\.MustCompile\(`([^`]*)`\)" % var, self.text(name))
+        self.assertIsNotNone(found, "%s is not in %s" % (var, name))
+        pattern = found.group(1)
+        self.assertTrue(pattern.startswith("^") and pattern.endswith("$"), "%s is not anchored" % var)
+        return pattern[1:-1]
+
+    def number(self, name, var):
+        found = re.search(r"\b%s\b(?:\s+int64)?\s*=\s*(\d+)(?:\s*<<\s*(\d+))?" % var, self.text(name))
+        self.assertIsNotNone(found, "%s is not in %s" % (var, name))
+        return int(found.group(1)) << int(found.group(2) or 0)
+
+    def test_the_lists(self):
+        for name, var, ours in (
+            ("manifest.go", "reservedRoutes", builder.RESERVED_ROUTES),
+            ("manifest.go", "reservedUnits", builder.RESERVED_UNITS),
+            ("manifest.go", "reservedUnitPrefixes", builder.RESERVED_UNIT_PREFIXES),
+            ("unpack.go", "ReservedPrograms", builder.RESERVED_PROGRAMS),
+            ("files.go", "AllowedDirs", builder.ALLOWED_DIRS),
+        ):
+            with self.subTest(var):
+                self.assertEqual(self.strings(name, var), tuple(ours))
+        found = re.search(r'sampleSuffix\s*=\s*"([^"]*)"', self.text("files.go"))
+        self.assertEqual(found.group(1), builder.SAMPLE_SUFFIX)
+
+    def test_the_patterns(self):
+        for name, var, ours in (
+            ("manifest.go", "nameRe", builder.NAME_RE), ("manifest.go", "componentRe", builder.COMPONENT_RE), ("manifest.go", "unitRe", builder.UNIT_RE),
+            ("manifest.go", "routeRe", builder.ROUTE_RE), ("manifest.go", "callRe", builder.CALL_RE), ("manifest.go", "packageRe", builder.PACKAGE_RE),
+            ("manifest.go", "versionRe", builder.VERSION_RE), ("manifest.go", "osRe", builder.OS_RE),
+            ("catalogue.go", "tagRe", builder.TAG_RE), ("catalogue.go", "commitRe", builder.COMMIT_RE), ("catalogue.go", "sha256Re", builder.SHA256_RE),
+            ("catalogue.go", "archiveRe", builder.ARCHIVE_RE),
+        ):
+            with self.subTest(var):
+                self.assertEqual(self.regex(name, var), ours.pattern)
+
+    def test_the_bounds(self):
+        for name, var, ours in (
+            ("manifest.go", "MaxBytes", builder.MAX_MANIFEST_BYTES), ("manifest.go", "maxPackages", builder.MAX_PACKAGES), ("manifest.go", "maxPackagesAll", builder.MAX_PACKAGES_ALL),
+            ("manifest.go", "maxOS", builder.MAX_OS), ("manifest.go", "maxStopUnits", builder.MAX_STOP_UNITS), ("manifest.go", "maxStopSeconds", builder.MAX_STOP_SECONDS),
+            ("manifest.go", "maxTitleRunes", builder.MAX_TITLE), ("manifest.go", "maxDescRunes", builder.MAX_DESCRIPTION),
+            ("catalogue.go", "MaxCatalogueBytes", builder.MAX_CATALOGUE_BYTES), ("catalogue.go", "MaxCatalogueModules", builder.MAX_CATALOGUE_MODULES), ("catalogue.go", "maxURLBytes", builder.MAX_URL_BYTES),
+            ("files.go", "MaxEntries", builder.MAX_ENTRIES), ("files.go", "MaxPathBytes", builder.MAX_PATH_BYTES), ("files.go", "MaxElementBytes", builder.MAX_ELEMENT_BYTES),
+            ("unpack.go", "MaxTotalBytes", builder.MAX_TOTAL_BYTES), ("plan.go", "MaxArchiveBytes", builder.MAX_ARCHIVE_BYTES),
+        ):
+            with self.subTest(var):
+                self.assertEqual(self.number(name, var), ours)
+        self.assertEqual(builder.CATALOGUE_SCHEMA, self.number("catalogue.go", "CatalogueSchema"))
+        self.assertEqual(builder.MANIFEST_SCHEMA, self.number("manifest.go", "Schema"))
+        self.assertEqual(builder.ORG_URL, "https://github.com/ReCasaOS/")
+        self.assertIn('"https://github.com/ReCasaOS/"', self.text("catalogue.go"))
+
+    def test_the_blank_characters(self):
+        found = re.search(r'const blanks = "([^"]*)"', self.text("manifest.go"))
+        self.assertIsNotNone(found)
+        go_blanks = found.group(1).encode("ascii").decode("unicode_escape")
+        self.assertEqual(go_blanks, builder.BLANKS)
 
 
 class CommandLine(Base):
@@ -747,8 +1268,79 @@ class BuildScript(Base):
         super().setUp()
         self.output = os.path.join(self.tmp, "dist")
         os.makedirs(self.output)
+        # the core that the release pins: a checkout that has pkg/modulecmd, a `go` that builds the stand-in core of the case, and the logs of both
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        self.workspace = os.path.join(self.tmp, "ws")
+        os.makedirs(os.path.join(self.workspace, "CasaOS", "pkg", "modulecmd"))
+        self.go_log, self.core_log, self.ran, self.pidfile = [os.path.join(self.tmp, n) for n in ("go.log", "core.log", "ran", "pid")]
+        self.core_file = os.path.join(self.tmp, "core-stand-in")
+        self.stand_in_go()
+        self.stand_in_core("good")
 
-    def run_functions(self, body, python=None, core=None):
+    def script(self, name, text, directory=None):
+        path = os.path.join(directory or self.bin, name)
+        with open(path, "w", newline="\n") as f:
+            f.write(text)
+        os.chmod(path, 0o755)
+
+    def stand_in_go(self, fails=False):
+        """`go build ... -o OUT .` puts the stand-in core of the case at OUT."""
+        self.script("go", """#!/bin/sh
+{ echo "args=$*"; echo "cwd=$(pwd)"; echo "goos=${GOOS:-} goarch=${GOARCH:-} goarm=${GOARM:-} cgo=${CGO_ENABLED:-}"; } >> '@@LOG@@'
+[ "${1:-}" = build ] || exit 3
+@@FAILS@@
+out=""
+while [ $# -gt 0 ]; do
+    if [ "$1" = -o ]; then out="$2"; fi
+    shift
+done
+cp '@@CORE@@' "$out"
+chmod +x "$out"
+""".replace("@@LOG@@", sh(self.go_log)).replace("@@CORE@@", sh(self.core_file)).replace("@@FAILS@@", 'echo "compile error" >&2; exit 1' if fails else ""))
+
+    def stand_in_core(self, kind, tag="v0.1.1", tier="community"):
+        """The core that `go` builds. good reads what the probe gives it and prints what the core prints; the others are the ways a core is wrong."""
+        listing = '{"catalogue":{"ok":true},"modules":[{"name":"virt","tag":"%s","tier":"%s"}]}' % (tag, tier)
+        NOTOK = '{"catalogue":{"ok":false,"error":"none"},"modules":[]}'
+        MISSING = '{"catalogue":{"ok":true},"modules":[]}'
+        say = {
+            "good": "echo '%s'" % listing,
+            "nomarker": "echo '%s'" % listing,
+            "wrongtag": "echo '%s'" % listing.replace(tag, "v9.9.9"),
+            "wrongtier": "echo '%s'" % listing.replace(tier, "core" if tier != "core" else "community"),
+            "junk": "echo hello",
+            "empty": "true",
+            "notok": "echo '" + NOTOK + "'",
+            "missing": "echo '" + MISSING + "'",
+            "two": "echo '%s'; echo '%s'" % (listing, listing),
+            "array": "echo '[1]'",
+            "fail": "echo 'boom: cannot start' >&2; exit 3",
+            "hang": "sleep 600",
+            "huge": "yes | head -c 3000000; echo '%s'" % listing,
+        }[kind]
+        marker = "" if kind == "nomarker" else "# CASAOS_MODULE_RESULT is a string that only a core that has the assistant holds\n"
+        text = """#!/bin/sh
+%(marker)secho ran >> '@@RAN@@'
+{ echo "args=$*"; echo "test=${CASAOS_MODULE_TEST:-}"; echo "catalogue=${CASAOS_MODULE_CATALOGUE:-}"; echo "token=${GITHUB_TOKEN:-none}"
+  echo "nonce=${CASAOS_MODULE_NONCE:-none}"; echo "cwd=$(pwd)"; echo "uid=$(id -u)"; } >> '@@LOG@@'
+echo $$ > '@@PID@@'
+[ "$1 $2" = "module list" ] || exit 8
+[ "${CASAOS_MODULE_TEST:-}" = 1 ] || exit 8
+[ -f "${CASAOS_MODULE_CATALOGUE:-/nonexistent}" ] || exit 8
+if read -r line; then echo "input=$line" >> '@@LOG@@'; exit 9; fi
+%(say)s
+""" % {"marker": marker, "say": say}
+        text = text.replace("@@RAN@@", sh(self.ran)).replace("@@LOG@@", sh(self.core_log)).replace("@@PID@@", sh(self.pidfile))
+        with open(self.core_file, "w", newline="\n") as f:
+            f.write(text)
+        os.chmod(self.core_file, 0o755)
+
+    def log(self, path):
+        with open(path) as f:
+            return f.read()
+
+    def run_functions(self, body, python=None, core=None, probe_timeout=30, run_timeout=300):
         script = """set -euo pipefail
 SCRIPT_DIR=%(scripts)s
 STAGING_ROOT=%(staging)s
@@ -759,9 +1351,12 @@ MODULES_GIT_BASE_URL=%(base)s
 RELEASE_TAG=v9.9.9
 PYTHON=%(python)s
 CASAOS_TAG=%(core)s
+CASAOS_COMMIT=%(commit)s
+WORKSPACE_ROOT=%(workspace)s
+MODULES_PROBE_TIMEOUT=%(timeout)s
 eval "$(tr -d '\\r' <%(script)s | sed -n '/^readonly MODULES_MIN_CORE_TAG=/p')"
 [ -n "${MODULES_MIN_CORE_TAG:-}" ] || { echo "build-release-bundle.sh defines no MODULES_MIN_CORE_TAG" >&2; exit 97; }
-for f in fail compute_checksum check_core_for_modules fill_modules_min_core_tag build_modules_catalogue fill_catalogue_digest write_checksums; do
+for f in fail compute_checksum check_core_for_modules fill_modules_min_core_tag refuse_catalogue build_probe_core prove_modules_core build_modules_catalogue fill_catalogue_digest write_checksums; do
     eval "$(tr -d '\\r' <%(script)s | sed -n "/^${f}() {\\$/,/^}\\$/p")"
     declare -F "${f}" >/dev/null || { echo "build-release-bundle.sh defines no ${f}()" >&2; exit 97; }
 done
@@ -769,22 +1364,58 @@ done
 """ % {
             "scripts": sh(HERE), "staging": sh(os.path.join(self.tmp, "staging")), "output": sh(self.output), "env": sh(self.env), "base": file_url(self.net),
             "python": sh(python or sys.executable), "script": sh(BUILD_SCRIPT), "body": body, "core": shlex.quote(MIN_CORE if core is None else core),
+            "commit": "c" * 40, "workspace": sh(self.workspace), "timeout": probe_timeout,
         }
         os.makedirs(os.path.join(self.tmp, "staging"), exist_ok=True)
-        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0")
-        p = subprocess.run([BASH, "-c", script], capture_output=True, text=True, env=env)
-        return p.returncode, p.stdout, p.stderr
+        # (a job's environment has things the probe must not be given, and a GOOS that the build of the core must not take)
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0", GITHUB_TOKEN="secret", CASAOS_MODULE_NONCE="n", GOOS="windows", GOARCH="arm64",
+                   PATH=self.bin + os.pathsep + os.environ["PATH"])
+        # (what is left of a terminal on the input is not the probe's to read)
+        out_path, err_path = os.path.join(self.tmp, "stdout.txt"), os.path.join(self.tmp, "stderr.txt")
+        with open(out_path, "w") as out, open(err_path, "w") as err:
+            p = subprocess.run([BASH, "-c", script], stdout=out, stderr=err, text=True, env=env, input="junk\n", timeout=run_timeout)
+        return p.returncode, self.log(out_path), self.log(err_path)
 
     def made(self):
         return sorted(f for f in os.listdir(self.output) if f.startswith("modules-catalogue-"))
 
-    def test_no_module_no_catalogue_and_no_python_needed(self):
+    def test_no_module_no_catalogue(self):
         self.write_env("# nothing\n\n")
         with open(os.path.join(self.output, "modules-catalogue-v0.0.1.json"), "w") as f:
             f.write("a catalogue of an earlier run\n")
-        code, out, err = self.run_functions('build_modules_catalogue\necho "file=[${MODULES_CATALOGUE_FILE}]"', python="/nonexistent/python")
+        code, out, err = self.run_functions('build_modules_catalogue\necho "file=[${MODULES_CATALOGUE_FILE}]"')
         self.assertEqual((code, out.strip()), (0, "file=[]"), err)
         self.assertEqual(self.made(), [], "a catalogue of an earlier run is left in the output directory")
+        self.assertFalse(os.path.exists(self.go_log), "a core was built for a release that lists no module")
+
+    def test_a_modules_env_that_is_not_there_or_cannot_be_read_is_not_one_with_no_module(self):
+        nowhere = os.path.join(self.tmp, "nowhere.env")
+        folder = os.path.join(self.tmp, "folder.env")
+        os.makedirs(folder)
+        unreadable = os.path.join(self.tmp, "unreadable.env")
+        with open(unreadable, "w") as f:
+            f.write("# nothing\n")
+        os.chmod(unreadable, 0)
+        cases = {"a file that is not there": nowhere, "a folder": folder}
+        if not os.access(unreadable, os.R_OK):  # (root, and Windows, read what has no mode)
+            cases["a file that has no mode"] = unreadable
+        for what, path in cases.items():
+            with self.subTest(what):
+                code, out, err = self.run_functions('MODULES_LOCK=%s\nbuild_modules_catalogue\necho "file=[${MODULES_CATALOGUE_FILE}]"' % sh(path))
+                self.assertNotEqual(code, 0, "%s was taken for a release with no module: %s" % (what, out))
+                self.assertIn("release/modules.env", err)
+                self.assertNotIn("file=[", out)
+
+    def test_a_modules_env_with_a_separator_that_grep_does_not_see_is_refused(self):
+        # a module after a comment, behind a line end that python's splitlines() sees and grep does not: no reader may be left to see less than another
+        for what, separator in (("U+2028", "\u2028"), ("U+0085", "\u0085"), ("a vertical tab", "\x0b"), ("a form feed", "\x0c"), ("a file separator", "\x1c"), ("a lone carriage return", "\r")):
+            with self.subTest(what):
+                with open(self.env, "wb") as f:
+                    f.write(("# nothing" + separator + env_text(commit="a" * 40)).encode("utf-8"))
+                code, out, err = self.run_functions('build_modules_catalogue\necho "file=[${MODULES_CATALOGUE_FILE}]"')
+                self.assertNotEqual(code, 0, "the module behind %s was dropped: %s" % (what, out))
+                self.assertIn("modules.env line 1", err)
+                self.assertEqual(self.made(), [])
 
     def test_the_digest_of_no_catalogue_is_empty(self):
         self.write_env("# nothing\n")
@@ -900,7 +1531,7 @@ done
 
     def test_a_release_with_no_module_asks_nothing_of_its_core(self):
         self.write_env("# nothing\n\n")
-        code, out, err = self.run_functions('build_modules_catalogue\necho "file=[${MODULES_CATALOGUE_FILE}]"', python="/nonexistent/python", core=CORES_BELOW_THE_MINIMUM[0])
+        code, out, err = self.run_functions('build_modules_catalogue\necho "file=[${MODULES_CATALOGUE_FILE}]"', core=CORES_BELOW_THE_MINIMUM[0])
         self.assertEqual((code, out.strip()), (0, "file=[]"), err)
 
     def test_the_minimum_core_is_written_into_install_sh_and_the_uninstaller(self):
@@ -928,8 +1559,9 @@ done
         self.assertEqual(text.count('\n    fill_modules_min_core_tag "${target}"\n'), 1, "fill_installer does not write the minimum core into install.sh")
         self.assertEqual(text.count('\n    check_core_for_modules\n'), 1, "build_modules_catalogue does not look at the core")
         body = text[text.index("\nbuild_modules_catalogue() {"):]
-        self.assertLess(body.index("grep -qvE"), body.index("check_core_for_modules"), "the core is looked at for a release that lists no module")
-        self.assertLess(body.index("check_core_for_modules"), body.index("build-modules-catalogue.py"), "the core is looked at after the catalogue is begun")
+        self.assertLess(body.index('build-modules-catalogue.py" list'), body.index("check_core_for_modules"), "the core is looked at for a release that lists no module")
+        self.assertLess(body.index("check_core_for_modules"), body.index("curl"), "the core is looked at after something is fetched")
+        self.assertNotIn("grep", body[:body.index("check_core_for_modules")], "modules.env is read by something other than the python script")
 
     def test_the_pins_of_this_tree_hold(self):
         # a release that lists a module has to pin a core that has `module`: the build of that release would fail, and so does this
@@ -982,11 +1614,280 @@ done
         self.write_env(env_text(commit=r.commit, tag="v1"))
         self.broken("a pin that is not valid", "release/modules.env is not valid")
 
+    # ---- the capability proof: the pinned core is built, and run on the catalogue ---------------------------------------------------------------------------
+
+    def good_release(self, tier="community"):
+        r = self.good(tier=tier)
+        shutil.rmtree(self.stage_dir)  # the script fetches it itself
+        return r
+
+    def test_the_pinned_core_is_built_run_and_proved(self):
+        self.good_release()
+        code, out, err = self.run_functions("build_modules_catalogue")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.made(), ["modules-catalogue-v9.9.9.json"])
+        self.assertIn("Proved: the core at %s reads the module catalogue" % ("c" * 40), out)
+        # built in the checkout of the core, for the host (not for the GOOS and GOARCH of the job), without cgo, and nothing else was done to it
+        built = self.log(self.go_log)
+        self.assertRegex(built, r"(?m)^args=build -buildvcs=false -trimpath -tags musl netgo osusergo -o \S+/proof/casaos \.$")
+        self.assertRegex(built, r"(?m)^cwd=\S+/ws/CasaOS$")
+        self.assertIn("goos= goarch= goarm= cgo=0", built)
+        self.assertEqual(built.count("args="), 1)
+        # run once, as `module list` on the catalogue that was built, in the test mode that makes it read that file, with nothing of the job's environment
+        ran = self.log(self.core_log)
+        self.assertIn("args=module list\n", ran)
+        self.assertIn("test=1\n", ran)
+        self.assertRegex(ran, r"(?m)^catalogue=\S+/proof/catalogue\.json$")
+        self.assertIn("token=none\n", ran)
+        self.assertIn("nonce=none\n", ran)
+        self.assertRegex(ran, r"(?m)^cwd=\S+/proof$")
+        self.assertNotIn("input=", ran, "the probe was given something on its input")
+        self.assertEqual(ran.count("args="), 1)
+        with open(os.path.join(self.output, "modules-catalogue-v9.9.9.json"), "rb") as f:
+            catalogue = f.read()
+        self.assertEqual(builder.parse_catalogue(catalogue)["modules"][0]["name"], "virt")
+
+    def refused_proof(self, why, reason, **kw):
+        code, out, err = self.run_functions("build_modules_catalogue", **kw)
+        self.assertNotEqual(code, 0, "%s: the build went on: %s" % (why, out))
+        self.assertTrue(any(r in err for r in ((reason,) if isinstance(reason, str) else reason)), "%s: %s" % (why, err))
+        self.assertEqual(self.made(), [], "%s: a catalogue was left" % why)
+        self.assertNotIn("Proved", out)
+        return err
+
+    def test_a_core_without_the_assistant_is_never_run(self):
+        self.good_release()
+        self.stand_in_core("nomarker")
+        err = self.refused_proof("a core that has no marker", "CASAOS_MODULE_RESULT")
+        self.assertIn("starts as a second server", err)
+        self.assertTrue(os.path.exists(self.go_log), "the core was not built")
+        self.assertFalse(os.path.exists(self.ran), "a core that has no marker was run")
+
+    def test_a_core_that_does_not_answer_is_killed(self):
+        self.good_release()
+        self.stand_in_core("hang")
+        started = time.time()
+        self.refused_proof("a core that hangs", "did not answer 'casaos module list' within 2 seconds and was killed", probe_timeout=2, run_timeout=120)
+        self.assertLess(time.time() - started, 60, "the build waited for a core that hangs")
+        with open(self.pidfile) as f:
+            pid = f.read().strip()
+        time.sleep(1)
+        gone = subprocess.run([BASH, "-c", "kill -0 %s" % pid], capture_output=True)
+        self.assertNotEqual(gone.returncode, 0, "the core that hangs is still there")
+
+    def test_a_core_that_is_not_the_reader_of_this_catalogue(self):
+        cases = {
+            "junk": ("junk", "the core did not print one JSON object"),
+            "nothing": ("empty", "the core did not print one JSON object"),
+            "a list": ("array", "the core did not print one JSON object"),
+            "two objects": ("two", "the core did not print one JSON object"),
+            "a catalogue that is not ok": ("notok", "the core does not take the catalogue"),
+            "no module": ("missing", "the core does not list module virt"),
+            "another tag": ("wrongtag", "not at the pinned"),
+            "another tier": ("wrongtier", "not at the pinned"),
+            "more than it may print": ("huge", ("does not read the module catalogue", "failed 'casaos module list' with status")),
+            "a status that is not 0": ("fail", "failed 'casaos module list' with status 3: boom: cannot start"),
+        }
+        for what, (kind, reason) in cases.items():
+            with self.subTest(what):
+                self.good_release()
+                self.stand_in_core(kind)
+                self.refused_proof(what, reason)
+
+    def test_a_core_that_cannot_be_built_or_a_build_with_no_go(self):
+        self.good_release()
+        self.stand_in_go(fails=True)
+        self.refused_proof("a core that does not build", "could not be built, so it could not be proved")
+        self.stand_in_go()
+        os.remove(self.go_log)
+        # (go is looked for with `command -v`; the case makes it not be there)
+        code, out, err = self.run_functions('command() { if [ "${1:-}" = -v ] && [ "${2:-}" = go ]; then return 1; fi; builtin command "$@"; }\nbuild_modules_catalogue')
+        self.assertNotEqual(code, 0)
+        self.assertIn("Go is needed", err)
+        self.assertEqual(self.made(), [])
+        self.assertFalse(os.path.exists(self.go_log))
+
+    def test_a_checkout_of_the_core_that_has_no_assistant_is_refused_before_anything_is_fetched(self):
+        self.good_release()
+        shutil.rmtree(os.path.join(self.workspace, "CasaOS", "pkg", "modulecmd"))
+        code, out, err = self.run_functions('CHECKSUMS_BASE_URL=file:///nonexistent\nMODULES_GIT_BASE_URL=file:///nonexistent\nbuild_modules_catalogue')
+        self.assertNotEqual(code, 0)
+        self.assertIn("pkg/modulecmd", err)
+        self.assertIn("casaos module", err)
+        self.assertNotIn("Failed to download", err)
+        self.assertEqual(self.made(), [])
+        self.assertFalse(os.path.exists(self.go_log))
+
+    def test_as_nobody_when_root_and_as_the_user_otherwise(self):
+        self.good_release()
+        self.script("id", '#!/bin/sh\nif [ "${1:-}" = -u ]; then echo 0; else exec /usr/bin/id "$@"; fi\n')
+        self.script("setpriv", '#!/bin/sh\necho "setpriv $*" >> \'%s\'\nshift 3\nexec "$@"\n' % sh(os.path.join(self.tmp, "setpriv.log")))
+        code, out, err = self.run_functions("build_modules_catalogue")
+        self.assertEqual(code, 0, err)
+        with open(os.path.join(self.tmp, "setpriv.log")) as f:
+            called = f.read().splitlines()
+        self.assertEqual(len(called), 1)
+        self.assertTrue(called[0].startswith("setpriv --reuid=65534 --regid=65534 --clear-groups env -i "), called[0])
+        # not root: setpriv is not called
+        os.remove(os.path.join(self.bin, "id"))
+        os.remove(os.path.join(self.tmp, "setpriv.log"))
+        code, out, err = self.run_functions("build_modules_catalogue")
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "setpriv.log")), "setpriv was called by a user who is not root")
+
+    def test_the_proof_is_made_after_the_catalogue_and_before_the_digest_is_written(self):
+        with open(BUILD_SCRIPT, newline="") as f:
+            text = f.read().replace("\r", "")
+        body = text[text.index("\nbuild_modules_catalogue() {"):text.index("\n}\n", text.index("\nbuild_modules_catalogue() {"))]
+        self.assertLess(body.index('build-modules-catalogue.py" build'), body.index('MODULES_CATALOGUE_FILE="${file}"'), "the catalogue is named before it is built")
+        self.assertLess(body.index('MODULES_CATALOGUE_FILE="${file}"'), body.index("prove_modules_core"), "the core is proved before the catalogue is built")
+        self.assertEqual(body.count("prove_modules_core"), 1)
+        order = [text.index(marker) for marker in ("\nbuild_modules_catalogue\n", '\nfill_installer "${OUTPUT_DIR}/install.sh"\n')]
+        self.assertEqual(order, sorted(order))
+        prove = text[text.index("\nprove_modules_core() {"):text.index("\n}\n", text.index("\nprove_modules_core() {"))]
+        self.assertLess(prove.index("grep -ac 'CASAOS_MODULE_RESULT'"), prove.index("timeout"), "the core is run before the marker is looked for")
+        self.assertLess(prove.index("build_probe_core"), prove.index("grep -ac"), "the marker is looked for in something that was not built here")
+        self.assertIn("</dev/null", prove)
+        self.assertIn("env -i", prove)
+        self.assertIn("MODULES_PROBE_TIMEOUT:-30", prove)
+        pin = text.index('readonly MODULES_MIN_CORE_TAG="')
+        self.assertIn("prove_modules_core", text[pin - 1200:pin], "the tag number is not said to be the early check, with the proof the one that counts")
+
+    # ---- the workflow ---------------------------------------------------------------------------------------------------------------------------------
+
+
+WORKFLOW = os.environ.get("WORKFLOW") or os.path.join(HERE, "..", ".github", "workflows", "release.yml")
+
+
+def workflow_steps():
+    """The steps of the first job of release.yml: a list of the lines of each (comments between steps go with the step before them)."""
+    with open(WORKFLOW, newline="") as f:
+        lines = f.read().replace("\r", "").split("\n")
+    steps = []
+    lines = lines[lines.index("    steps:") + 1:]
+    for line in lines:
+        if line.startswith("      - "):
+            steps.append([line])
+        elif steps and (line.startswith("        ") or line.startswith("      #") or not line.strip()):
+            steps[-1].append(line)
+        elif steps and line.strip() and not line.startswith(" "):
+            break
+        elif steps and line.startswith("  ") and not line.startswith("    "):
+            break
+    return steps
+
+
+def step_index(steps, name):
+    found = [i for i, step in enumerate(steps) if step[0].strip() == "- name: " + name]
+    if len(found) != 1:
+        raise AssertionError("the workflow has %d steps named %r" % (len(found), name))
+    return found[0]
+
+
+def step_run(step):
+    """The script of the run: | block of a step."""
+    for i, line in enumerate(step):
+        if line.rstrip() == "        run: |":
+            block = []
+            for rest in step[i + 1:]:
+                if rest.startswith("          ") or not rest.strip():
+                    block.append(rest[10:])
+                else:
+                    break
+            return "\n".join(block).rstrip() + "\n"
+    raise AssertionError("no run: | in %s" % step[0])
+
+
+class Workflow(unittest.TestCase):
+    def setUp(self):
+        self.steps = workflow_steps()
+        self.names = [step[0].strip()[len("- name: "):] for step in self.steps]
+
+    def text(self, name):
+        return "\n".join(self.steps[step_index(self.steps, name)])
+
+    def test_python_is_pinned_before_anything_runs_it(self):
+        i = step_index(self.steps, "Set up Python")
+        step = self.text("Set up Python")
+        self.assertRegex(step, r"uses: actions/setup-python@v[0-9]+\b")
+        self.assertRegex(step, r'(?m)python-version: "?3\.12"?\s*$')
+        for j, other in enumerate(self.steps[:i]):
+            self.assertNotRegex("\n".join(other), r"python3?\b|\.py\b", "step %r runs python before it is pinned" % self.names[j])
+
+    def test_go_is_set_up_from_the_core_it_builds_before_the_bundle_is_assembled(self):
+        i = step_index(self.steps, "Set up Go for the proof of the module assistant")
+        step = self.text("Set up Go for the proof of the module assistant")
+        self.assertRegex(step, r"uses: actions/setup-go@v[0-9]+\b")
+        self.assertIn("go-version-file: work/CasaOS/go.mod", step)
+        self.assertGreater(i, step_index(self.steps, "Checkout CasaOS"))
+        self.assertLess(i, step_index(self.steps, "Assemble the release bundle"))
+
+    def test_the_builder_is_tested_against_the_source_of_the_core_it_pins(self):
+        step = self.text("Check the module catalogue builder")
+        self.assertIn("python3 scripts/test-build-modules-catalogue.py", step)
+        self.assertRegex(step, r"CORE_SOURCE: \$\{\{ github\.workspace \}\}/work/CasaOS")
+        self.assertGreater(step_index(self.steps, "Check the module catalogue builder"), step_index(self.steps, "Checkout CasaOS-AppManagement"))
+        self.assertLess(step_index(self.steps, "Check the module catalogue builder"), step_index(self.steps, "Assemble the release bundle"))
+
+    def test_the_bundle_script_is_run_with_the_core_and_python_it_needs(self):
+        step = self.text("Assemble the release bundle")
+        self.assertIn("WORKSPACE_ROOT: ${{ github.workspace }}/work", step)
+        self.assertIn("run: scripts/build-release-bundle.sh dist", step)
+
+    def catalogue_step(self, dist_files, digest, extra=()):
+        """The script of the step that says whether there is a catalogue to publish, run on a dist/ with these files and an install.sh with this digest."""
+        script = step_run(self.steps[step_index(self.steps, "Is there a module catalogue")])
+        tmp = tempfile.mkdtemp(prefix="modwf-")
+        self.addCleanup(rm_rf, tmp)
+        os.makedirs(os.path.join(tmp, "dist"))
+        with open(os.path.join(tmp, "dist", "install.sh"), "w", newline="\n") as f:
+            f.write('#!/bin/bash\nreadonly CASAOS_UI_SHA256="%s"\nreadonly CASAOS_MODULE_CATALOGUE_SHA256="%s"\nreadonly CASAOS_MODULES_MIN_CORE_TAG="v0.4.75"\n' % ("1" * 64, digest))
+        for name, data in dist_files.items():
+            with open(os.path.join(tmp, "dist", name), "wb") as f:
+                f.write(data)
+        output = os.path.join(tmp, "github-output")
+        p = subprocess.run([BASH, "-c", script], cwd=tmp, capture_output=True, text=True, env=dict(os.environ, GITHUB_OUTPUT=sh(output)))
+        published = ""
+        if os.path.exists(output):
+            with open(output) as f:
+                published = f.read()
+        return p.returncode, p.stderr, published
+
+    def test_what_is_built_is_what_is_published(self):
+        data = b'{"schema": 1, "modules": []}\n'
+        digest = sha256(data)
+        # a catalogue and its digest: published, by the name it has
+        code, err, published = self.catalogue_step({"modules-catalogue-v9.9.9.json": data}, digest)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(published, "files<<END\ndist/modules-catalogue-v9.9.9.json\nEND\n")
+        # neither: nothing to publish, and that is not an error
+        code, err, published = self.catalogue_step({}, "")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(published, "files<<END\n\nEND\n")
+        # one without the other, in either way, or a digest that is not the file's, or two catalogues: the job fails and publishes nothing
+        cases = {
+            "a catalogue that install.sh has no digest of": ({"modules-catalogue-v9.9.9.json": data}, "", "carries no digest of"),
+            "the digest of a catalogue that is not there": ({}, digest, "that was not built"),
+            "a digest that is not the catalogue's": ({"modules-catalogue-v9.9.9.json": data}, "0" * 64, "is not the SHA-256 of"),
+            "two catalogues": ({"modules-catalogue-v9.9.9.json": data, "modules-catalogue-v9.9.8.json": data}, digest, "more than one module catalogue"),
+        }
+        for what, (files, d, sentence) in cases.items():
+            with self.subTest(what):
+                code, err, published = self.catalogue_step(files, d)
+                self.assertNotEqual(code, 0, "%s was let through" % what)
+                self.assertNotIn("dist/modules-catalogue", published)
+                self.assertIn(sentence, err, "the job does not say what is wrong")
+
+    def test_the_publish_step_publishes_what_that_step_found(self):
+        step = self.text("Publish release assets")
+        self.assertIn("${{ steps.modules.outputs.files }}", step)
+        self.assertIn("fail_on_unmatched_files: true", step)
+
 
 def main():
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
-    for case in (ModulesEnv, Checksums, Build, Units, CommandLine, BuildScript):
+    for case in (ModulesEnv, Checksums, Build, Units, Archives, Proof, AgainstTheCore, CommandLine, BuildScript, Workflow):
         for name in loader.getTestCaseNames(case):
             if not ONLY or re.search(ONLY, "%s.%s" % (case.__name__, name)):
                 suite.addTest(case(name))

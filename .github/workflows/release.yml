@@ -33,6 +33,16 @@ jobs:
       - name: Checkout installer
         uses: actions/checkout@v4
 
+      # The module catalogue builder judges the titles of manifests by the Unicode
+      # tables of the Python that runs it, and the core judges them by those of
+      # the Go that builds it (15.0). The Python of ubuntu-22.04 is 3.10, whose
+      # tables are those of Unicode 13.0: it refuses 5318 characters that the core
+      # takes. 3.12 has 15.0, so the version is pinned here and not left to the image.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Check the installer's statistics functions
         run: bash scripts/test-install-telemetry.sh
 
@@ -44,9 +54,6 @@ jobs:
 
       - name: Check how a pre-release is told from a release
         run: bash scripts/test-release-prerelease.sh
-
-      - name: Check the module catalogue builder
-        run: python3 scripts/test-build-modules-catalogue.py
 
       - name: Check what the installer does with a module
         run: sh scripts/test-install-modules.sh
@@ -108,6 +115,21 @@ jobs:
           ref: ${{ env.CASAOS_APP_MANAGEMENT_COMMIT }}
           path: work/CasaOS-AppManagement
 
+      # The rules of the core's reader that the builder copies are held to its Go
+      # source (pkg/osmodule) at the commit this release pins. A release that lists no
+      # module pins a core that may not have the package, and the cases are skipped.
+      - name: Check the module catalogue builder
+        env:
+          CORE_SOURCE: ${{ github.workspace }}/work/CasaOS
+        run: python3 scripts/test-build-modules-catalogue.py
+
+      # Only a release that lists a module builds the core, to run it: prove_modules_core.
+      - name: Set up Go for the proof of the module assistant
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: work/CasaOS/go.mod
+          cache: false
+
       - name: Assemble the release bundle
         env:
           WORKSPACE_ROOT: ${{ github.workspace }}/work
@@ -127,12 +149,35 @@ jobs:
             dist/version.json
 
       # The module catalogue is an asset only when release/modules.env lists a
-      # module; fail_on_unmatched_files would refuse a pattern with no file.
+      # module; fail_on_unmatched_files would refuse a pattern with no file. What
+      # the build made and what is published have to be the same: a catalogue that
+      # install.sh carries no digest of would be published for nobody to check, and
+      # a digest of a catalogue that is not there would stop every install of the
+      # catalogue. Either is a job that fails here, before anything is published.
       - name: Is there a module catalogue
         id: modules
         run: |
           set -euo pipefail
           files="$(ls dist/modules-catalogue-*.json 2>/dev/null || true)"
+          digest="$(sed -n 's/^readonly CASAOS_MODULE_CATALOGUE_SHA256="\([0-9a-f]*\)"$/\1/p' dist/install.sh)"
+          if [ -n "${files}" ] && [ -z "${digest}" ]; then
+            echo "dist holds a module catalogue (${files}) that install.sh carries no digest of." >&2
+            exit 1
+          fi
+          if [ -z "${files}" ] && [ -n "${digest}" ]; then
+            echo "install.sh carries the digest of a module catalogue (${digest}) that was not built." >&2
+            exit 1
+          fi
+          if [ -n "${files}" ]; then
+            if [ "$(printf '%s\n' "${files}" | wc -l)" -ne 1 ]; then
+              echo "dist holds more than one module catalogue: ${files}" >&2
+              exit 1
+            fi
+            if [ "$(sha256sum "${files}" | cut -d' ' -f1)" != "${digest}" ]; then
+              echo "the digest in install.sh (${digest}) is not the SHA-256 of ${files}." >&2
+              exit 1
+            fi
+          fi
           { echo "files<<END"; echo "${files}"; echo "END"; } >> "$GITHUB_OUTPUT"
 
       # The release is published as a pre-release while release/PRERELEASE
