@@ -311,6 +311,15 @@ Detach_From_CasaOS_Service() {
     local telemetry_env=()
     if ((NO_TELEMETRY)); then telemetry_env=(--setenv=RECASAOS_TELEMETRY=0); fi
 
+    # ... and so it takes no --module either: say so rather than drop the modules in silence.
+    if [[ -n "${MODULES_REQUESTED}" ]]; then
+        local module_name module_commands=""
+        for module_name in ${MODULES_REQUESTED}; do
+            module_commands+=" sudo casaos module install ${module_name};"
+        done
+        Show 3 "The update runs detached and takes no options, so it will NOT install the modules asked for with --module (${MODULES_REQUESTED}). Once it has finished, install them from the Modules page of the dashboard, or run:${module_commands%;}"
+    fi
+
     Show 2 "Handing the update to ${update_unit}.service..."
     if ! ${sudo_cmd} systemd-run \
         --quiet \
@@ -1284,6 +1293,21 @@ Version_At_Least() {
     [ "$3" -ge "$6" ]
 }
 
+# Runs the core's module assistant (the program and what it is asked, as the arguments)
+# with none of the CASAOS_MODULE variables of this environment. The assistant has test
+# hooks that it reads from there: a catalogue and an archive of the caller's own, read in
+# place of the pinned ones, and the nonce of the core's own jobs. This script runs as root,
+# and a root shell that has such variables (a direct run, sudo -E, a CI job) must not hand
+# them on. Every variable that starts with CASAOS_MODULE is taken out, not only the ones the
+# assistant reads today; the rest of the environment is left as it is.
+Run_Module_Assistant() {
+    local var
+    for var in $(env | sed -n 's/^\(CASAOS_MODULE[A-Za-z0-9_]*\)=.*/\1/p'); do
+        set -- -u "${var}" "$@"
+    done
+    ${sudo_cmd} env "$@"
+}
+
 # A name given to --module, added once to the list. A text that is not the name
 # of a module ends the install here, before anything on this machine is touched.
 Add_Requested_Module() {
@@ -1308,50 +1332,83 @@ Validate_Module_Request() {
     fi
 }
 
-# Places the module catalogue of this release at CASA_MODULE_CATALOGUE_DIR/catalogue.json:
-# downloaded from the release, compared with the digest this script carries, and put
-# in place whole or not at all. Whatever is wrong with it stops the catalogue and
-# nothing else: it is said, ReCasaOS goes on, and MODULE_CATALOGUE_READY tells
-# Install_Modules whether this run may install any module. A release without a
-# catalogue has none to place, and the file of an earlier release is not its own.
-Install_Module_Catalogue() {
+# Takes away the catalogue file that is in place. The status says whether there was one to
+# take away. Nothing is touched behind a directory that is a link.
+Remove_Module_Catalogue() {
     local file="${CASA_MODULE_CATALOGUE_DIR}/catalogue.json"
+
+    [ ! -L "${CASA_MODULE_CATALOGUE_DIR}" ] || return 1
+    [ -e "${file}" ] || [ -L "${file}" ] || return 1
+    ${sudo_cmd} rm -f "${file}"
+}
+
+# Puts the catalogue $1, a file whose SHA-256 digest has been checked, at its place, whole or
+# not at all: copied under a name of its own beside the place, and renamed onto it. Status 2
+# when something is in the way that is not a plain file (a directory or a link where the file
+# goes, a link where its directory is), 1 when a command failed.
+Place_Module_Catalogue() {
+    local dir="${CASA_MODULE_CATALOGUE_DIR}" staged
+    local file="${CASA_MODULE_CATALOGUE_DIR}/catalogue.json"
+
+    [ ! -L "${dir}" ] || return 2
+    { [ ! -d "${file}" ] && [ ! -L "${file}" ]; } || return 2
+    ${sudo_cmd} install -d -m 0755 "${dir}" || return 1
+    staged="$(${sudo_cmd} mktemp "${dir}/.catalogue.json.XXXXXX")" || return 1
+    if ! ${sudo_cmd} install -m 0644 "$1" "${staged}" || ! ${sudo_cmd} mv -f "${staged}" "${file}"; then
+        ${sudo_cmd} rm -f "${staged}"
+        return 1
+    fi
+    { [ -f "${file}" ] && [ ! -L "${file}" ]; } || return 2
+}
+
+# Places the module catalogue of this release at CASA_MODULE_CATALOGUE_DIR/catalogue.json:
+# downloaded from the release, compared with the digest this script carries, and only then
+# put in place. Whatever is wrong with it stops the catalogue and nothing else: it is said,
+# ReCasaOS goes on, and MODULE_CATALOGUE_READY tells Install_Modules whether this run may
+# install any module. The file that is in place is the catalogue of an earlier release, which
+# says nothing of the release it is for, so one rule covers a release that has no catalogue
+# and a refresh that failed: the earlier file is removed (a module that is installed still
+# shows as installed, no longer offered by a catalogue).
+Install_Module_Catalogue() {
     local sum="${CASAOS_MODULE_CATALOGUE_SHA256}"
-    local work reason=""
+    local work reason="" placed
 
     MODULE_CATALOGUE_READY=0
     if [ -z "${sum}" ]; then
-        if [ -e "${file}" ] || [ -L "${file}" ]; then
-            ${sudo_cmd} rm -f "${file}" && Show 2 "This release carries no module catalogue; the one of an earlier release was removed."
+        if Remove_Module_Catalogue; then
+            Show 2 "This release carries no module catalogue; the one of an earlier release was removed."
         fi
         return 0
     fi
     if [ "${#sum}" -ne 64 ] || [ -n "$(printf '%s' "${sum}" | tr -d '0123456789abcdef')" ]; then
-        Show 3 "The module catalogue was not installed: the digest this installer carries for it is not a SHA-256 digest. ReCasaOS itself is installed and is not affected; no module can be installed by this run."
-        return 0
+        reason="was not installed: the digest this installer carries for it is not a SHA-256 digest"
+    elif ! work="$(mktemp -d)"; then
+        reason="was not installed: no temporary directory could be made"
+    else
+        Show 2 "Downloading the module catalogue..."
+        GreyStart
+        if ! ${sudo_cmd} wget -t 3 -q -O "${work}/catalogue.json" "${CASAOS_RELEASE_BASE_URL}/modules-catalogue-${CASAOS_INSTALL_RELEASE_TAG}.json"; then
+            reason="could not be downloaded"
+        elif ! printf '%s  %s\n' "${sum}" "${work}/catalogue.json" | ${sudo_cmd} sha256sum --check --status -; then
+            reason="is not the file this installer expects (its SHA-256 digest differs)"
+        else
+            placed=0
+            Place_Module_Catalogue "${work}/catalogue.json" || placed=$?
+            case "${placed}" in
+            0) ;;
+            2) reason="could not be put in place: something that is not a plain file is where it goes" ;;
+            *) reason="could not be put in place" ;;
+            esac
+        fi
+        ColorReset
+        ${sudo_cmd} rm -rf "${work}"
     fi
-    work="$(mktemp -d)" || {
-        Show 3 "The module catalogue was not installed: no temporary directory could be made. ReCasaOS itself is installed and is not affected; no module can be installed by this run."
-        return 0
-    }
-
-    Show 2 "Downloading the module catalogue..."
-    GreyStart
-    if ! ${sudo_cmd} wget -t 3 -q -O "${work}/catalogue.json" "${CASAOS_RELEASE_BASE_URL}/modules-catalogue-${CASAOS_INSTALL_RELEASE_TAG}.json"; then
-        reason="could not be downloaded"
-    elif ! printf '%s  %s\n' "${sum}" "${work}/catalogue.json" | ${sudo_cmd} sha256sum --check --status -; then
-        reason="is not the file this installer expects (its SHA-256 digest differs)"
-    elif ! ${sudo_cmd} install -d -m 0755 "${CASA_MODULE_CATALOGUE_DIR}" ||
-        ! ${sudo_cmd} install -m 0644 "${work}/catalogue.json" "${file}.new" ||
-        ! ${sudo_cmd} mv -f "${file}.new" "${file}"; then
-        reason="could not be put in place"
-    fi
-    ColorReset
-    ${sudo_cmd} rm -rf "${work}"
 
     if [ -n "${reason}" ]; then
-        ${sudo_cmd} rm -f "${file}.new"
         Show 3 "The module catalogue ${reason}. ReCasaOS itself is installed and is not affected; no module can be installed by this run. Run the installer again to try again."
+        if Remove_Module_Catalogue; then
+            Show 3 "The catalogue of an earlier release was removed, so that no module is offered from it; a module that is installed still shows as installed."
+        fi
         return 0
     fi
     MODULE_CATALOGUE_READY=1
@@ -1373,7 +1430,7 @@ Install_One_Module() {
     GreyStart
     # no input, so that it cannot read the rest of a script piped into bash; the
     # status of the assistant is kept in a file, the pipe's being tee's
-    { ${sudo_cmd} "${CASA_BIN}" module install "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
+    { Run_Module_Assistant "${CASA_BIN}" module install "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
     ColorReset
     if [ -s "${work}/status" ]; then
         read -r status <"${work}/status" || status=1

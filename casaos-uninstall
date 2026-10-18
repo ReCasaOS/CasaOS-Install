@@ -205,6 +205,21 @@ Version_At_Least() {
     [ "$3" -ge "$6" ]
 }
 
+# Runs the core's module assistant (the program and what it is asked, as the arguments)
+# with none of the CASAOS_MODULE variables of this environment. The assistant has test
+# hooks that it reads from there: a catalogue and an archive of the caller's own, read in
+# place of the pinned ones, and the nonce of the core's own jobs. This script runs as root,
+# and a root shell that has such variables (a direct run, sudo -E, a CI job) must not hand
+# them on. Every variable that starts with CASAOS_MODULE is taken out, not only the ones the
+# assistant reads today; the rest of the environment is left as it is.
+Run_Module_Assistant() {
+    local var
+    for var in $(env | sed -n 's/^\(CASAOS_MODULE[A-Za-z0-9_]*\)=.*/\1/p'); do
+        set -- -u "${var}" "$@"
+    done
+    ${sudo_cmd} env "$@"
+}
+
 # One module, taken off the box with the core's own assistant: its lines as they come,
 # then, when the remove did not end well, the step and the reason from its result line
 # (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed> <step> <code> <undo> <time>).
@@ -222,7 +237,7 @@ Remove_One_Module() {
     Show 2 "Removing the module ${name}..."
     # no input, so that it reads nothing of the terminal; the status of the assistant is
     # kept in a file, the pipe's being tee's
-    { "${CASA_MODULE_BIN}" module remove "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
+    { Run_Module_Assistant "${CASA_MODULE_BIN}" module remove "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
     if [ -s "${work}/status" ]; then
         read -r status <"${work}/status" || status=1
     fi

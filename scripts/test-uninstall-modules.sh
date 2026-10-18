@@ -15,6 +15,9 @@
 
 set -eu
 
+# (nothing of the CASAOS_MODULE hooks that its caller has exported reaches the checks below)
+for hook in $(env | sed -n 's/^\(CASAOS_MODULE[A-Za-z0-9_]*\)=.*/\1/p'); do unset "${hook}"; done
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap '"${REAL_RM:-rm}" -rf "${WORK}"' EXIT
@@ -44,8 +47,9 @@ line_of() { grep -n "$1" "${UNINSTALL_SH}" | head -n 1 | cut -d: -f1; }
 eval "$(grep -E '^readonly (CASA_MODULE_BIN|CASA_MODULE_MANIFESTS)=' "${UNINSTALL_SH}" | sed 's/^readonly //')"
 [ "${CASA_MODULE_BIN}" = /usr/bin/casaos ] || fail "the assistant is run as ${CASA_MODULE_BIN}, not as /usr/bin/casaos"
 [ "${CASA_MODULE_MANIFESTS}" = /etc/casaos/modules ] || fail "the modules are looked for in ${CASA_MODULE_MANIFESTS}, not in /etc/casaos/modules"
-grep -Fq '"${CASA_MODULE_BIN}" module remove "${name}" --yes </dev/null' "${UNINSTALL_SH}" ||
-    fail "the module remove is not '/usr/bin/casaos module remove <name> --yes' with no input"
+grep -Fq 'Run_Module_Assistant "${CASA_MODULE_BIN}" module remove "${name}" --yes </dev/null' "${UNINSTALL_SH}" ||
+    fail "the module remove is not '/usr/bin/casaos module remove <name> --yes' with no input, run through Run_Module_Assistant"
+[ "$(grep -c '"${CASA_MODULE_BIN}" module ' "${UNINSTALL_SH}")" -eq 1 ] || fail "the assistant is run in more than one place, or not through Run_Module_Assistant"
 [ "$(grep -cE 'apt-get|dpkg|virsh' "${UNINSTALL_SH}")" -eq 0 ] || fail "the uninstaller names a command that purges: what it prints, it prints from the assistant"
 pass "the placeholder, the manifests directory and the assistant are where the uninstall needs them"
 
@@ -66,24 +70,32 @@ pass "the modules are removed before ReCasaOS, and what stays is said after it"
 
 extract() { sed -n "/^$2() {\$/,/^}\$/p" "$1"; }
 
-for f in Valid_Module_Name Version_Parts Version_At_Least; do
+for f in Valid_Module_Name Version_Parts Version_At_Least Run_Module_Assistant; do
     [ -n "$(extract "${UNINSTALL_SH}" "${f}")" ] || fail "casaos-uninstall defines no ${f}()"
     [ "$(extract "${UNINSTALL_SH}" "${f}")" = "$(extract "${INSTALL_SH}" "${f}")" ] ||
         fail "${f}() is not the text that install.sh has: the two scripts must judge a name and a version in the same way"
 done
 pass "the name and the version are judged in the same words as install.sh judges them"
 
-for f in Valid_Module_Name Version_Parts Version_At_Least Remove_One_Module Remove_Modules Modules_Left_Notice; do
+FUNCTIONS="${WORK}/functions.sh"
+: >"${FUNCTIONS}"
+for f in Valid_Module_Name Version_Parts Version_At_Least Run_Module_Assistant Remove_One_Module Remove_Modules Modules_Left_Notice; do
     body="$(extract "${UNINSTALL_SH}" "${f}")"
     [ -n "${body}" ] || fail "casaos-uninstall defines no ${f}()"
+    printf '%s\n' "${body}" >>"${FUNCTIONS}"
     # these run under dash on the CI guests' side of the proof and under bash on a box: no bashism
     if printf '%s\n' "${body}" | grep -nE '\[\[|\(\(|<<<|\$\{[A-Za-z_]+\[|\$\{![A-Za-z]|=~|^ *function ' >/dev/null; then
         fail "${f}() uses a construct that only bash has"
     fi
     eval "${body}"
 done
+# the functions as the guests' shell reads them (dash is the shell of Debian and Ubuntu's sh)
+sh -n "${FUNCTIONS}" || fail "the functions do not parse for sh"
+if command -v dash >/dev/null 2>&1; then dash -n "${FUNCTIONS}" || fail "the functions do not parse for dash"; fi
+bash --posix -n "${FUNCTIONS}" || fail "the functions do not parse for bash in POSIX mode"
 
 # what those functions take from the uninstaller's globals and helpers
+sudo_cmd=""
 CASAOS_MODULES_MIN_CORE_TAG=v0.4.75
 MODULES_REMOVED=""
 MODULES_LEFT=""
@@ -94,12 +106,14 @@ FAKE="${WORK}/root"
 CALLS="${WORK}/calls"
 VERCALLS="${WORK}/vercalls"
 RMCALLS="${WORK}/rmcalls"
+SUDOCALLS="${WORK}/sudocalls"
+ENVSEEN="${WORK}/envseen"
 MODES="${WORK}/modes"
 TMPDIR="${WORK}/tmp"
 mkdir -p "${WORK}/bin" "${MODES}" "${TMPDIR}"
 CASA_MODULE_MANIFESTS="${FAKE}/etc/casaos/modules"
 CASA_MODULE_BIN="${WORK}/bin/casaos"
-export CALLS VERCALLS RMCALLS WORK MODES TMPDIR
+export CALLS VERCALLS RMCALLS SUDOCALLS ENVSEEN WORK MODES TMPDIR
 
 cat >"${WORK}/bin/casaos" <<'STUB'
 #!/bin/sh
@@ -116,6 +130,8 @@ if [ "${1:-}" = "-v" ]; then
     exit "$(cat "${WORK}/version.status" 2>/dev/null || echo 0)"
 fi
 echo "casaos $*" >>"${CALLS}"
+env | grep '^CASAOS_MODULE' >>"${ENVSEEN}" || true
+echo "KEEP_ME=${KEEP_ME:-none}" >>"${ENVSEEN}.kept"
 [ -s "${VERCALLS}" ] || echo "module given before the version was asked" >>"${CALLS}"
 cat >>"${WORK}/stdin-got"
 name="$3"
@@ -198,7 +214,17 @@ cat >"${WORK}/bin/mktemp" <<'STUB'
 [ "${MKTEMP_SAYS:-}" != fail ] || exit 1
 exec "${REAL_MKTEMP}" "$@"
 STUB
-for tool in sudo systemctl apt-get apt dpkg virsh docker; do
+cat >"${WORK}/bin/sudo" <<'STUB'
+#!/bin/sh
+# stand-in for sudo: forbidden unless the case says SUDO_OK=1; then the command is recorded and run as it is
+if [ "${SUDO_OK:-}" != 1 ]; then
+    echo "FORBIDDEN $0 $*" >>"${CALLS}"
+    exit 99
+fi
+echo "sudo $*" >>"${SUDOCALLS}"
+exec "$@"
+STUB
+for tool in systemctl apt-get apt dpkg virsh docker; do
     cat >"${WORK}/bin/${tool}" <<'STUB'
 #!/bin/sh
 echo "FORBIDDEN $0 $*" >>"${CALLS}"
@@ -216,7 +242,10 @@ fresh() {
     : >"${VERCALLS}"
     : >"${RMCALLS}"
     : >"${WORK}/stdin-got"
-    unset MKTEMP_SAYS
+    : >"${SUDOCALLS}"
+    : >"${ENVSEEN}"
+    : >"${ENVSEEN}.kept"
+    unset MKTEMP_SAYS SUDO_OK
 }
 
 calls() { sort "${CALLS}" | tr '\n' '|'; }
@@ -331,6 +360,62 @@ for want in "  alpha:" "    left in place: /DATA/alpha, the libvirt network and 
 done
 pass "each module is removed with 'casaos module remove <name> --yes', and what stays is said last, its commands printed and none run"
 
+# The assistant is given none of the CASAOS_MODULE variables of this environment (the test hooks of the core: a catalogue and
+# an archive of the caller's own, in place of the pinned ones), and the uninstaller runs as root with whatever its caller
+# exported. Nothing else of the environment is taken away.
+HOOKS="CASAOS_MODULE_TEST CASAOS_MODULE_CATALOGUE CASAOS_MODULE_ARCHIVE_FILE CASAOS_MODULE_NONCE CASAOS_MODULE_FUTURE_HOOK CASAOS_MODULE_lower CASAOS_MODULECMD_REAL_APT CASAOS_MODULE"
+hooks_on() {
+    CASAOS_MODULE_TEST=1
+    CASAOS_MODULE_CATALOGUE=/evil/catalogue.json
+    CASAOS_MODULE_ARCHIVE_FILE=/evil/archive.tar.gz
+    CASAOS_MODULE_NONCE=0123456789abcdef0123456789abcdef
+    CASAOS_MODULE_FUTURE_HOOK=1
+    CASAOS_MODULE_lower=1
+    CASAOS_MODULECMD_REAL_APT=/evil/apt
+    CASAOS_MODULE=1
+    KEEP_ME=kept
+    export ${HOOKS} KEEP_ME
+}
+hooks_off() {
+    unset ${HOOKS} KEEP_ME
+}
+fresh
+manifest alpha
+hooks_on
+uninstall_part
+hooks_off
+[ "${status}" -eq 0 ] && [ "$(calls)" = "casaos module remove alpha --yes|" ] || fail "with the hooks exported the assistant was not run as it is: ${status}: $(calls)"
+[ ! -s "${ENVSEEN}" ] || fail "the assistant was given variables of the hooks: $(tr '\n' ' ' <"${ENVSEEN}")"
+[ "$(cat "${ENVSEEN}.kept")" = "KEEP_ME=kept" ] || fail "the rest of the environment was not left as it was: $(cat "${ENVSEEN}.kept")"
+case "$(summary)" in *"[0] The module alpha is removed."*) ;; *) fail "with the hooks exported the module was not removed: $(summary)" ;; esac
+# (and the stand-in does see a variable when it is not scrubbed: the check above can say no)
+fresh
+KEEP_ME=kept CASAOS_MODULE_TEST=1 "${CASA_MODULE_BIN}" module remove alpha --yes </dev/null >/dev/null
+[ "$(cat "${ENVSEEN}")" = "CASAOS_MODULE_TEST=1" ] || fail "the stand-in does not record the variables it is given"
+
+# with sudo: the assistant is run through it, still with none of the variables
+fresh
+manifest alpha
+hooks_on
+sudo_cmd=sudo
+SUDO_OK=1
+export SUDO_OK
+uninstall_part
+sudo_cmd=""
+unset SUDO_OK
+hooks_off
+[ "${status}" -eq 0 ] || fail "with sudo: status ${status}: ${out}"
+case "$(summary)" in *"[0] The module alpha is removed."*) ;; *) fail "with sudo: not removed: $(summary)" ;; esac
+[ "$(wc -l <"${SUDOCALLS}" | tr -d ' ')" -eq 1 ] || fail "with sudo: not the assistant alone: $(tr '\n' '|' <"${SUDOCALLS}")"
+line="$(sed -n 1p "${SUDOCALLS}")"
+case "${line}" in "sudo env "*" ${CASA_MODULE_BIN} module remove alpha --yes") ;; *) fail "with sudo: the assistant is not run as 'sudo env ... casaos module remove alpha --yes': ${line}" ;; esac
+for v in ${HOOKS}; do
+    case "${line}" in *" -u ${v} "*) ;; *) fail "with sudo: ${v} is not taken out of the environment of the assistant: ${line}" ;; esac
+done
+case "${line}" in *KEEP_ME*) fail "with sudo: a variable that is not of the hooks is taken out: ${line}" ;; esac
+[ ! -s "${ENVSEEN}" ] || fail "with sudo: the assistant was given variables of the hooks: $(tr '\n' ' ' <"${ENVSEEN}")"
+pass "the assistant is given none of the CASAOS_MODULE variables, with sudo or without, and the rest of the environment as it is"
+
 # a module whose remove said nothing of what it leaves
 fresh
 manifest alpha
@@ -362,14 +447,16 @@ case "$(summary)" in *"The module alpha was not removed: the assistant refused i
 case "${out}" in *"Left on this machine"*) fail "nothing was removed, and what stays is said" ;; esac
 
 # an assistant that ended without a result line that says ok is a failure too, whatever it printed
-for mode in noresult silent okexit1 forged othername; do
+for modewant in noresult:3 silent:0 okexit1:1 forged:0 othername:0; do
+    mode="${modewant%%:*}"
+    want="${modewant#*:}"
     fresh
     manifest alpha
     printf '%s' "${mode}" >"${MODES}/alpha"
     uninstall_part
     [ "${status}" -eq 0 ] || fail "mode ${mode}: the uninstall ended (status ${status})"
     case "${out}" in *"the uninstall goes on"*) ;; *) fail "mode ${mode}: the uninstall did not go on" ;; esac
-    case "$(summary)" in *"The module alpha was not removed: the assistant did not report a success (exit status"*"Part of its program and its unit may stay on this machine."*) ;; *) fail "mode ${mode}: $(summary)" ;; esac
+    case "$(summary)" in *"The module alpha was not removed: the assistant did not report a success (exit status ${want})."*"Part of its program and its unit may stay on this machine."*) ;; *) fail "mode ${mode}: wanted exit status ${want}: $(summary)" ;; esac
     case "${out}" in *"[0] "* | *"Left on this machine"*) fail "mode ${mode}: said to be removed" ;; esac
     no_leftover "mode ${mode}"
 done

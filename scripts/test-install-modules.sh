@@ -15,6 +15,9 @@
 
 set -eu
 
+# (nothing of the CASAOS_MODULE hooks that its caller has exported reaches the checks below)
+for hook in $(env | sed -n 's/^\(CASAOS_MODULE[A-Za-z0-9_]*\)=.*/\1/p'); do unset "${hook}"; done
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
@@ -41,8 +44,9 @@ bash -n "${INSTALL_SH}" || fail "install.sh does not parse"
 eval "$(grep -E '^(CASA_MODULE_CATALOGUE_DIR|CASA_BIN)=' "${INSTALL_SH}")"
 [ "${CASA_MODULE_CATALOGUE_DIR}" = /usr/share/casaos/modules ] || fail "the catalogue is placed in ${CASA_MODULE_CATALOGUE_DIR}, not in /usr/share/casaos/modules"
 [ "${CASA_BIN}" = /usr/bin/casaos ] || fail "the assistant is run as ${CASA_BIN}, not as /usr/bin/casaos"
-grep -Fq 'module install "${name}" --yes </dev/null' "${INSTALL_SH}" ||
-    fail "the module install is not 'casaos module install <name> --yes' with no input"
+grep -Fq 'Run_Module_Assistant "${CASA_BIN}" module install "${name}" --yes </dev/null' "${INSTALL_SH}" ||
+    fail "the module install is not 'casaos module install <name> --yes' with no input, run through Run_Module_Assistant"
+[ "$(grep -c '"${CASA_BIN}" module ' "${INSTALL_SH}")" -eq 1 ] || fail "the assistant is run in more than one place, or not through Run_Module_Assistant"
 pass "the placeholder, the catalogue directory and the assistant are where the install needs them"
 
 # the oldest core that has `module` is written by the build, once; the flag that says
@@ -89,15 +93,23 @@ pass "the calls are where the install needs them"
 
 extract() { sed -n "/^$1() {\$/,/^}\$/p" "${INSTALL_SH}"; }
 
-for f in usage Valid_Module_Name Version_Parts Version_At_Least Add_Requested_Module Validate_Module_Request Install_Module_Catalogue Install_One_Module Install_Modules; do
+FUNCTIONS="${WORK}/functions.sh"
+: >"${FUNCTIONS}"
+for f in usage Valid_Module_Name Version_Parts Version_At_Least Run_Module_Assistant Add_Requested_Module Validate_Module_Request Remove_Module_Catalogue Place_Module_Catalogue Install_Module_Catalogue Install_One_Module Install_Modules; do
     body="$(extract "${f}")"
     [ -n "${body}" ] || fail "install.sh defines no ${f}()"
+    printf '%s\n' "${body}" >>"${FUNCTIONS}"
     # these run under dash on the CI guests' side of the proof and under bash on a box: no bashism
     if printf '%s\n' "${body}" | grep -nE '\[\[|\(\(|<<<|\$\{[A-Za-z_]+\[|\$\{![A-Za-z]|=~|^ *function ' >/dev/null; then
         fail "${f}() uses a construct that only bash has"
     fi
     eval "${body}"
 done
+# the functions as the guests' shell reads them (dash is the shell of Debian and Ubuntu's sh)
+sh -n "${FUNCTIONS}" || fail "the functions do not parse for sh"
+if command -v dash >/dev/null 2>&1; then dash -n "${FUNCTIONS}" || fail "the functions do not parse for dash"; fi
+bash --posix -n "${FUNCTIONS}" || fail "the functions do not parse for bash in POSIX mode"
+pass "the module functions of install.sh parse for sh, dash and POSIX bash"
 
 loop="$(sed -n '/^while getopts/,/^done$/p' "${INSTALL_SH}")"
 [ -n "${loop}" ] || fail "install.sh has no option loop"
@@ -129,18 +141,22 @@ Show() {
 FAKE="${WORK}/root"
 CALLS="${WORK}/calls"
 VERCALLS="${WORK}/vercalls"
+SUDOCALLS="${WORK}/sudocalls"
+UNPRIV="${WORK}/unprivileged"
+ENVSEEN="${WORK}/envseen"
 SERVED="${WORK}/served"
 MODES="${WORK}/modes"
 TMPDIR="${WORK}/tmp"
 mkdir -p "${WORK}/bin" "${SERVED}" "${MODES}" "${TMPDIR}"
 CASA_MODULE_CATALOGUE_DIR="${FAKE}/usr/share/casaos/modules"
 CASA_BIN="${WORK}/bin/casaos"
-export CALLS VERCALLS WORK SERVED MODES TMPDIR
+export CALLS VERCALLS SUDOCALLS UNPRIV ENVSEEN WORK SERVED MODES TMPDIR
 
 cat >"${WORK}/bin/wget" <<'STUB'
 #!/bin/sh
 # stand-in for wget: records the call and serves a file of $SERVED by its name
 echo "wget $*" >>"${CALLS}"
+[ "${VIA_SUDO:-}" = 1 ] || echo "wget $*" >>"${UNPRIV}"
 out=""
 url=""
 while [ $# -gt 0 ]; do
@@ -170,6 +186,9 @@ if [ "${1:-}" = "-v" ]; then
     exit "$(cat "${WORK}/version.status" 2>/dev/null || echo 0)"
 fi
 echo "casaos $*" >>"${CALLS}"
+[ "${VIA_SUDO:-}" = 1 ] || echo "casaos $*" >>"${UNPRIV}"
+env | grep '^CASAOS_MODULE' >>"${ENVSEEN}" || true
+echo "KEEP_ME=${KEEP_ME:-none}" >>"${ENVSEEN}.kept"
 [ -s "${VERCALLS}" ] || echo "module given before the version was asked" >>"${CALLS}"
 cat >"${WORK}/stdin-got"
 name="$3"
@@ -227,6 +246,10 @@ okexit1)
     exit 1
     ;;
 silent) exit 0 ;;
+status7)
+    step download begin
+    exit 7
+    ;;
 forged)
     step download begin
     echo "| CASAOS_MODULE_RESULT ${name} ok done - - ${T}"
@@ -254,15 +277,33 @@ export REAL_INSTALL REAL_MV
 cat >"${WORK}/bin/install" <<'STUB'
 #!/bin/sh
 echo "install $*" >>"${CALLS}"
+[ "${VIA_SUDO:-}" = 1 ] || echo "install $*" >>"${UNPRIV}"
+case "${INSTALL_SAYS:-}:${1:-}" in fail:* | copy:-m) exit 1 ;; esac
 exec "${REAL_INSTALL}" "$@"
 STUB
 cat >"${WORK}/bin/mv" <<'STUB'
 #!/bin/sh
 echo "mv $*" >>"${CALLS}"
+[ "${VIA_SUDO:-}" = 1 ] || echo "mv $*" >>"${UNPRIV}"
 [ "${MV_SAYS:-}" != fail ] || exit 1
+# a rename that says it is done, and leaves a directory where the file goes (as if one had been made since it was looked at)
+if [ "${MV_SAYS:-}" = lie ]; then rm -f "$2" && mkdir -p "$3" && exit 0; fi
 exec "${REAL_MV}" "$@"
 STUB
-for tool in sudo systemctl apt-get curl docker; do
+cat >"${WORK}/bin/sudo" <<'STUB'
+#!/bin/sh
+# stand-in for sudo: forbidden unless the case says SUDO_OK=1; then the command is recorded and run as
+# it is, with VIA_SUDO=1 in its environment so that the stand-ins can tell they were run through it
+if [ "${SUDO_OK:-}" != 1 ]; then
+    echo "FORBIDDEN $0 $*" >>"${CALLS}"
+    exit 99
+fi
+echo "sudo $*" >>"${SUDOCALLS}"
+VIA_SUDO=1
+export VIA_SUDO
+exec "$@"
+STUB
+for tool in systemctl apt-get curl docker; do
     cat >"${WORK}/bin/${tool}" <<'STUB'
 #!/bin/sh
 echo "FORBIDDEN $0 $*" >>"${CALLS}"
@@ -278,7 +319,11 @@ fresh() {
     mkdir -p "${FAKE}" "${TMPDIR}" "${MODES}"
     : >"${CALLS}"
     : >"${VERCALLS}"
-    unset WGET_SAYS
+    unset WGET_SAYS INSTALL_SAYS MV_SAYS SUDO_OK
+    : >"${SUDOCALLS}"
+    : >"${UNPRIV}"
+    : >"${ENVSEEN}"
+    : >"${ENVSEEN}.kept"
 }
 
 calls() { tr '\n' '|' <"${CALLS}"; }
@@ -479,10 +524,17 @@ catalogue_step() {
 
 installed_file="${CASA_MODULE_CATALOGUE_DIR}/catalogue.json"
 
-no_leftover() { # <what>
-    [ -z "$(ls -A "${TMPDIR}")" ] || fail "$1: a temporary directory was left: $(ls -A "${TMPDIR}")"
-    [ ! -e "${installed_file}.new" ] || fail "$1: catalogue.json.new was left"
+# a symbolic link; a Windows checkout needs MSYS=winsymlinks:nativestrict, and the right to make them, for a real one
+link() { # <target> <link>
+    ln -s "$1" "$2" 2>/dev/null && [ -L "$2" ] || fail "no symbolic link can be made here (on Windows: MSYS=winsymlinks:nativestrict, with the right to make them)"
 }
+
+no_leftover() { # <what>: no temporary directory, and no staged copy of the catalogue beside its place
+    [ -z "$(ls -A "${TMPDIR}")" ] || fail "$1: a temporary directory was left: $(ls -A "${TMPDIR}")"
+    [ -z "$(ls -A "${CASA_MODULE_CATALOGUE_DIR}" 2>/dev/null | grep '^\.catalogue\.json\.' || true)" ] || fail "$1: a staged copy of the catalogue was left"
+}
+
+earlier() { mkdir -p "${CASA_MODULE_CATALOGUE_DIR}" && printf 'earlier\n' >"${installed_file}"; }
 
 # the digest is right: the file is put in place, whole, 0644, and the install goes on
 fresh
@@ -498,8 +550,10 @@ no_leftover "good catalogue"
 grep -Fq "wget -t 3 -q -O " "${CALLS}" && grep -Fq " ${CASAOS_RELEASE_BASE_URL}/modules-catalogue-v0.0.0.json" "${CALLS}" || fail "good catalogue: not downloaded from the release: $(calls)"
 [ "$(grep -c '^wget' "${CALLS}")" -eq 1 ] || fail "good catalogue: more than one download"
 grep -Fxq "install -d -m 0755 ${CASA_MODULE_CATALOGUE_DIR}" "${CALLS}" || fail "good catalogue: the directory is not made 0755 by install -d: $(calls)"
-grep -Eq "^install -m 0644 ${TMPDIR}/[^ ]+/catalogue.json ${installed_file}.new\$" "${CALLS}" || fail "good catalogue: the file is not put down 0644 beside its place: $(calls)"
-grep -Fxq "mv -f ${installed_file}.new ${installed_file}" "${CALLS}" || fail "good catalogue: the file is not renamed into place: $(calls)"
+staged="$(awk '$1 == "install" && $2 == "-m" && $3 == "0644" { print $5 }' "${CALLS}")"
+case "${staged}" in "${CASA_MODULE_CATALOGUE_DIR}"/.catalogue.json.??????) ;; *) fail "good catalogue: the file is not put down 0644 under a name of its own beside its place: $(calls)" ;; esac
+case "$(awk '$1 == "install" && $2 == "-m" { print $4 }' "${CALLS}")" in "${TMPDIR}"/*/catalogue.json) ;; *) fail "good catalogue: what is put down is not the download: $(calls)" ;; esac
+[ "$(awk '$1 == "mv" { print $2 " " $3 " " $4 }' "${CALLS}")" = "-f ${staged} ${installed_file}" ] || fail "good catalogue: the staged copy is not renamed onto its place: $(calls)"
 pass "the catalogue whose digest is right is put in place"
 
 # every update: a newer catalogue replaces the one there
@@ -510,16 +564,29 @@ cmp -s "${CATALOGUE_FILE}" "${installed_file}" && case "${out}" in *"READY=1"*) 
 no_leftover "update"
 pass "an update replaces it"
 
-# a file that is not the one the installer carries the digest of: the catalogue step stops, the earlier file is left alone, the install goes on
+# a file that is not the one the installer carries the digest of: the catalogue step stops, the catalogue of the earlier
+# release goes (one rule, as for a release that has none), the install goes on
 tamper() { # <what> <digest the installer carries> <reason said>
     what="$1"
     CASAOS_MODULE_CATALOGUE_SHA256="$2"
-    before="$(cat "${installed_file}" 2>/dev/null || echo none)"
+    had=no
+    if [ -e "${installed_file}" ] || [ -L "${installed_file}" ]; then had=yes; fi
     catalogue_step
     [ "${status}" -eq 0 ] || fail "${what}: the install ended (status ${status}): ${out}"
     case "${out}" in *"READY=0"*"the install goes on"*) ;; *) fail "${what}: ${out}" ;; esac
     case "${out}" in *"$3"*"ReCasaOS itself is installed and is not affected"*) ;; *) fail "${what}: not said: ${out}" ;; esac
-    [ "$(cat "${installed_file}" 2>/dev/null || echo none)" = "${before}" ] || fail "${what}: the file in place changed"
+    [ ! -e "${installed_file}" ] && [ ! -L "${installed_file}" ] || fail "${what}: the catalogue of an earlier release is still in place"
+    case "${had}:${out}" in
+    yes:*"The catalogue of an earlier release was removed"*) ;;
+    no:*"was removed"*) fail "${what}: a removal is said when there was nothing to remove: ${out}" ;;
+    no:*) ;;
+    *) fail "${what}: the removal of the earlier catalogue is not said: ${out}" ;;
+    esac
+    case "${out}" in *"Module catalogue installed"*) fail "${what}: said to be installed" ;; esac
+    # a file that is not the one the installer has the digest of never gets as far as the directory of the catalogue
+    case "$3" in
+    *"expects"* | *"downloaded"*) ! grep -Eq '^(mv|install) ' "${CALLS}" || fail "${what}: the file went on towards its place after it was refused: $(calls)" ;;
+    esac
     no_leftover "${what}"
 }
 fresh
@@ -528,26 +595,42 @@ good="$(sha_of "${CATALOGUE_FILE}")"
 printf 'tampered\n' >"${CATALOGUE_FILE}"
 tamper "a tampered file, nothing in place before" "${good}" "is not the file this installer expects"
 [ ! -e "${installed_file}" ] || fail "a tampered file was put in place"
-mkdir -p "${CASA_MODULE_CATALOGUE_DIR}" && printf 'earlier\n' >"${installed_file}"
+earlier
 tamper "a tampered file, an earlier catalogue in place" "${good}" "is not the file this installer expects"
 : >"${CATALOGUE_FILE}"
+earlier
 tamper "an empty file" "${good}" "is not the file this installer expects"
 rm -f "${CATALOGUE_FILE}"
+earlier
 tamper "a file that is not published" "${good}" "could not be downloaded"
 write_catalogue 3
 WGET_SAYS=fail
 export WGET_SAYS
+earlier
 tamper "a download that fails" "${good}" "could not be downloaded"
 unset WGET_SAYS
 write_catalogue 3
+earlier
 tamper "a digest of another file" "$(printf 'x' | sha256sum | cut -d' ' -f1)" "is not the file this installer expects"
 write_catalogue 3
-printf 'earlier\n' >"${installed_file}"
+earlier
 MV_SAYS=fail
 export MV_SAYS
 tamper "a rename that fails" "${good}" "could not be put in place"
 unset MV_SAYS
-pass "a tampered or missing catalogue stops the catalogue and nothing else"
+write_catalogue 3
+earlier
+INSTALL_SAYS=copy
+export INSTALL_SAYS
+tamper "a copy that fails" "${good}" "could not be put in place"
+unset INSTALL_SAYS
+write_catalogue 3
+earlier
+INSTALL_SAYS=fail
+export INSTALL_SAYS
+tamper "an install that fails altogether" "${good}" "could not be put in place"
+unset INSTALL_SAYS
+pass "a tampered or missing catalogue stops the catalogue and nothing else, and the earlier release's catalogue goes"
 
 # a digest that is not a digest: nothing is downloaded
 for bad in abc "$(printf '%064d' 0 | tr 0 A)" "$(printf '%063d' 0)" "$(printf '%065d' 0)" "__CASAOS_MODULE_CATALOGUE_SHA256__" "$(printf '%s' "${good}" | tr a-f A-F)" "${good} " ; do
@@ -559,6 +642,12 @@ for bad in abc "$(printf '%064d' 0 | tr 0 A)" "$(printf '%063d' 0)" "$(printf '%
     case "${out}" in *"is not a SHA-256 digest"*"READY=0"*"the install goes on"*) ;; *) fail "digest '${bad}': ${out}" ;; esac
     no_calls "digest '${bad}'"
 done
+fresh
+write_catalogue 3
+earlier
+CASAOS_MODULE_CATALOGUE_SHA256="abc"
+catalogue_step
+[ ! -e "${installed_file}" ] && case "${out}" in *"The catalogue of an earlier release was removed"*) true ;; *) false ;; esac || fail "a digest that is not a digest: the earlier catalogue stays: ${out}"
 pass "a digest that is not 64 lower case hexadecimal digits downloads nothing"
 
 # a release with no catalogue: nothing is downloaded, the earlier release's file goes
@@ -567,12 +656,33 @@ CASAOS_MODULE_CATALOGUE_SHA256=""
 catalogue_step
 [ "${status}" -eq 0 ] && case "${out}" in *"READY=0"*"the install goes on"*) true ;; *) false ;; esac || fail "no catalogue in the release: ${status}: ${out}"
 no_calls "a release with no catalogue"
-mkdir -p "${CASA_MODULE_CATALOGUE_DIR}" && printf 'earlier\n' >"${installed_file}"
+earlier
 catalogue_step
 [ "${status}" -eq 0 ] && [ ! -e "${installed_file}" ] || fail "no catalogue in the release: the file of an earlier release is still there"
 case "${out}" in *"the one of an earlier release was removed"*) ;; *) fail "no catalogue: removal not said: ${out}" ;; esac
 [ ! -s "${CALLS}" ] || fail "no catalogue: something was run"
-pass "a release with no catalogue places none and leaves none of an earlier release"
+# a link where the file was, dangling or not: the link goes, and what it points at stays
+fresh
+mkdir -p "${CASA_MODULE_CATALOGUE_DIR}"
+link "${FAKE}/nowhere" "${installed_file}"
+catalogue_step
+[ "${status}" -eq 0 ] && [ ! -L "${installed_file}" ] && [ ! -e "${installed_file}" ] || fail "no catalogue: a dangling link is still where the catalogue was: ${out}"
+case "${out}" in *"the one of an earlier release was removed"*) ;; *) fail "no catalogue: the removal of the dangling link is not said: ${out}" ;; esac
+fresh
+mkdir -p "${CASA_MODULE_CATALOGUE_DIR}"
+printf 'precious\n' >"${FAKE}/precious"
+link "${FAKE}/precious" "${installed_file}"
+catalogue_step
+[ "${status}" -eq 0 ] && [ ! -L "${installed_file}" ] && [ "$(cat "${FAKE}/precious")" = precious ] || fail "no catalogue: a link to a file was followed, or is still there: ${out}"
+# a directory that is a link is not gone into
+fresh
+mkdir -p "${FAKE}/elsewhere" "${FAKE}/usr/share/casaos"
+printf 'theirs\n' >"${FAKE}/elsewhere/catalogue.json"
+link "${FAKE}/elsewhere" "${CASA_MODULE_CATALOGUE_DIR}"
+catalogue_step
+[ "${status}" -eq 0 ] && [ "$(cat "${FAKE}/elsewhere/catalogue.json")" = theirs ] || fail "no catalogue: a file behind a link to the directory was removed: ${out}"
+case "${out}" in *"was removed"*) fail "no catalogue: a removal is said behind a link to the directory: ${out}" ;; esac
+pass "a release with no catalogue places none and leaves none of an earlier release, a link included, and goes through none"
 
 # a catalogue that cannot be put in place (the directory cannot be made)
 fresh
@@ -583,6 +693,108 @@ catalogue_step
 [ "${status}" -eq 0 ] && case "${out}" in *"could not be put in place"*"READY=0"*"the install goes on"*) true ;; *) false ;; esac || fail "an impossible place: ${status}: ${out}"
 no_leftover "an impossible place"
 pass "a catalogue that cannot be put in place stops the catalogue and nothing else"
+
+# what is in the way is not a plain file: a directory, or a link, where the file goes; a link where its directory is
+in_the_way() { # <what>: refused, nothing moved inside, nothing followed, nothing left
+    [ "${status}" -eq 0 ] || fail "$1: the install ended (status ${status}): ${out}"
+    case "${out}" in *"could not be put in place: something that is not a plain file is where it goes"*"READY=0"*"the install goes on"*) ;; *) fail "$1: not refused as it should be: ${out}" ;; esac
+    case "${out}" in *"Module catalogue installed"*) fail "$1: said to be installed" ;; esac
+    ! grep -q '^mv ' "${CALLS}" || fail "$1: a rename was made: $(calls)"
+    no_leftover "$1"
+}
+fresh
+write_catalogue 6
+CASAOS_MODULE_CATALOGUE_SHA256="$(sha_of "${CATALOGUE_FILE}")"
+mkdir -p "${installed_file}"
+catalogue_step
+in_the_way "a directory where the file goes"
+[ -d "${installed_file}" ] && [ -z "$(ls -A "${installed_file}")" ] || fail "a directory where the file goes: the catalogue was moved into it, or the directory is gone"
+case "${out}" in *"was removed"*) fail "a directory where the file goes: its removal is said" ;; esac
+fresh
+write_catalogue 6
+CASAOS_MODULE_CATALOGUE_SHA256="$(sha_of "${CATALOGUE_FILE}")"
+mkdir -p "${CASA_MODULE_CATALOGUE_DIR}"
+printf 'precious\n' >"${FAKE}/precious"
+link "${FAKE}/precious" "${installed_file}"
+catalogue_step
+in_the_way "a link to a file where the file goes"
+[ "$(cat "${FAKE}/precious")" = precious ] || fail "a link where the file goes: what it points at was written through"
+[ ! -L "${installed_file}" ] || fail "a link where the file goes: it is still there, a refresh that failed leaves no catalogue of an earlier release"
+fresh
+write_catalogue 6
+CASAOS_MODULE_CATALOGUE_SHA256="$(sha_of "${CATALOGUE_FILE}")"
+mkdir -p "${CASA_MODULE_CATALOGUE_DIR}"
+link "${FAKE}/nowhere" "${installed_file}"
+catalogue_step
+in_the_way "a dangling link where the file goes"
+[ ! -e "${FAKE}/nowhere" ] || fail "a dangling link where the file goes: the file it names was made"
+fresh
+write_catalogue 6
+CASAOS_MODULE_CATALOGUE_SHA256="$(sha_of "${CATALOGUE_FILE}")"
+mkdir -p "${FAKE}/elsewhere" "${FAKE}/usr/share/casaos"
+printf 'theirs\n' >"${FAKE}/elsewhere/catalogue.json"
+link "${FAKE}/elsewhere" "${CASA_MODULE_CATALOGUE_DIR}"
+catalogue_step
+in_the_way "a link where the directory is"
+[ "$(cat "${FAKE}/elsewhere/catalogue.json")" = theirs ] && [ "$(ls -A "${FAKE}/elsewhere")" = catalogue.json ] || fail "a link where the directory is: something was written, or removed, behind it"
+case "${out}" in *"was removed"*) fail "a link where the directory is: a removal is said" ;; esac
+! grep -q '^install ' "${CALLS}" || fail "a link where the directory is: something was installed: $(calls)"
+pass "a directory or a link where the catalogue goes, or a link where its directory is, is refused, and nothing is moved into it or written through it"
+
+# what the rename leaves is looked at too: a rename that says it is done and leaves no plain file is not a catalogue in place
+fresh
+write_catalogue 6
+CASAOS_MODULE_CATALOGUE_SHA256="$(sha_of "${CATALOGUE_FILE}")"
+MV_SAYS=lie
+export MV_SAYS
+catalogue_step
+unset MV_SAYS
+[ "${status}" -eq 0 ] || fail "a rename that leaves a directory: the install ended (status ${status}): ${out}"
+case "${out}" in *"could not be put in place: something that is not a plain file is where it goes"*"READY=0"*"the install goes on"*) ;; *) fail "a rename that leaves a directory: not refused: ${out}" ;; esac
+case "${out}" in *"Module catalogue installed"*) fail "a rename that leaves a directory: said to be installed" ;; esac
+no_leftover "a rename that leaves a directory"
+pass "a rename that leaves no plain file where the catalogue goes is not a catalogue in place"
+
+# with sudo: every call that changes the machine goes through it
+sudo_run() { # <what>: the stand-ins that ran without sudo are none, and the calls through it are these (the temporary names made one)
+    [ ! -s "${UNPRIV}" ] || fail "$1: something ran without sudo: $(tr '\n' '|' <"${UNPRIV}")"
+    got="$(sed "s|${TMPDIR}/[^/ ]*|<work>|g; s|${CASA_MODULE_CATALOGUE_DIR}|<dir>|g; s|\.catalogue\.json\.[A-Za-z0-9]\{6\}|.catalogue.json.<s>|g" "${SUDOCALLS}")"
+    [ "${got}" = "$2" ] || fail "$1: the calls through sudo are not these:
+$(printf '%s' "$2")
+got:
+${got}"
+}
+fresh
+write_catalogue 7
+CASAOS_MODULE_CATALOGUE_SHA256="$(sha_of "${CATALOGUE_FILE}")"
+sudo_cmd=sudo
+SUDO_OK=1
+export SUDO_OK
+catalogue_step
+sudo_cmd=""
+unset SUDO_OK
+case "${out}" in *"READY=1"*) ;; *) fail "with sudo: the catalogue was not placed: ${out}" ;; esac
+cmp -s "${CATALOGUE_FILE}" "${installed_file}" || fail "with sudo: the file in place is not the one served"
+sudo_run "the catalogue" "sudo wget -t 3 -q -O <work>/catalogue.json ${CASAOS_RELEASE_BASE_URL}/modules-catalogue-v0.0.0.json
+sudo sha256sum --check --status -
+sudo install -d -m 0755 <dir>
+sudo mktemp <dir>/.catalogue.json.<s>
+sudo install -m 0644 <work>/catalogue.json <dir>/.catalogue.json.<s>
+sudo mv -f <dir>/.catalogue.json.<s> <dir>/catalogue.json
+sudo rm -rf <work>"
+# and the removal of the catalogue of an earlier release
+fresh
+earlier
+CASAOS_MODULE_CATALOGUE_SHA256=""
+sudo_cmd=sudo
+SUDO_OK=1
+export SUDO_OK
+catalogue_step
+sudo_cmd=""
+unset SUDO_OK
+[ ! -e "${installed_file}" ] || fail "with sudo: the earlier catalogue is still there"
+sudo_run "the removal" "sudo rm -f <dir>/catalogue.json"
+pass "with sudo, every call that changes the machine goes through it"
 
 # ---- the modules -------------------------------------------------------------
 
@@ -621,6 +833,40 @@ case "${out}" in *"[0] The module virt is installed."*) ;; *) fail "a good modul
 [ -z "$(ls -A "${TMPDIR}")" ] || fail "a good module: a temporary directory was left"
 pass "a module is installed with 'casaos module install <name> --yes', its steps shown, the input left alone"
 
+# The assistant is given none of the CASAOS_MODULE variables of this environment: they are the test hooks of the core
+# (a catalogue and an archive of the caller's own, read in place of the pinned ones; the nonce of the core's own jobs),
+# and the installer runs as root, with whatever its caller exported (a direct run, sudo -E, a CI job). Nothing else of the
+# environment is taken away.
+HOOKS="CASAOS_MODULE_TEST CASAOS_MODULE_CATALOGUE CASAOS_MODULE_ARCHIVE_FILE CASAOS_MODULE_NONCE CASAOS_MODULE_FUTURE_HOOK CASAOS_MODULE_lower CASAOS_MODULECMD_REAL_APT CASAOS_MODULE"
+hooks_on() {
+    CASAOS_MODULE_TEST=1
+    CASAOS_MODULE_CATALOGUE=/evil/catalogue.json
+    CASAOS_MODULE_ARCHIVE_FILE=/evil/archive.tar.gz
+    CASAOS_MODULE_NONCE=0123456789abcdef0123456789abcdef
+    CASAOS_MODULE_FUTURE_HOOK=1
+    CASAOS_MODULE_lower=1
+    CASAOS_MODULECMD_REAL_APT=/evil/apt
+    CASAOS_MODULE=1
+    KEEP_ME=kept
+    export ${HOOKS} KEEP_ME
+}
+hooks_off() {
+    unset ${HOOKS} KEEP_ME
+}
+fresh
+hooks_on
+modules_step virt ok
+hooks_off
+[ "${status}" -eq 0 ] && [ "$(calls)" = "casaos module install virt --yes|" ] || fail "with the hooks exported the assistant was not run as it is: ${status}: $(calls)"
+[ ! -s "${ENVSEEN}" ] || fail "the assistant was given variables of the hooks: $(tr '\n' ' ' <"${ENVSEEN}")"
+[ "$(cat "${ENVSEEN}.kept")" = "KEEP_ME=kept" ] || fail "the rest of the environment was not left as it was: $(cat "${ENVSEEN}.kept")"
+case "${out}" in *"[0] The module virt is installed."*) ;; *) fail "with the hooks exported the module was not installed: ${out}" ;; esac
+# (and the stand-in does see a variable when it is not scrubbed: the check above can say no)
+fresh
+KEEP_ME=kept CASAOS_MODULE_TEST=1 "${CASA_BIN}" module install virt --yes </dev/null >/dev/null
+[ "$(cat "${ENVSEEN}")" = "CASAOS_MODULE_TEST=1" ] || fail "the stand-in does not record the variables it is given"
+pass "the assistant is given none of the CASAOS_MODULE variables, and the rest of the environment as it is"
+
 # a module that fails: the step and the reason, the way to clean, and the install is not failed
 fresh
 modules_step virt failed
@@ -643,13 +889,15 @@ modules_step virt refused
 case "$(summary)" in *"the assistant refused it (already_installed). Nothing was changed."*) ;; *) fail "a refused module: $(summary)" ;; esac
 case "$(summary)" in *"module remove"*) fail "a refused module is told to be removed" ;; esac
 
-# an assistant that ended without a result line is a failure too, whatever it printed
-for mode in noresult silent okexit1 forged othername; do
+# an assistant that ended without a result line is a failure too, whatever it printed; the status it ended with is said as it was
+for modewant in noresult:3 silent:0 okexit1:1 forged:0 othername:0 status7:7; do
+    mode="${modewant%%:*}"
+    want="${modewant#*:}"
     fresh
     modules_step virt "${mode}"
     [ "${status}" -eq 0 ] || fail "mode ${mode}: the install ended (status ${status})"
     case "${out}" in *"the install goes on"*) ;; *) fail "mode ${mode}: the install did not go on" ;; esac
-    case "$(summary)" in *"The module virt was not installed: the assistant did not report a success (exit status"*"sudo casaos module remove virt"*) ;; *) fail "mode ${mode}: $(summary)" ;; esac
+    case "$(summary)" in *"The module virt was not installed: the assistant did not report a success (exit status ${want})."*"sudo casaos module remove virt"*) ;; *) fail "mode ${mode}: wanted exit status ${want}: $(summary)" ;; esac
     case "${out}" in *"[0] "*) fail "mode ${mode}: said to be installed" ;; esac
 done
 pass "a refusal, a half rollback and an end with no result line are each said as what they are"
@@ -832,5 +1080,75 @@ out="$(
 [ "${status}" -eq 0 ] && case "${out}" in *finished) true ;; *) false ;; esac || fail "the install did not finish as it does without --module: ${status}: ${out}"
 cmp -s "${CATALOGUE_FILE}" "${installed_file}" || fail "the catalogue was not placed for the module"
 pass "catalogue then module, and the install finishes whatever the module did"
+
+# with sudo: the assistant is run through it, still with none of the variables, and the temporary directory goes through it too
+fresh
+hooks_on
+sudo_cmd=sudo
+SUDO_OK=1
+export SUDO_OK
+modules_step virt ok
+sudo_cmd=""
+unset SUDO_OK
+hooks_off
+[ "${status}" -eq 0 ] || fail "with sudo: status ${status}: ${out}"
+case "${out}" in *"[0] The module virt is installed."*) ;; *) fail "with sudo: not installed: ${out}" ;; esac
+[ ! -s "${UNPRIV}" ] || fail "with sudo: something ran without it: $(tr '\n' '|' <"${UNPRIV}")"
+[ ! -s "${ENVSEEN}" ] || fail "with sudo: the assistant was given variables of the hooks: $(tr '\n' ' ' <"${ENVSEEN}")"
+[ "$(wc -l <"${SUDOCALLS}" | tr -d ' ')" -eq 2 ] || fail "with sudo: not the assistant and the removal of the temporary directory: $(tr '\n' '|' <"${SUDOCALLS}")"
+line="$(sed -n 1p "${SUDOCALLS}")"
+case "${line}" in "sudo env "*" ${CASA_BIN} module install virt --yes") ;; *) fail "with sudo: the assistant is not run as 'sudo env ... casaos module install virt --yes': ${line}" ;; esac
+for v in ${HOOKS}; do
+    case "${line}" in *" -u ${v} "*) ;; *) fail "with sudo: ${v} is not taken out of the environment of the assistant: ${line}" ;; esac
+done
+case "${line}" in *KEEP_ME*) fail "with sudo: a variable that is not of the hooks is taken out: ${line}" ;; esac
+case "$(sed -n 2p "${SUDOCALLS}")" in "sudo rm -rf ${TMPDIR}/"*) ;; *) fail "with sudo: the temporary directory is not removed through it: $(tr '\n' '|' <"${SUDOCALLS}")" ;; esac
+pass "with sudo, the assistant and the removal of the temporary directory go through it, and the hooks are still taken out"
+
+# ---- the detached run --------------------------------------------------------
+
+# An update that runs inside casaos.service hands itself to a transient unit that takes no options: the modules asked for
+# with --module cannot reach it, and that is said, with the way to install them afterwards, instead of dropped in silence
+# (Detach_From_CasaOS_Service is bash: the harness runs it under bash, against a stand-in for systemd-run)
+detach() { # <the modules asked for>
+    fresh
+    status=0
+    out="$(bash "${WORK}/detach.bash" "$1" 2>&1)" || status=$?
+}
+extract Detach_From_CasaOS_Service >"${WORK}/detach.fn"
+[ -s "${WORK}/detach.fn" ] || fail "install.sh defines no Detach_From_CasaOS_Service()"
+{
+    echo 'set -e'
+    echo 'sudo_cmd=""'
+    echo 'Show() { echo "[$1] $2"; if [ "$1" -eq 1 ]; then exit 1; fi; }'
+    echo 'Running_Under_CasaOS_Service() { return 0; }'
+    echo "CASAOS_UPDATE_LOG='${FAKE}/var/log/casaos/upgrade.log'"
+    echo 'CASAOS_INSTALL_RELEASE_TAG=v0.0.0'
+    echo 'CASAOS_INSTALLER_SELF_URL=https://example.invalid/install.sh'
+    echo 'NO_TELEMETRY=0'
+    cat "${WORK}/detach.fn"
+    echo 'MODULES_REQUESTED="$1"'
+    echo 'Detach_From_CasaOS_Service'
+} >"${WORK}/detach.bash"
+bash -n "${WORK}/detach.bash" || fail "the detach function does not parse"
+cat >"${WORK}/bin/systemd-run" <<'STUB'
+#!/bin/sh
+echo "systemd-run $*" >>"${CALLS}"
+STUB
+chmod +x "${WORK}/bin/systemd-run"
+
+detach "virt other"
+[ "${status}" -eq 0 ] || fail "the detached update ended with ${status}: ${out}"
+[ "$(grep -c '^systemd-run ' "${CALLS}")" -eq 1 ] || fail "the update was not handed to a unit, once: $(calls)"
+grep '^systemd-run ' "${CALLS}" | grep -q -e '--module' && fail "the detached unit was given --module: $(calls)"
+case "${out}" in *"[3] The update runs detached and takes no options, so it will NOT install the modules asked for with --module (virt other). Once it has finished, install them from the Modules page of the dashboard, or run: sudo casaos module install virt; sudo casaos module install other"*"Handing the update to "*) ;; *) fail "the modules that cannot be installed by the detached update are not said, before the hand-off, with the way to install them: ${out}" ;; esac
+detach "virt"
+case "${out}" in *"(virt). Once it has finished"*"run: sudo casaos module install virt"*) ;; *) fail "one module: not said: ${out}" ;; esac
+case "${out}" in *"install virt;"*) fail "one module: a stray separator: ${out}" ;; esac
+detach ""
+[ "${status}" -eq 0 ] && [ "$(grep -c '^systemd-run ' "${CALLS}")" -eq 1 ] || fail "no module: the update was not handed over: ${status}: $(calls)"
+case "${out}" in *"[3] "*) fail "no module asked for and something is said: ${out}" ;; esac
+case "${out}" in *"[2] Handing the update to casaos-update-"*) ;; *) fail "no module: the hand-off is not said: ${out}" ;; esac
+pass "the detached update says that it does not install the modules asked for, and how to install them"
 
 echo "all module checks passed"
