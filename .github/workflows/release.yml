@@ -51,6 +51,9 @@ jobs:
       - name: Check what the installer does with a module
         run: sh scripts/test-install-modules.sh
 
+      - name: Check what the uninstaller does with a module
+        run: sh scripts/test-uninstall-modules.sh
+
       - name: Load component pins
         run: |
           set -euo pipefail

@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import shlex
 import tarfile
 import tempfile
 import unittest
@@ -32,6 +33,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILDER = os.environ.get("BUILDER") or os.path.join(HERE, "build-modules-catalogue.py")
 BUILD_SCRIPT = os.environ.get("BUILD_SCRIPT") or os.path.join(HERE, "build-release-bundle.sh")
 INSTALL_SH = os.path.join(HERE, "..", "install.sh")
+UNINSTALL_SH = os.path.join(HERE, "..", "casaos-uninstall")
+RELEASE_DIR = os.path.join(HERE, "..", "release")
 BASH = os.environ.get("TEST_BASH") or "bash"
 ONLY = os.environ.get("CASES")
 sys.dont_write_bytecode = True
@@ -39,6 +42,25 @@ sys.dont_write_bytecode = True
 loading = importlib.util.spec_from_file_location("builder", BUILDER)
 builder = importlib.util.module_from_spec(loading)
 loading.loader.exec_module(builder)
+
+# The oldest core that has `casaos module`, as the build script writes it (the one place it is written), and tags on both sides of it.
+with open(BUILD_SCRIPT, newline="") as _f:
+    _found = re.search(r'^readonly MODULES_MIN_CORE_TAG="(v[0-9]+\.[0-9]+\.[0-9]+)"\r?$', _f.read(), re.M)
+MIN_CORE = _found.group(1) if _found else "v0.0.0"
+MAJOR, MINOR, PATCH = [int(n) for n in MIN_CORE[1:].split(".")]
+
+
+def core_tag(*numbers):
+    return "v%d.%d.%d" % numbers
+
+
+# (a number is a number and not a text: v0.10.0 is later than v0.4.75, v0.4.9 is earlier than it, though a text sort says the contrary of both)
+CORES_FROM_THE_MINIMUM = [MIN_CORE, core_tag(MAJOR, MINOR, PATCH + 1), core_tag(MAJOR, MINOR + 1, 0), core_tag(MAJOR + 1, 0, 0), core_tag(MAJOR, 10 ** len(str(MINOR)), 0),
+                          core_tag(MAJOR, MINOR, PATCH * 10 + 1)]
+CORES_BELOW_THE_MINIMUM = [core_tag(0, 0, 1)] + ([core_tag(MAJOR, MINOR, PATCH - 1)] if PATCH > 0 else []) + ([core_tag(MAJOR, MINOR, 9)] if PATCH > 9 else []) + (
+    [core_tag(MAJOR, MINOR - 1, 999)] if MINOR > 0 else [])
+# the oldest core is a decision, not a computation: it is the tag the core release that brought `casaos module` was given
+EXPECTED_MIN_CORE = "v0.4.75"
 
 COMPONENT = "CasaOS-VirtManagement"
 ARCHIVE = "linux-%s-casaos-virt-management-v0.1.1.tar.gz"
@@ -726,7 +748,7 @@ class BuildScript(Base):
         self.output = os.path.join(self.tmp, "dist")
         os.makedirs(self.output)
 
-    def run_functions(self, body, python=None):
+    def run_functions(self, body, python=None, core=None):
         script = """set -euo pipefail
 SCRIPT_DIR=%(scripts)s
 STAGING_ROOT=%(staging)s
@@ -736,14 +758,17 @@ CHECKSUMS_BASE_URL=%(base)s
 MODULES_GIT_BASE_URL=%(base)s
 RELEASE_TAG=v9.9.9
 PYTHON=%(python)s
-for f in fail compute_checksum build_modules_catalogue fill_catalogue_digest write_checksums; do
+CASAOS_TAG=%(core)s
+eval "$(tr -d '\\r' <%(script)s | sed -n '/^readonly MODULES_MIN_CORE_TAG=/p')"
+[ -n "${MODULES_MIN_CORE_TAG:-}" ] || { echo "build-release-bundle.sh defines no MODULES_MIN_CORE_TAG" >&2; exit 97; }
+for f in fail compute_checksum check_core_for_modules fill_modules_min_core_tag build_modules_catalogue fill_catalogue_digest write_checksums; do
     eval "$(tr -d '\\r' <%(script)s | sed -n "/^${f}() {\\$/,/^}\\$/p")"
     declare -F "${f}" >/dev/null || { echo "build-release-bundle.sh defines no ${f}()" >&2; exit 97; }
 done
 %(body)s
 """ % {
             "scripts": sh(HERE), "staging": sh(os.path.join(self.tmp, "staging")), "output": sh(self.output), "env": sh(self.env), "base": file_url(self.net),
-            "python": sh(python or sys.executable), "script": sh(BUILD_SCRIPT), "body": body,
+            "python": sh(python or sys.executable), "script": sh(BUILD_SCRIPT), "body": body, "core": shlex.quote(MIN_CORE if core is None else core),
         }
         os.makedirs(os.path.join(self.tmp, "staging"), exist_ok=True)
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0")
@@ -829,6 +854,91 @@ done
         self.assertNotEqual(code, 0, "an empty digest was written for a catalogue that is there")
         with open(target, "rb") as f:
             self.assertEqual(f.read(), before)
+
+    def test_the_oldest_core_that_has_module_is_one_tag_in_one_place(self):
+        with open(BUILD_SCRIPT, newline="") as f:
+            text = f.read().replace("\r", "")
+        self.assertEqual(text.count("\nreadonly MODULES_MIN_CORE_TAG=\"%s\"\n" % EXPECTED_MIN_CORE), 1, "the oldest core that has `casaos module` is not %s, once" % EXPECTED_MIN_CORE)
+        self.assertEqual(len(re.findall(r"^[ \t]*(?:readonly )?MODULES_MIN_CORE_TAG=", text, re.M)), 1, "the oldest core is written in more than one place")
+        self.assertEqual(MIN_CORE, EXPECTED_MIN_CORE)
+        for path in (INSTALL_SH, UNINSTALL_SH):
+            with open(path, newline="") as f:
+                self.assertNotIn(MIN_CORE, f.read(), "%s writes the oldest core itself, and is not given it by the build" % os.path.basename(path))
+
+    def test_a_release_with_modules_needs_a_core_that_has_module(self):
+        for core in CORES_FROM_THE_MINIMUM:
+            with self.subTest(core=core, hence="allowed"):
+                code, out, err = self.run_functions("check_core_for_modules", core=core)
+                self.assertEqual((code, out, err), (0, "", ""))
+        for core in CORES_BELOW_THE_MINIMUM:
+            with self.subTest(core=core, hence="refused"):
+                code, out, err = self.run_functions("check_core_for_modules", core=core)
+                self.assertNotEqual(code, 0, "%s is older than %s and was let through" % (core, MIN_CORE))
+                for word in (core, MIN_CORE, "casaos module", "second server", "release/components.env"):
+                    self.assertIn(word, err)
+
+    def test_a_core_that_is_not_a_tag_cannot_be_checked_and_is_refused(self):
+        for core in ("", "latest", "v1", "v1.2", MIN_CORE[1:], MIN_CORE + "-rc1", MIN_CORE + ".1", "v0.4.1234567", MIN_CORE + "\nv9.9.9", "v9.9.9\n" + MIN_CORE, "x" + MIN_CORE):
+            with self.subTest(core=core):
+                code, out, err = self.run_functions("check_core_for_modules", core=core)
+                self.assertNotEqual(code, 0, "%r was let through" % core)
+                self.assertIn("cannot be checked", err)
+
+    def test_a_catalogue_is_not_built_for_a_core_that_has_no_module_and_nothing_is_fetched(self):
+        self.good()
+        shutil.rmtree(self.stage_dir)
+        code, out, err = self.run_functions('CHECKSUMS_BASE_URL=file:///nonexistent\nMODULES_GIT_BASE_URL=file:///nonexistent\nbuild_modules_catalogue', core=CORES_BELOW_THE_MINIMUM[-1])
+        self.assertNotEqual(code, 0, "the build went on")
+        self.assertIn("casaos module", err)
+        self.assertNotIn("Failed to download", err, "the checksums were fetched before the core was looked at")
+        self.assertEqual(self.made(), [], "a catalogue was written")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "staging", "modules")), "something was staged before the core was looked at")
+        # the same release for a core that has it
+        code, out, err = self.run_functions("build_modules_catalogue", core=CORES_FROM_THE_MINIMUM[0])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.made(), ["modules-catalogue-v9.9.9.json"])
+
+    def test_a_release_with_no_module_asks_nothing_of_its_core(self):
+        self.write_env("# nothing\n\n")
+        code, out, err = self.run_functions('build_modules_catalogue\necho "file=[${MODULES_CATALOGUE_FILE}]"', python="/nonexistent/python", core=CORES_BELOW_THE_MINIMUM[0])
+        self.assertEqual((code, out.strip()), (0, "file=[]"), err)
+
+    def test_the_minimum_core_is_written_into_install_sh_and_the_uninstaller(self):
+        for path in (INSTALL_SH, UNINSTALL_SH):
+            with self.subTest(file=os.path.basename(path)):
+                target = os.path.join(self.tmp, os.path.basename(path))
+                shutil.copy(path, target)
+                code, out, err = self.run_functions("fill_modules_min_core_tag %s" % sh(target))
+                self.assertEqual(code, 0, err)
+                with open(target, newline="") as f:
+                    filled = f.read().replace("\r", "")
+                with open(path, newline="") as f:
+                    original = f.read().replace("\r", "")
+                self.assertNotIn("__CASAOS_MODULES_MIN_CORE_TAG__", filled)
+                self.assertIn('\nreadonly CASAOS_MODULES_MIN_CORE_TAG="%s"\n' % MIN_CORE, filled)
+                self.assertEqual(filled.replace('"%s"' % MIN_CORE, '"__CASAOS_MODULES_MIN_CORE_TAG__"', 1), original, "the minimum is not the only thing written")
+
+    def test_the_minimum_core_is_written_into_the_uninstaller_before_its_digest_is_taken(self):
+        with open(BUILD_SCRIPT, newline="") as f:
+            text = f.read().replace("\r", "")
+        order = [text.index(marker) for marker in ('\ninstall -m 0755 "${INSTALLER_ROOT}/casaos-uninstall" "${OUTPUT_DIR}/casaos-uninstall"\n', '\nfill_modules_min_core_tag "${OUTPUT_DIR}/casaos-uninstall"\n',
+                                                   '\nbuild_modules_catalogue\n', '\nfill_installer "${OUTPUT_DIR}/install.sh"\n')]
+        self.assertEqual(order, sorted(order), "the uninstaller is not given the minimum before install.sh takes its digest")
+        self.assertEqual(text.count('\nfill_modules_min_core_tag "${OUTPUT_DIR}/casaos-uninstall"\n'), 1)
+        self.assertEqual(text.count('\n    fill_modules_min_core_tag "${target}"\n'), 1, "fill_installer does not write the minimum core into install.sh")
+        self.assertEqual(text.count('\n    check_core_for_modules\n'), 1, "build_modules_catalogue does not look at the core")
+        body = text[text.index("\nbuild_modules_catalogue() {"):]
+        self.assertLess(body.index("grep -qvE"), body.index("check_core_for_modules"), "the core is looked at for a release that lists no module")
+        self.assertLess(body.index("check_core_for_modules"), body.index("build-modules-catalogue.py"), "the core is looked at after the catalogue is begun")
+
+    def test_the_pins_of_this_tree_hold(self):
+        # a release that lists a module has to pin a core that has `module`: the build of that release would fail, and so does this
+        with open(os.path.join(RELEASE_DIR, "components.env")) as f:
+            core = re.search(r"^CASAOS_TAG=(v[0-9]+\.[0-9]+\.[0-9]+)$", f.read(), re.M).group(1)
+        with open(os.path.join(RELEASE_DIR, "modules.env")) as f:
+            lists_modules = any(line.strip() and not line.strip().startswith("#") for line in f.read().splitlines())
+        if lists_modules:
+            self.assertGreaterEqual([int(n) for n in core[1:].split(".")], [MAJOR, MINOR, PATCH], "release/modules.env lists modules and CASAOS_TAG=%s is older than %s" % (core, MIN_CORE))
 
     def broken(self, why, reason):
         code, out, err = self.run_functions("build_modules_catalogue")

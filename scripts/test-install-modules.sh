@@ -45,6 +45,21 @@ grep -Fq 'module install "${name}" --yes </dev/null' "${INSTALL_SH}" ||
     fail "the module install is not 'casaos module install <name> --yes' with no input"
 pass "the placeholder, the catalogue directory and the assistant are where the install needs them"
 
+# the oldest core that has `module` is written by the build, once; the flag that says
+# this run put the core in place starts at 0 and is set once, right after the files of
+# the release are copied onto the machine
+[ "$(grep -c '^readonly CASAOS_MODULES_MIN_CORE_TAG="__CASAOS_MODULES_MIN_CORE_TAG__"$' "${INSTALL_SH}")" -eq 1 ] ||
+    fail "install.sh does not carry the oldest core that has 'module' as one placeholder for the release build to fill"
+[ "$(grep -c '__CASAOS_MODULES_MIN_CORE_TAG__' "${INSTALL_SH}")" -eq 1 ] ||
+    fail "the placeholder of the oldest core that has 'module' is named somewhere else than its assignment"
+[ "$(grep -c '^CORE_INSTALLED_NOW=0$' "${INSTALL_SH}")" -eq 1 ] || fail "CORE_INSTALLED_NOW does not start at 0, once"
+[ "$(grep -c 'CORE_INSTALLED_NOW=1' "${INSTALL_SH}")" -eq 1 ] || fail "CORE_INSTALLED_NOW is not set to 1 in exactly one place"
+n_copy="$(grep -nF 'cp -rf "${SYSROOT_DIR}"/* / ||' "${INSTALL_SH}" | head -n 1 | cut -d: -f1)"
+n_flag="$(grep -n 'CORE_INSTALLED_NOW=1' "${INSTALL_SH}" | head -n 1 | cut -d: -f1)"
+[ -n "${n_copy}" ] && [ "${n_flag}" = "$((n_copy + 1))" ] ||
+    fail "CORE_INSTALLED_NOW is not set to 1 by the line that follows the copy of the release onto the machine"
+pass "the oldest core that has 'module' is one placeholder, and the flag of the core put in place is set where the core is"
+
 # the order of the calls in the install: the catalogue with the rest of the
 # install (after rclone, before the services are started), the options checked
 # before the first thing that changes the machine, the modules after the
@@ -74,7 +89,7 @@ pass "the calls are where the install needs them"
 
 extract() { sed -n "/^$1() {\$/,/^}\$/p" "${INSTALL_SH}"; }
 
-for f in usage Valid_Module_Name Add_Requested_Module Validate_Module_Request Install_Module_Catalogue Install_One_Module Install_Modules; do
+for f in usage Valid_Module_Name Version_Parts Version_At_Least Add_Requested_Module Validate_Module_Request Install_Module_Catalogue Install_One_Module Install_Modules; do
     body="$(extract "${f}")"
     [ -n "${body}" ] || fail "install.sh defines no ${f}()"
     # these run under dash on the CI guests' side of the proof and under bash on a box: no bashism
@@ -101,6 +116,8 @@ DEBIAN_ARCHIVE=0
 BUILD_DIR=""
 MODULES_REQUESTED=""
 MODULE_CATALOGUE_READY=0
+CASAOS_MODULES_MIN_CORE_TAG=v0.4.75
+CORE_INSTALLED_NOW=1
 GreyStart() { :; }
 ColorReset() { :; }
 Show() {
@@ -111,13 +128,14 @@ Show() {
 # a fake root, a TMPDIR to see what is left behind, and stand-ins first in PATH
 FAKE="${WORK}/root"
 CALLS="${WORK}/calls"
+VERCALLS="${WORK}/vercalls"
 SERVED="${WORK}/served"
 MODES="${WORK}/modes"
 TMPDIR="${WORK}/tmp"
 mkdir -p "${WORK}/bin" "${SERVED}" "${MODES}" "${TMPDIR}"
 CASA_MODULE_CATALOGUE_DIR="${FAKE}/usr/share/casaos/modules"
 CASA_BIN="${WORK}/bin/casaos"
-export CALLS WORK SERVED MODES TMPDIR
+export CALLS VERCALLS WORK SERVED MODES TMPDIR
 
 cat >"${WORK}/bin/wget" <<'STUB'
 #!/bin/sh
@@ -140,9 +158,19 @@ cp "${SERVED}/${url##*/}" "${out}"
 STUB
 cat >"${WORK}/bin/casaos" <<'STUB'
 #!/bin/sh
-# stand-in for the core's module assistant: records the call and what it was given
-# on its input, and says what the mode of that module (a file of $MODES) says
+# stand-in for the core. `-v` is asked of every core: it says what $WORK/version.out holds
+# (v0.4.75 when there is no such file) and ends with the status in $WORK/version.status.
+# `module` is the module assistant: the call is recorded, with what it was given on its
+# input, and it says what the mode of that module (a file of $MODES) says. A core older
+# than the assistant would take `module` for the start of a server; it is recorded all the same.
+if [ "${1:-}" = "-v" ]; then
+    echo "casaos -v" >>"${VERCALLS}"
+    cat >"${WORK}/v-stdin-got"
+    if [ -f "${WORK}/version.out" ]; then cat "${WORK}/version.out"; else echo v0.4.75; fi
+    exit "$(cat "${WORK}/version.status" 2>/dev/null || echo 0)"
+fi
 echo "casaos $*" >>"${CALLS}"
+[ -s "${VERCALLS}" ] || echo "module given before the version was asked" >>"${CALLS}"
 cat >"${WORK}/stdin-got"
 name="$3"
 mode="$(cat "${MODES}/${name}" 2>/dev/null || echo ok)"
@@ -246,9 +274,10 @@ PATH="${WORK}/bin:${PATH}"
 export PATH
 
 fresh() {
-    rm -rf "${FAKE}" "${TMPDIR}" "${MODES}" "${WORK}/stdin-got"
+    rm -rf "${FAKE}" "${TMPDIR}" "${MODES}" "${WORK}/stdin-got" "${WORK}/version.out" "${WORK}/version.status" "${WORK}/v-stdin-got"
     mkdir -p "${FAKE}" "${TMPDIR}" "${MODES}"
     : >"${CALLS}"
+    : >"${VERCALLS}"
     unset WGET_SAYS
 }
 
@@ -396,6 +425,39 @@ parse -p
 [ "${status}" -eq 1 ] && [ "${out}" = "${EXPECTED_USAGE}" ] || fail "-p with no directory: status ${status}, text: ${out}"
 pass "-h and the refusal of an option that is not one are the old text, the old status"
 
+# ---- the versions ------------------------------------------------------------
+
+at_least() { # <what> <yes|no> <version> <minimum>
+    if Version_At_Least "$3" "$4" >/dev/null 2>&1; then got=yes; else got=no; fi
+    [ "${got}" = "$2" ] || fail "$1: '$3' against '$4': wanted $2, got ${got}"
+}
+
+at_least "the minimum itself" yes v0.4.75 v0.4.75
+at_least "the next patch" yes v0.4.76 v0.4.75
+at_least "the next minor" yes v0.5.0 v0.4.75
+at_least "the next major" yes v1.0.0 v0.4.75
+at_least "two digits are a number, not a text (minor)" yes v0.10.0 v0.4.75
+at_least "three digits are a number, not a text (patch)" yes v0.4.100 v0.4.75
+at_least "a minimum of one digit" yes v0.4.75 v0.4.9
+at_least "zero against zero" yes v0.0.0 v0.0.0
+at_least "major of two digits" yes v10.0.0 v9.9.9
+at_least "the patch before" no v0.4.74 v0.4.75
+at_least "one digit is a number, not a text" no v0.4.9 v0.4.75
+at_least "an older minor, whatever its patch" no v0.3.999 v0.4.75
+at_least "an older patch of the same minor" no v0.4.0 v0.4.75
+at_least "a core nobody tagged" no v0.0.0 v0.4.75
+at_least "an older major of one digit" no v9.9.9 v10.0.0
+for bad in "" v v. v0 v0.4 v0.4. v0.4.75. v.4.75 v0..75 0.4.75 V0.4.75 vv0.4.75 v0.4.75-rc1 v0.4.75+x v0.0.0-dev "v0.4.75 " " v0.4.75" \
+    "v0.4.75
+" "v0.4.75
+v0.4.75" "x
+v0.4.75" v0.4.075 v00.4.75 v0.4.0x v0.4.1234567 v0.4.75.1 v-1.4.75 "v0.4.7 5" '$(id)' 'v0.4.75;id' 'v0.4.75`id`' v0x4.75 "v0.4.٧٥" "v0.4.75$(printf '\r')"; do
+    at_least "a text that is not a version, as the version" no "${bad}" v0.4.75
+    at_least "a text that is not a version, as the minimum" no v9.9.9 "${bad}"
+done
+at_least "the unfilled placeholder as the minimum" no v9.9.9 __CASAOS_MODULES_MIN_CORE_TAG__
+pass "a version is three numbers, compared as numbers, and anything else is no version"
+
 # ---- the catalogue -----------------------------------------------------------
 
 CATALOGUE_FILE="${SERVED}/modules-catalogue-v0.0.0.json"
@@ -535,6 +597,7 @@ modules_step() {
         exec 2>&1
         set -e
         MODULE_CATALOGUE_READY="${READY:-1}"
+        CASAOS_MODULE_CATALOGUE_SHA256="${MODSHA-${CATALOGUE_SHA}}"
         printf 'REST OF THE SCRIPT\n' | {
             Install_Modules
             read -r left || left="(nothing left)"
@@ -635,6 +698,122 @@ modules_step ""
 unset READY
 [ "${status}" -eq 0 ] && [ "${out}" = "the install goes on: REST OF THE SCRIPT" ] || fail "no module asked for, no catalogue, and something is said: ${out}"
 pass "no catalogue, no assistant or no module asked for: no assistant is run"
+
+# ---- the core that is given `module` ----------------------------------------
+
+say_version() { # <what `casaos -v` prints, exactly> [its status]
+    printf '%s' "$1" >"${WORK}/version.out"
+    printf '%s' "${2:-0}" >"${WORK}/version.status"
+}
+
+core_runs() { # <what> <what -v prints> [its status]: the assistant is run, once, after the version was asked, once
+    fresh
+    say_version "$2" "${3:-0}"
+    modules_step virt ok
+    [ "${status}" -eq 0 ] || fail "$1: status ${status}: ${out}"
+    [ "$(calls)" = "casaos module install virt --yes|" ] || fail "$1: the assistant was not run, once: $(calls)"
+    [ "$(cat "${VERCALLS}")" = "casaos -v" ] || fail "$1: the version was not asked exactly once"
+    [ ! -s "${WORK}/v-stdin-got" ] || fail "$1: -v was given input"
+    case "${out}" in *"the install goes on: REST OF THE SCRIPT"*) ;; *) fail "$1: the script's own input was consumed: ${out}" ;; esac
+    case "${out}" in *"[0] The module virt is installed."*) ;; *) fail "$1: not installed: ${out}" ;; esac
+}
+
+core_refused() { # <what> <what -v prints> [its status]: the core is never given `module`, and the install goes on
+    fresh
+    say_version "$2" "${3:-0}"
+    modules_step virt ok
+    [ "${status}" -eq 0 ] || fail "$1: the install ended (status ${status}): ${out}"
+    [ ! -s "${CALLS}" ] || fail "$1: the core was given 'module' (an older one would have started as a server): $(calls)"
+    [ "$(cat "${VERCALLS}")" = "casaos -v" ] || fail "$1: the version was not asked exactly once"
+    [ ! -s "${WORK}/v-stdin-got" ] || fail "$1: -v was given input"
+    case "$(summary)" in *"[3] No module was installed: ${CASA_BIN} did not report a version of v0.4.75 or later"*"ReCasaOS itself is installed and is not affected."*) ;; *) fail "$1: not said: $(summary)" ;; esac
+    case "$(summary)" in *"$(printf '\033')"*) fail "$1: an escape sequence reached the screen" ;; esac
+    [ "$(summary | wc -c)" -lt 500 ] || fail "$1: what the core printed reached the screen at length"
+    case "${out}" in *"the install goes on: REST OF THE SCRIPT"*) ;; *) fail "$1: the script's own input was consumed: ${out}" ;; esac
+    case "${out}" in *"is installed."*) fail "$1: said to be installed" ;; esac
+    [ -z "$(ls -A "${TMPDIR}")" ] || fail "$1: a temporary directory was left"
+}
+
+core_runs "the minimum" v0.4.75
+core_runs "a later patch" v0.4.76
+core_runs "a later minor, of two digits" v0.10.0
+core_runs "a later patch, of three digits" v0.4.100
+core_runs "a later major" v1.0.0
+core_runs "a line end after the version" 'v0.4.75
+'
+pass "a core that says the minimum or a later version is given 'module', after its version was asked once"
+
+core_refused "an older patch" v0.4.74
+core_refused "an older patch of one digit" v0.4.9
+core_refused "an older minor" v0.3.999
+core_refused "a private build" v0.0.0-dev
+core_refused "a tag with a suffix" v0.4.74-dirty
+core_refused "a tag above the minimum with a suffix" v0.4.75-rc1
+core_refused "a core that says nothing" ''
+core_refused "a core that says nothing, with a new line" '
+'
+core_refused "a word" hello
+core_refused "two numbers" v0.4
+core_refused "no v" 0.4.75
+core_refused "a capital V" V0.4.75
+core_refused "a leading zero" v0.4.075
+core_refused "four numbers" v0.4.75.1
+core_refused "a space before" ' v0.4.75'
+core_refused "a space after" 'v0.4.75 '
+core_refused "two lines" 'v0.4.75
+v0.4.75'
+core_refused "a line before the version" 'starting
+v0.4.75'
+core_refused "a line after the version" 'v0.4.75
+starting'
+core_refused "a number of seven digits" v0.4.1234567
+core_refused "an escape sequence" "$(printf '\033[31mv0.4.74')"
+core_refused "a long text" "$(printf 'v0.4.74%0500d' 0)"
+core_refused "a version that is right, with a status that is not" v0.4.75 1
+core_refused "a version that is right, with a status of 127" v0.4.99 127
+core_refused "no version, with a status of 1" '' 1
+pass "a core whose version is older, or is not a version, or is not said as one, is never given 'module'"
+
+# a core that cannot even be started is no core
+fresh
+printf '#!/bin/sh\nexit 127\n' >"${WORK}/bin/casaos-broken"
+chmod +x "${WORK}/bin/casaos-broken"
+CASA_BIN_SAVED="${CASA_BIN}"
+CASA_BIN="${WORK}/bin/casaos-broken"
+modules_step virt ok
+CASA_BIN="${CASA_BIN_SAVED}"
+[ "${status}" -eq 0 ] && [ ! -s "${CALLS}" ] || fail "a core that cannot start was given 'module': ${status}: $(calls)"
+case "$(summary)" in *"did not report a version of v0.4.75 or later"*"(it reported '')"*) ;; *) fail "a core that cannot start: not said: $(summary)" ;; esac
+
+# the minimum this installer was built with is no version: no core is given `module`
+for badmin in __CASAOS_MODULES_MIN_CORE_TAG__ "" v0.4 0.4.75 'v0.4.75-rc1'; do
+    fresh
+    say_version v9.9.9
+    CASAOS_MODULES_MIN_CORE_TAG="${badmin}"
+    modules_step virt ok
+    CASAOS_MODULES_MIN_CORE_TAG=v0.4.75
+    [ "${status}" -eq 0 ] && [ ! -s "${CALLS}" ] || fail "a minimum of '${badmin}': the core was given 'module': $(calls)"
+    case "$(summary)" in *"No module was installed: ${CASA_BIN} did not report a version of "*) ;; *) fail "a minimum of '${badmin}': not said: $(summary)" ;; esac
+done
+pass "a core that cannot be started, or an installer that was not built with a minimum, runs no module"
+
+# the core was not put in place by this run: not given `module`, not even asked its version
+fresh
+say_version v9.9.9
+CORE_INSTALLED_NOW=0
+modules_step virt ok
+CORE_INSTALLED_NOW=1
+[ "${status}" -eq 0 ] && [ ! -s "${CALLS}" ] && [ ! -s "${VERCALLS}" ] || fail "a core this run did not put in place was asked something: $(calls) / $(cat "${VERCALLS}")"
+case "$(summary)" in *"No module was installed: this run did not put the core of this release in place"*"ReCasaOS itself is installed and is not affected."*) ;; *) fail "a core not put in place by this run: not said: $(summary)" ;; esac
+
+# a release built without a catalogue (an empty digest) is not a release built with the check of its core
+fresh
+say_version v9.9.9
+MODSHA=""
+modules_step virt ok
+unset MODSHA
+[ "${status}" -eq 0 ] && [ ! -s "${CALLS}" ] && [ ! -s "${VERCALLS}" ] || fail "an installer with no catalogue digest ran a module: $(calls)"
+pass "a core that this run did not put in place, or an installer with no catalogue digest, runs no module"
 
 # the whole sequence of the install around the modules, under set -e: a failing module does not change its status
 fresh

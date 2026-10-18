@@ -23,8 +23,10 @@
 # What it produces, in OUTPUT_DIR:
 #   install.sh            the installer with every tag and digest filled in
 #   casaos-uninstall      the uninstaller, served from our release rather than
-#                         from a third party's web server; its digest is
-#                         written into install.sh like the packages'
+#                         from a third party's web server; the oldest core that
+#                         has `casaos module` (MODULES_MIN_CORE_TAG) is written
+#                         into it, and its digest into install.sh like the
+#                         packages'
 #   linux-all-appstore-<tag>.tar.gz
 #                         IceWhale's App Store seed as published, mirrored so a
 #                         new install does not depend on their release
@@ -77,6 +79,15 @@ readonly UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-https://github.com/IceWhaleTech
 readonly RCLONE_BASE_URL="${RCLONE_BASE_URL:-https://github.com/rclone}"
 readonly MODULES_GIT_BASE_URL="${MODULES_GIT_BASE_URL:-${CHECKSUMS_BASE_URL}}"
 readonly PYTHON="${PYTHON:-python3}"
+
+# The oldest core that has `casaos module`. A core older than this, given "module",
+# does not know it and starts as a server, a second one beside the running one; so a
+# release that carries a module catalogue has to pin a core of this version or later
+# (build_modules_catalogue refuses to build one otherwise), and install.sh and
+# casaos-uninstall are given the same value here, to check the core they find on the
+# box before they run `module`. It is the tag of the core release that brought
+# `casaos module`, and it must match that tag. This is the only place it is written.
+readonly MODULES_MIN_CORE_TAG="v0.4.75"
 
 # shellcheck source=../release/components.env
 source "${COMPONENT_LOCK}"
@@ -203,6 +214,27 @@ package_overlay() {
     echo "Packaged compatibility overlay as ${OVERLAY_FILE}"
 }
 
+# check_core_for_modules
+# A release that lists modules has to pin a core that has `casaos module` (see
+# MODULES_MIN_CORE_TAG): the pinned tag is compared as three numbers, so v0.4.9 is
+# older than v0.4.75, and a tag that is not v<number>.<number>.<number> is refused.
+check_core_for_modules() {
+    [[ "${CASAOS_TAG}" =~ ^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] ||
+        fail "release/modules.env lists modules, but the core this release pins (CASAOS_TAG=${CASAOS_TAG}) is not a tag of the form v<number>.<number>.<number>, so it cannot be checked against ${MODULES_MIN_CORE_TAG}, the first core that has 'casaos module'."
+    [[ "$(printf '%s\n' "${MODULES_MIN_CORE_TAG}" "${CASAOS_TAG}" | sort -V | head -n 1)" == "${MODULES_MIN_CORE_TAG}" ]] ||
+        fail "release/modules.env lists modules, but the core this release pins (CASAOS_TAG=${CASAOS_TAG}) is older than ${MODULES_MIN_CORE_TAG}, the first core that has 'casaos module': an older core given 'module' would start as a second server. Pin a core of ${MODULES_MIN_CORE_TAG} or later in release/components.env, or list no module."
+}
+
+# fill_modules_min_core_tag <file>
+# Writes MODULES_MIN_CORE_TAG into install.sh and casaos-uninstall, which check the core they
+# find on the box against it before they run `casaos module`.
+fill_modules_min_core_tag() {
+    local target="$1"
+
+    [[ "${MODULES_MIN_CORE_TAG}" =~ ^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] || fail "MODULES_MIN_CORE_TAG is not a tag: ${MODULES_MIN_CORE_TAG}"
+    sed -i "s|__CASAOS_MODULES_MIN_CORE_TAG__|${MODULES_MIN_CORE_TAG}|g" "${target}"
+}
+
 # build_modules_catalogue
 # Writes OUTPUT_DIR/modules-catalogue-<release tag>.json from release/modules.env
 # and sets MODULES_CATALOGUE_FILE to it. With no module in modules.env there is no
@@ -221,6 +253,9 @@ build_modules_catalogue() {
 
     # only comments and blank lines: this release offers no module
     grep -qvE '^[[:space:]]*(#|$)' "${MODULES_LOCK}" || return 0
+
+    # before anything is fetched: no catalogue for a core that cannot run its assistant
+    check_core_for_modules
 
     list="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" list "${MODULES_LOCK}")" || fail "release/modules.env is not valid."
     stage="${STAGING_ROOT}/modules"
@@ -323,6 +358,7 @@ fill_installer() {
     sed -i "s|__CASAOS_APPSTORE_SHA256__|${sum}|g" "${target}"
 
     fill_catalogue_digest "${target}"
+    fill_modules_min_core_tag "${target}"
 
     if grep -qE '__[A-Z][A-Z0-9_]*__' "${target}"; then
         echo "Unfilled placeholders remain in install.sh:" >&2
@@ -387,6 +423,7 @@ write_checksums() {
 
 package_overlay
 install -m 0755 "${INSTALLER_ROOT}/casaos-uninstall" "${OUTPUT_DIR}/casaos-uninstall"
+fill_modules_min_core_tag "${OUTPUT_DIR}/casaos-uninstall"
 build_modules_catalogue
 fill_installer "${OUTPUT_DIR}/install.sh"
 install -m 0644 "${COMPONENT_LOCK}" "${OUTPUT_DIR}/components.lock"

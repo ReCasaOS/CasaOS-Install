@@ -63,6 +63,15 @@ readonly CASA_USER_FILES=/var/lib/casaos
 readonly CASA_LOGS_PATH=/var/log/casaos
 readonly CASA_HELPER_PATH=/usr/share/casaos
 
+# Optional modules (docs/modules.md): their manifests are in CASA_MODULE_MANIFESTS and
+# `casaos module remove` takes one off the box. The oldest core that has `casaos module`
+# is written here by the release build: an older core given `module` does not know it
+# and starts as a server, so `module` is run only on a /usr/bin/casaos that reports this
+# version or a later one.
+readonly CASAOS_MODULES_MIN_CORE_TAG="__CASAOS_MODULES_MIN_CORE_TAG__"
+readonly CASA_MODULE_BIN=/usr/bin/casaos
+readonly CASA_MODULE_MANIFESTS=/etc/casaos/modules
+
 readonly COLOUR_RESET='\e[0m'
 readonly aCOLOUR=(
     '\e[38;5;154m' # green  	| Lines, bullets and separators
@@ -75,6 +84,9 @@ readonly aCOLOUR=(
 UNINSTALL_ALL_CONTAINER=false
 REMOVE_IMAGES="none"
 REMOVE_APP_DATA=false
+# the modules this run removed, and what `casaos module remove` said it leaves of them
+MODULES_REMOVED=""
+MODULES_LEFT=""
 
 ###############################################################################
 # Helpers                                                                     #
@@ -141,6 +153,150 @@ Remove_Images() {
     elif [[ ${REMOVE_IMAGES} == "unuse" && "$(${sudo_cmd} docker images -q)" != "" ]]; then
         Show 2 "Start deleting unuse images."
         ${sudo_cmd} docker image prune -af || Show 1 "Failed to delete unuse images."
+    fi
+}
+
+# Whether a text is the name of a module: a lower case letter, then lower case
+# letters, digits or hyphens, 32 characters at most. The letters are listed, not
+# written as ranges, so that no locale reads more into them than they say.
+Valid_Module_Name() {
+    case "$1" in
+    "" | [!abcdefghijklmnopqrstuvwxyz]* | *[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 32 ]
+}
+
+# The three numbers of a version tag, "v<major>.<minor>.<patch>" and nothing else (each
+# of up to six digits and without a leading zero), on one line; status 1 and nothing
+# printed for any other text.
+Version_Parts() {
+    local rest="${1#v}" a b c part
+    [ "${rest}" != "$1" ] || return 1
+    case "${rest}" in
+    *[!0123456789.]* | .* | *. | *..* | *.*.*.*) return 1 ;;
+    *.*.*) ;;
+    *) return 1 ;;
+    esac
+    a="${rest%%.*}"
+    b="${rest#*.}"
+    c="${b#*.}"
+    b="${b%%.*}"
+    for part in "${a}" "${b}" "${c}"; do
+        case "${part}" in
+        0 | [123456789]*) [ "${#part}" -le 6 ] || return 1 ;;
+        *) return 1 ;;
+        esac
+    done
+    echo "${a} ${b} ${c}"
+}
+
+# Whether the version tag $1 is $2 or later: no for a text that is not a version tag,
+# in either place.
+Version_At_Least() {
+    local got min
+    got="$(Version_Parts "$1")" || return 1
+    min="$(Version_Parts "$2")" || return 1
+    # shellcheck disable=SC2086 # (six numbers, split on purpose)
+    set -- ${got} ${min}
+    [ "$1" -gt "$4" ] && return 0
+    [ "$1" -lt "$4" ] && return 1
+    [ "$2" -gt "$5" ] && return 0
+    [ "$2" -lt "$5" ] && return 1
+    [ "$3" -ge "$6" ]
+}
+
+# One module, taken off the box with the core's own assistant: its lines as they come,
+# then, when the remove did not end well, the step and the reason from its result line
+# (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed> <step> <code> <undo> <time>).
+# What the assistant says it leaves behind (the packages, the data) is kept to be said
+# again at the very end. Whatever happens here, the uninstall goes on.
+Remove_One_Module() {
+    local name="$1" work status=0 line kind="" step="" code="" rname="" left=""
+    local nl='
+'
+
+    work="$(mktemp -d)" || {
+        Show 3 "The module ${name} was not removed: no temporary directory could be made. Its program and its unit stay on this machine."
+        return 0
+    }
+    Show 2 "Removing the module ${name}..."
+    # no input, so that it reads nothing of the terminal; the status of the assistant is
+    # kept in a file, the pipe's being tee's
+    { "${CASA_MODULE_BIN}" module remove "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
+    if [ -s "${work}/status" ]; then
+        read -r status <"${work}/status" || status=1
+    fi
+    line="$(grep '^CASAOS_MODULE_RESULT ' "${work}/out" 2>/dev/null | head -n 1)" || line=""
+    left="$(sed -n '/^left in place: /,/^nothing above was run$/p' "${work}/out" 2>/dev/null | LC_ALL=C sed 's/[^ -~]/?/g; s/^/  /')" || left=""
+    rm -rf "${work}"
+    if [ -n "${line}" ]; then
+        read -r _ _ rname kind step code _ _ <<RESULT_LINE
+${line}
+RESULT_LINE
+        [ "${rname}" = "${name}" ] || kind=""
+        step="$(printf '%.40s' "${step}" | tr -c 'a-z0-9_-' '?')"
+        code="$(printf '%.60s' "${code}" | tr -c 'a-z0-9_-' '?')"
+    fi
+
+    if [ "${kind}" = ok ] && [ "${status}" = 0 ]; then
+        Show 0 "The module ${name} is removed."
+        MODULES_REMOVED="${MODULES_REMOVED} ${name}"
+        [ -z "${left}" ] || MODULES_LEFT="${MODULES_LEFT:+${MODULES_LEFT}${nl}}${name}:${nl}${left}"
+        return 0
+    fi
+    if [ "${kind}" = refused ]; then
+        Show 3 "The module ${name} was not removed: the assistant refused it (${code}). Its program and its unit stay on this machine."
+    elif [ "${kind}" = failed ]; then
+        Show 3 "The module ${name} was not removed: it failed at the step ${step} (${code}). Part of its program and its unit may stay on this machine."
+    else
+        Show 3 "The module ${name} was not removed: the assistant did not report a success (exit status ${status}). Part of its program and its unit may stay on this machine."
+    fi
+}
+
+# The modules that are installed (a manifest in CASA_MODULE_MANIFESTS whose name is the
+# name of a module), removed before ReCasaOS is: with ReCasaOS gone nothing else knows
+# which files are theirs. Best effort: a module that cannot be removed is said, with the
+# step and the reason, and the uninstall goes on. Nothing is said when no module is
+# installed.
+Remove_Modules() {
+    local file name names="" found shown
+
+    for file in "${CASA_MODULE_MANIFESTS}"/*.json; do
+        [ -f "${file}" ] || continue
+        name="${file##*/}"
+        name="${name%.json}"
+        Valid_Module_Name "${name}" || continue
+        names="${names:+${names} }${name}"
+    done
+    [ -n "${names}" ] || return 0
+
+    if [ ! -x "${CASA_MODULE_BIN}" ]; then
+        Show 3 "The modules (${names}) were not removed: ${CASA_MODULE_BIN} is not there to remove them. Their programs and their units stay on this machine."
+        return 0
+    fi
+    found="$("${CASA_MODULE_BIN}" -v </dev/null 2>/dev/null)" || found=""
+    if ! Version_At_Least "${found}" "${CASAOS_MODULES_MIN_CORE_TAG}"; then
+        shown="$(printf '%.40s' "${found}" | tr -c 'A-Za-z0-9._-' '?')"
+        Show 3 "The modules (${names}) were not removed: ${CASA_MODULE_BIN} did not report a version of ${CASAOS_MODULES_MIN_CORE_TAG} or later, the first that has the module assistant (it reported '${shown}'); an older one would start as a second server. Their programs and their units stay on this machine."
+        return 0
+    fi
+    for name in ${names}; do
+        Remove_One_Module "${name}"
+    done
+}
+
+# The last words of an uninstall that removed modules: what a remove never takes, said
+# again here because the lines of the uninstall that follow the removal push the
+# assistant's own words off the screen. The commands to take it away are printed, and
+# the uninstall runs none of them.
+Modules_Left_Notice() {
+    [ -n "${MODULES_REMOVED}" ] || return 0
+    echo
+    Show 3 "Left on this machine, on purpose, by the removal of the modules (${MODULES_REMOVED# }): the packages they needed, and their data (for example /DATA/VM, the disks of the virtual machines). Nothing of it was purged. The commands that purge it by hand are printed below; the uninstall did not run any of them."
+    if [ -n "${MODULES_LEFT}" ]; then
+        printf '%s\n' "${MODULES_LEFT}" | sed 's/^/  /'
+    else
+        echo "  (casaos module remove printed them above, with what it leaves)"
     fi
 }
 
@@ -319,4 +475,6 @@ fi
 
 Unistall_Container
 Remove_Images
+Remove_Modules
 Uninstall_Casaos
+Modules_Left_Notice

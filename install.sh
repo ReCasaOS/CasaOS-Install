@@ -128,6 +128,10 @@ readonly CASAOS_COMPAT_OVERLAY_SHA256="__CASAOS_COMPAT_OVERLAY_SHA256__"
 readonly CASAOS_UNINSTALL_SHA256="__CASAOS_UNINSTALL_SHA256__"
 # empty when this release carries no module catalogue
 readonly CASAOS_MODULE_CATALOGUE_SHA256="__CASAOS_MODULE_CATALOGUE_SHA256__"
+# the oldest core that has `casaos module`, written by the release build, which also
+# refuses a catalogue for a release whose pinned core is older: an older core given
+# `module` does not know it and starts as a server
+readonly CASAOS_MODULES_MIN_CORE_TAG="__CASAOS_MODULES_MIN_CORE_TAG__"
 
 # REQUIREMENTS CONF PATH
 # Udevil
@@ -194,6 +198,8 @@ CASA_MODULE_CATALOGUE_DIR=/usr/share/casaos/modules
 CASA_BIN=/usr/bin/casaos
 MODULES_REQUESTED=""
 MODULE_CATALOGUE_READY=0
+# 1 once this run has put the core of this release in place: only that core is given `module`
+CORE_INSTALLED_NOW=0
 # How long refreshing apt's package lists may take. A mirror that accepts the
 # connection and then says nothing used to hold the whole install for as long as
 # whoever ran it was willing to wait (a CI job's limit was forty minutes, twice).
@@ -1082,6 +1088,7 @@ DownloadAndInstallCasaOS() {
     PREVIOUS_FORK_RELEASE="$(cat "${CASA_STATE_DIR}/fork-release" 2>/dev/null || true)"
     FORK_RELEASE_REPLACED=1
     ${sudo_cmd} cp -rf "${SYSROOT_DIR}"/* / || Show 1 "Failed to install CasaOS"
+    CORE_INSTALLED_NOW=1
     ColorReset
 
     SETUP_SCRIPT_DIR=$(realpath -e "${BUILD_DIR}"/scripts/setup/script.d || Show 1 "Failed to find setup script directory")
@@ -1238,6 +1245,45 @@ Valid_Module_Name() {
     [ "${#1}" -le 32 ]
 }
 
+# The three numbers of a version tag, "v<major>.<minor>.<patch>" and nothing else (each
+# of up to six digits and without a leading zero), on one line; status 1 and nothing
+# printed for any other text.
+Version_Parts() {
+    local rest="${1#v}" a b c part
+    [ "${rest}" != "$1" ] || return 1
+    case "${rest}" in
+    *[!0123456789.]* | .* | *. | *..* | *.*.*.*) return 1 ;;
+    *.*.*) ;;
+    *) return 1 ;;
+    esac
+    a="${rest%%.*}"
+    b="${rest#*.}"
+    c="${b#*.}"
+    b="${b%%.*}"
+    for part in "${a}" "${b}" "${c}"; do
+        case "${part}" in
+        0 | [123456789]*) [ "${#part}" -le 6 ] || return 1 ;;
+        *) return 1 ;;
+        esac
+    done
+    echo "${a} ${b} ${c}"
+}
+
+# Whether the version tag $1 is $2 or later: no for a text that is not a version tag,
+# in either place.
+Version_At_Least() {
+    local got min
+    got="$(Version_Parts "$1")" || return 1
+    min="$(Version_Parts "$2")" || return 1
+    # shellcheck disable=SC2086 # (six numbers, split on purpose)
+    set -- ${got} ${min}
+    [ "$1" -gt "$4" ] && return 0
+    [ "$1" -lt "$4" ] && return 1
+    [ "$2" -gt "$5" ] && return 0
+    [ "$2" -lt "$5" ] && return 1
+    [ "$3" -ge "$6" ]
+}
+
 # A name given to --module, added once to the list. A text that is not the name
 # of a module ends the install here, before anything on this machine is touched.
 Add_Requested_Module() {
@@ -1364,15 +1410,29 @@ RESULT_LINE
 # installed and its services run. A module that fails is said and the next one is
 # tried: the exit status of this installer is the one ReCasaOS earned.
 Install_Modules() {
-    local name
+    local name found shown
 
     [ -n "${MODULES_REQUESTED}" ] || return 0
-    if [ "${MODULE_CATALOGUE_READY}" != 1 ]; then
+    # (a catalogue digest that is not empty is what says this release was built with the
+    # check of the core it pins against CASAOS_MODULES_MIN_CORE_TAG)
+    if [ "${MODULE_CATALOGUE_READY}" != 1 ] || [ -z "${CASAOS_MODULE_CATALOGUE_SHA256}" ]; then
         Show 3 "No module was installed: the module catalogue could not be installed by this run (see above). ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    # `module` is run only by the core this run has put in place, and only once that core
+    # says a version that has it: a core without it would start as a second server
+    if [ "${CORE_INSTALLED_NOW}" != 1 ]; then
+        Show 3 "No module was installed: this run did not put the core of this release in place, so ${CASA_BIN} is not known to have the module assistant. ReCasaOS itself is installed and is not affected."
         return 0
     fi
     if [ ! -x "${CASA_BIN}" ]; then
         Show 3 "No module was installed: ${CASA_BIN} is not there. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    found="$("${CASA_BIN}" -v </dev/null 2>/dev/null)" || found=""
+    if ! Version_At_Least "${found}" "${CASAOS_MODULES_MIN_CORE_TAG}"; then
+        shown="$(printf '%.40s' "${found}" | tr -c 'A-Za-z0-9._-' '?')"
+        Show 3 "No module was installed: ${CASA_BIN} did not report a version of ${CASAOS_MODULES_MIN_CORE_TAG} or later, the first that has the module assistant (it reported '${shown}'); an older one would start as a second server. ReCasaOS itself is installed and is not affected."
         return 0
     fi
     for name in ${MODULES_REQUESTED}; do
