@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.30] - 2026-10-18
+
+Components: CasaOS-UI `v0.4.89`. Unchanged from v0.5.29: CasaOS `v0.4.74`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **The page of the upgrade of the operating system**, in the *Operating system* window, for the beta that v0.5.29 brought (it is still off by default; the page shows its switch). It follows the state of the upgrade and offers exactly the buttons the core says are valid: the refresh of Debian 11, the rehearsal and the hop (a window with the safety net, the name of the machine typed again, the acknowledgements, and what the plan removes and puts aside), the restart, *go on*, call off, close, take over by hand, and the word that closes a machine that is half upgraded. It says in plain words where the upgrade stands, with its block and progress, whether the point of no return is behind, and what stands in the way of the restart. While the machine restarts it says so, and after fifteen minutes it sends you to the machine's screen with the backup folder, the log and the commands you will need. English and French. **Take a snapshot first: there is no way back from the point of no return except that snapshot.**
+
+### Changed
+
+- The restart and shutdown buttons of the top bar now say why they are refused while an upgrade of the operating system works on the machine, or while something that stands before its restart is not well.
+- The window no longer says that ReCasaOS cannot upgrade the operating system for you yet, where the upgrade can be run.
+
 ## [0.5.29] - 2026-10-17
 
 Components: CasaOS `v0.4.74`, CasaOS-AppManagement `v0.4.69`. Unchanged from v0.5.28: CasaOS-UI `v0.4.88`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
