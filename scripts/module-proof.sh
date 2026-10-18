@@ -882,6 +882,17 @@ watch_state() { if [ -e "$MP/watch.done" ]; then echo done; else echo running; f
 watch_result() { cat "$MP/watch.out" 2>/dev/null; }
 
 # wait_clean <seconds>: no assistant, no apt and no dpkg at work, the lock free and the unit of the job gone
+# repair_dpkg: finish what an interrupted dpkg left (the product must do it by itself; the proof only needs the next case to start from a sound box)
+repair_dpkg() {
+    if [ "$(dpkg --audit 2>/dev/null | wc -l)" -gt 0 ]; then
+        DEBIAN_FRONTEND=noninteractive dpkg --configure -a >/dev/null 2>&1
+        DEBIAN_FRONTEND=noninteractive apt-get -f install -y >/dev/null 2>&1
+        echo "repaired"
+    else
+        echo "sound"
+    fi
+}
+
 wait_clean() {
     i=0
     max="${1:-600}"
@@ -1016,6 +1027,7 @@ watch_run) watch_run "$@" ;;
 watch_state) watch_state ;;
 watch_result) watch_result ;;
 wait_clean) wait_clean "$@" ;;
+repair_dpkg) repair_dpkg ;;
 dummy_start) dummy_start "$@" ;;
 dummy_stop) dummy_stop ;;
 glob_show) glob_show ;;
@@ -1338,6 +1350,8 @@ wait_watch() {
 # ensure_clean <tag>: the module is taken off by hand if anything of it is on the box, and the box is asked again; a module that cannot be taken off makes the run invalid
 ensure_clean() {
     local tag="$1"
+    # a case that left dpkg half-done must not hide the cases after it: the box is repaired first (after that case was judged, from what it recorded), as a fresh start
+    gx "${tag}-repair" repair_dpkg
     gx "${tag}-fp" footprint
     if [ -s "${OUT}/${tag}-fp.out" ]; then
         modrun "${tag}-rm" good root remove "${MODULE}" --yes
