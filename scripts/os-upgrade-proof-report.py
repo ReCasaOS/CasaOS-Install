@@ -64,8 +64,9 @@ OBSERVE_MIN = 170                     # a stopped hop is looked at for this long
 CLOCK_SLACK = 5.0
 ROW_FIELDS = 19
 BK_GLOB = "casaos-os-upgrade-"
+SECURITY_ARCHIVE_MIN_CORE = "v0.4.76"     # the first core that moves the security line of Debian 11 to the archive in a refresh (the script writes the one it used in c3b.min-core)
 
-CASES_CORE = (("C1", "flag off"), ("C2", "switch on"), ("C3", "refresh"), ("C4", "plan and rehearsal"), ("C5", "refusals"), ("C6", "call-off before the point of no return"), ("C7", "the hop"))
+CASES_CORE = (("C1", "flag off"), ("C2", "switch on"), ("C3", "refresh"), ("C3b", "refresh with the security line at security.debian.org"), ("C3c", "refresh with a security line the rewrite does not recognise"), ("C4", "plan and rehearsal"), ("C5", "refusals"), ("C6", "call-off before the point of no return"), ("C7", "the hop"))
 CASES_FAULTS = (("F1", "the unit killed before the point of no return"), ("F2", "the unit killed after the point of no return"), ("F3", "the network cut after the point of no return"),
                 ("F4", "a power cut during block 6"))
 
@@ -134,6 +135,11 @@ def few(items, n=8):
 
 def secs(x):
     return "%d s" % round(x) if x < 120 else "%d min %d s" % (x // 60, round(x) % 60)
+
+
+def version_of(s):
+    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", s.strip())
+    return tuple(int(x) for x in m.groups()) if m else None
 
 
 def mib(n):
@@ -592,6 +598,38 @@ try:
     def run_id_of(rs):
         return next((r.run for r in rs if r.answered() and r.run not in ("-", "")), None)
 
+    def clock_of(t):
+        return datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S UTC")
+
+    def reboot_accepted(c, tag, label, text="POST reboot is accepted"):
+        """The restart that was asked for (<tag>-post is the last call, <tag>-post.tries every try). (the call, whether the restart was accepted); None when the call has no evidence.
+        Accepted: HTTP 202, on the first try or on a later one (the core or the gateway in front of it did not answer for a while: said, with when), or a machine that went down with another
+        boot id after an answer that was lost (the shutdown cut it: said, and put in the notes). A restart that is never accepted is the check that fails."""
+        rb = Call("%s-post" % tag)      # (not call(): an answer that never came is what a restart that cuts its own answer leaves, and the check says so)
+        if not rb.ran:
+            invalid("the call %s-post did not run: no evidence" % tag)
+            return None
+        tries = [r for r in table("%s-post.tries" % tag) if len(r) == 4 and fnum(r[0]) is not None]
+        lost = exists("%s.lost-answer" % tag)
+        accepted = rb.code == 202 or lost
+        silent = [r for r in tries if r[2] not in ("200", "202")]
+        span = (fnum(tries[-1][0]) - fnum(tries[0][0])) if len(tries) > 1 else 0
+        tried = ("; %d tries over %s" % (len(tries), secs(span))) if len(tries) > 1 else ""
+        c.check(accepted, "%s%s" % (label, text), "HTTP 202, or a machine that went down with another boot id after an answer that was lost", "%s %s%s" % (rb.shown(), cell(rb.error_code, 40), tried))
+        if silent:
+            codes = sorted(set(("HTTP " + r[2]) if r[3] == "0" and r[2] != "000" else "no answer" for r in silent))
+            t0 = fnum(silent[0][0])
+            if lost:
+                c.note("%sthe answer to POST reboot was lost (%s at %s) and the machine went down all the same, with another boot id" % (label, " and ".join(codes), clock_of(t0)))
+                notes.append("%s: the answer to POST reboot was lost (%s at %s) and the machine restarted: the core asks systemd for the restart as soon as it accepts, and the shutdown can cut the answer" % (tag, " and ".join(codes), clock_of(t0)))
+            elif rb.code == 202:
+                later = [r for r in tries if fnum(r[0]) > t0 and r[2] in ("200", "202")]
+                back = fnum(later[0][0]) if later else fnum(tries[-1][0])
+                c.note("%sthe core did not answer (%s) from %s to %s, a restart of the core or of the gateway in front of it; POST reboot was accepted on try %d" % (label, " and ".join(codes), clock_of(t0), clock_of(back), len(tries)))
+            else:
+                c.note("%sthe core did not answer (%s) from %s, and POST reboot was not accepted in the %s that it was asked for" % (label, " and ".join(codes), clock_of(t0), secs(span)))
+        return rb, accepted
+
     def bk_left(c, after, label):
         """no kept run has its backup folder still in /var/backups: each one's is moved into its run folder or is not there"""
         c.check(not after.bk_dirs(), "%sno backup folder is left in /var/backups" % label, "none", few(after.bk_dirs()))
@@ -711,10 +749,13 @@ try:
         if after is None:
             return
         if last.state == "reboot_first":
-            rb = call("c3-reboot-post", "the restart that the refresh asked for")
-            if rb is None:
+            got = reboot_accepted(c, "c3-reboot", "", "POST reboot is accepted when the refresh asks for a restart")
+            if got is None:
                 return
-            c.check(rb.code == 202, "POST reboot is accepted when the refresh asks for a restart", "HTTP 202", rb.shown())
+            if not got[1]:
+                c.note("the restart was not accepted: the check after it was not reached")
+                c.done()
+                return
             if exists("boot-c3-reboot.timeout"):
                 invalid("C3: the guest did not come back with another boot id after the restart the refresh asked for")
                 return
@@ -753,6 +794,144 @@ try:
         if ended and t_start is not None:
             number("refresh", "%s from POST refresh to %s; %d packages upgraded, %d new; kernel packages %s" % (secs(ended[0].t0 - t_start), ended[0].state, len(changed), len(added),
                                                                                                                   few(sorted(n for n in added if n.startswith("linux-image")))))
+
+    # ---- C3b and C3c: the security line of Debian 11 at security.debian.org ---------------------------------------------------------------------
+
+    def sec_gate(cid, title, t):
+        """the case ran, and the core is one that moves the security line to the archive: otherwise it is not testable (never a failure)"""
+        if not gate(cid, title):
+            return False
+        ver, mn = read("%s.core-version" % t).strip(), read("%s.min-core" % t).strip() or SECURITY_ARCHIVE_MIN_CORE
+        have, need = version_of(ver), version_of(mn)
+        if have is None or need is None:
+            not_testable("%s %s" % (cid, title), "whether this release has the security-archive rewrite is not known: casaos -v said %s" % cell(ver or "nothing", 60))
+            return False
+        if have < need:
+            not_testable("%s %s" % (cid, title), "this release has no security-archive rewrite (the core is %s; the first with it is %s)" % (cell(ver, 30), cell(mn, 30)))
+            return False
+        return True
+
+    def r1_notes(t):
+        """the lines with Note: that the refresh printed, from what the guest said of the newest run"""
+        out, sec = [], None
+        for ln in read("%s.r1-output" % t).splitlines():
+            if ln.startswith("== "):
+                sec = ln[3:].strip()
+            elif sec == "note" and ln.strip():
+                out.append(ln.strip())
+        return out
+
+    def sec_gap(t):
+        """(package, the version it was held at, the version of the security updates), or None when no package was one version behind"""
+        w = read("%s.gap" % t).split()
+        return tuple(w) if len(w) == 3 else None
+
+    def sec_closed(t, cid):
+        if read("%s.closed" % t).strip() != "idle":
+            invalid("%s: the run was not closed (%s)" % (cid, cell(read("%s.closed" % t).strip() or "no word of it", 60)))
+
+    def judge_c3b():
+        title = "refresh with the security line at security.debian.org"
+        if not sec_gate("C3b", title, "c3b"):
+            return
+        c = Case("C3b " + title)
+        before, refresh = snap("c3b-before"), call("c3b-refresh")
+        if not (before and refresh):
+            return
+        if refresh.code != 202:
+            c.check(False, "POST refresh is accepted", "HTTP 202", "%s %s" % (refresh.shown(), cell(refresh.error_code, 60)))
+            c.done()
+            return
+        if not exists("c3b.r1-output"):
+            invalid("C3b: what the refresh printed was not read (c3b.r1-output is missing)")
+            return
+        seq = reached(c, "c3b-run", ("refreshed", "reboot_first"), "the refresh ends refreshed or asking for a restart", ("refreshing", "reboot_first", "refreshed", "idle"))
+        if seq is None:
+            return
+        gap = sec_gap("c3b")
+        moved = [ln for ln in r1_notes("c3b") if "archive.debian.org/debian-security" in ln]
+        c.check(bool(moved), "R1 says that the security line is read from the archive (a line `Note:` that names it)", "a Note line with archive.debian.org/debian-security", few(r1_notes("c3b")) or "no Note line")
+        last = last_answered(seq)
+        if last is None or last.state not in ("refreshed", "reboot_first"):
+            st = call("c3b-status-end")
+            f = st.field("failure") if st and isinstance(st.field("failure"), dict) else {}
+            if f:
+                c.note("the refresh stopped: class %s, hint %s, block %s: %s" % (cell(f.get("class"), 30), cell(f.get("hint"), 40), cell(f.get("stage"), 30), cell(f.get("detail_line") or "no detail line", 200)))
+            c.done()
+            return
+        if last.state == "reboot_first":
+            got = reboot_accepted(c, "c3b-reboot", "", "POST reboot is accepted when the refresh asks for a restart")
+            if got is None:
+                return
+            if not got[1]:
+                c.note("the restart was not accepted: the check after it was not reached")
+                c.done()
+                return
+            if exists("boot-c3b-reboot.timeout"):
+                invalid("C3b: the guest did not come back with another boot id after the restart the refresh asked for")
+                return
+            again = reached(c, "c3b-after-reboot", ("refreshed",), "after the restart the refresh is refreshed", ("reboot_first", "refreshed", "idle"))
+            c.note("the refresh asked for a restart")
+            end = last_answered(again or [])
+            if end is None or end.state != "refreshed":
+                c.done()
+                return
+        after = snap("c3b-after")
+        if after is None:
+            return
+        sd = [n for n in sorted(set(before.sources()) | set(after.sources())) if before.sources().get(n) != after.sources().get(n)]
+        c.check(not sd, "the sources of apt, with the line at security.debian.org, are as they were", "the same files, byte for byte (the lines are moved in the refresh's own sources only)", "changed: " + few(sd))
+        other = [n for n in apt_diff(before, after) if n not in sd]
+        if other:
+            c.note("the rest of /etc/apt changed with the packages: " + few(other, 4))
+        removed, added, changed = dpkg_diff(before, after)
+        c.check(not removed, "no package was removed", "none", few(removed))
+        if gap:
+            c.check(before.installed().get(gap[0]) == gap[1] and after.installed().get(gap[0]) == gap[2], "the package that was one version behind (%s) was fetched and installed through the archive" % gap[0],
+                    "%s %s before, %s after" % (gap[0], gap[1], gap[2]), "%s before, %s after" % (before.installed().get(gap[0]), after.installed().get(gap[0])))
+        else:
+            c.note("no package of the security updates was one version behind on the guest: the refresh had nothing to download, and only the note and the sources are proved")
+        c.check(before.timers == after.timers, "the timers of apt are as they were", dict_str(before.timers), dict_str(after.timers))
+        sec_closed("c3b", "C3b")
+        c.done()
+
+    def judge_c3c():
+        title = "refresh with a security line the rewrite does not recognise"
+        if not sec_gate("C3c", title, "c3c"):
+            return
+        c = Case("C3c " + title)
+        before, refresh = snap("c3c-before"), call("c3c-refresh")
+        if not (before and refresh):
+            return
+        if refresh.code != 202:
+            c.check(False, "POST refresh is accepted", "HTTP 202", "%s %s" % (refresh.shown(), cell(refresh.error_code, 60)))
+            c.done()
+            return
+        rs = rows("c3c-run")
+        last = last_answered(rs)
+        gap = sec_gap("c3c")
+        if last is not None and last.state in ("refreshed", "reboot_first"):
+            not_testable("C3c " + title, "the mirror did not answer 404: the refresh went through (%s)" % ("security.debian.org served the package that was one version behind" if gap
+                                                                                                     else "there was no security package to download on the guest"))
+            sec_closed("c3c", "C3c")
+            return
+        seq = reached(c, "c3c-run", ("failed",), "the refresh ends failed", None)
+        if seq is None:
+            return
+        st = call("c3c-status-end")
+        f = st.field("failure") if st and isinstance(st.field("failure"), dict) else {}
+        c.check(f.get("class") == "network", "the failure is of the class network", "class network", "class %s (%s)" % (cell(f.get("class"), 30), cell(f.get("detail_line") or "no detail line", 200)))
+        c.check(f.get("hint") == "security_archive_gap", "the failure says what to do about it (the hint)", "hint security_archive_gap", "hint %s (%s)" % (cell(f.get("hint"), 40), cell(f.get("detail_line") or "no detail line", 200)))
+        after = snap("c3c-after")
+        if after is None:
+            return
+        sd = [n for n in sorted(set(before.sources()) | set(after.sources())) if before.sources().get(n) != after.sources().get(n)]
+        c.check(not sd, "the sources of apt are as they were", "the same files, byte for byte", "changed: " + few(sd))
+        removed, added, changed = dpkg_diff(before, after)
+        c.check(not (removed or added or changed), "nothing was installed, upgraded or removed", "no change in the packages", "removed %s; new %s; changed %s" % (few(removed, 3) or "none", few(added, 3) or "none", few(changed, 3) or "none"))
+        c.check(before.timers == after.timers, "the timers of apt are as they were", dict_str(before.timers), dict_str(after.timers))
+        sec_closed("c3c", "C3c")
+        c.done()
 
     # ---- C4 ----------------------------------------------------------------------------------------------------------------------------
 
@@ -1044,10 +1223,13 @@ try:
         c.check((aw.num("sources_bookworm") or 0) > 0 and aw.num("sources_bullseye") == 0, "%sthe sources are those of Debian 12" % label, "bookworm lines, no bullseye line",
                 "bookworm %s, bullseye %s" % (aw.f.get("sources_bookworm"), aw.f.get("sources_bullseye")))
         c.check(aw.f.get("uname") == before.f.get("uname"), "%sthe old kernel still runs until the restart" % label, "kernel %s" % before.f.get("uname"), "kernel %s" % aw.f.get("uname"))
-        rb = call("%s-reboot-post" % p)
-        if rb is None:
+        got = reboot_accepted(c, "%s-reboot" % p, label)
+        if got is None:
             return None
-        c.check(rb.code == 202, "%sPOST reboot is accepted" % label, "HTTP 202", "%s %s" % (rb.shown(), cell(rb.error_code, 40)))
+        rb, accepted = got
+        if not accepted:
+            c.note("%sthe restart was not accepted: the check after it was not reached" % label)
+            return None
         if exists("boot-%s-reboot.timeout" % p):
             invalid("%s: the guest did not come back with another boot id after the restart (its serial log is in the artifacts)" % (label.strip() or p))
             return None
@@ -1498,7 +1680,7 @@ try:
             invalid("the judgement of %s broke on its evidence: %s: %s" % (cid or fn.__name__, type(e).__name__, cell(e, 200)))
 
     if leg == "core":
-        for fn, cid in ((judge_c1, "C1"), (judge_c2, "C2"), (judge_c3, "C3"), (judge_c4, "C4"), (judge_c5, "C5"), (judge_c6, "C6"), (judge_c7, "C7")):
+        for fn, cid in ((judge_c1, "C1"), (judge_c2, "C2"), (judge_c3, "C3"), (judge_c3b, "C3b"), (judge_c3c, "C3c"), (judge_c4, "C4"), (judge_c5, "C5"), (judge_c6, "C6"), (judge_c7, "C7")):
             run_judge(fn, cid)
     else:
         run_judge(judge_prelude, "the start state")
