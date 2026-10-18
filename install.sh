@@ -126,6 +126,8 @@ readonly RCLONE_SHA256_ARM7="__RCLONE_SHA256_ARM7__"
 readonly CASAOS_APPSTORE_SHA256="__CASAOS_APPSTORE_SHA256__"
 readonly CASAOS_COMPAT_OVERLAY_SHA256="__CASAOS_COMPAT_OVERLAY_SHA256__"
 readonly CASAOS_UNINSTALL_SHA256="__CASAOS_UNINSTALL_SHA256__"
+# empty when this release carries no module catalogue
+readonly CASAOS_MODULE_CATALOGUE_SHA256="__CASAOS_MODULE_CATALOGUE_SHA256__"
 
 # REQUIREMENTS CONF PATH
 # Udevil
@@ -184,6 +186,14 @@ if [[ "${RECASAOS_DEBIAN_ARCHIVE:-}" == "1" ]]; then
     DEBIAN_ARCHIVE=1
 fi
 APT_SOURCES_LIST=/etc/apt/sources.list
+# Optional modules (docs/modules.md). The catalogue of this release is placed in
+# CASA_MODULE_CATALOGUE_DIR; --module adds a name to MODULES_REQUESTED (names
+# separated by a space, each one checked by Valid_Module_Name); the modules are
+# installed with the core's own assistant once ReCasaOS runs.
+CASA_MODULE_CATALOGUE_DIR=/usr/share/casaos/modules
+CASA_BIN=/usr/bin/casaos
+MODULES_REQUESTED=""
+MODULE_CATALOGUE_READY=0
 # How long refreshing apt's package lists may take. A mirror that accepts the
 # connection and then says nothing used to hold the whole install for as long as
 # whoever ran it was willing to wait (a CI job's limit was forty minutes, twice).
@@ -1106,6 +1116,8 @@ DownloadAndInstallCasaOS() {
 
     Install_Rclone
 
+    Install_Module_Catalogue
+
     for SERVICE in "${CASA_SERVICES[@]}"; do
         Show 2 "Starting ${SERVICE}..."
         GreyStart
@@ -1213,6 +1225,162 @@ Telemetry_Notice() {
 }
 
 ###############################################################################
+# Modules                                                                     #
+###############################################################################
+
+# Whether a text is the name of a module: a lower case letter, then lower case
+# letters, digits or hyphens, 32 characters at most. The letters are listed, not
+# written as ranges, so that no locale reads more into them than they say.
+Valid_Module_Name() {
+    case "$1" in
+    "" | [!abcdefghijklmnopqrstuvwxyz]* | *[!abcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+    esac
+    [ "${#1}" -le 32 ]
+}
+
+# A name given to --module, added once to the list. A text that is not the name
+# of a module ends the install here, before anything on this machine is touched.
+Add_Requested_Module() {
+    local name="$1" shown
+    if ! Valid_Module_Name "${name}"; then
+        shown="$(printf '%.40s' "${name}" | tr -c 'A-Za-z0-9._-' '?')"
+        Show 1 "--module needs the name of a module: a lower case letter, then lower case letters, digits or hyphens, 32 characters at most (got '${shown}'). Nothing on this machine was changed."
+        return 1
+    fi
+    case " ${MODULES_REQUESTED} " in
+    *" ${name} "*) ;;
+    *) MODULES_REQUESTED="${MODULES_REQUESTED:+${MODULES_REQUESTED} }${name}" ;;
+    esac
+}
+
+# Checked once the options are read, still before anything is changed: a release
+# that carries no module catalogue offers no module, so --module is refused.
+Validate_Module_Request() {
+    [ -n "${MODULES_REQUESTED}" ] || return 0
+    if [ -z "${CASAOS_MODULE_CATALOGUE_SHA256}" ]; then
+        Show 1 "--module cannot be used with this release: it carries no module catalogue, so it offers no module. Nothing on this machine was changed."
+    fi
+}
+
+# Places the module catalogue of this release at CASA_MODULE_CATALOGUE_DIR/catalogue.json:
+# downloaded from the release, compared with the digest this script carries, and put
+# in place whole or not at all. Whatever is wrong with it stops the catalogue and
+# nothing else: it is said, ReCasaOS goes on, and MODULE_CATALOGUE_READY tells
+# Install_Modules whether this run may install any module. A release without a
+# catalogue has none to place, and the file of an earlier release is not its own.
+Install_Module_Catalogue() {
+    local file="${CASA_MODULE_CATALOGUE_DIR}/catalogue.json"
+    local sum="${CASAOS_MODULE_CATALOGUE_SHA256}"
+    local work reason=""
+
+    MODULE_CATALOGUE_READY=0
+    if [ -z "${sum}" ]; then
+        if [ -e "${file}" ] || [ -L "${file}" ]; then
+            ${sudo_cmd} rm -f "${file}" && Show 2 "This release carries no module catalogue; the one of an earlier release was removed."
+        fi
+        return 0
+    fi
+    if [ "${#sum}" -ne 64 ] || [ -n "$(printf '%s' "${sum}" | tr -d '0123456789abcdef')" ]; then
+        Show 3 "The module catalogue was not installed: the digest this installer carries for it is not a SHA-256 digest. ReCasaOS itself is installed and is not affected; no module can be installed by this run."
+        return 0
+    fi
+    work="$(mktemp -d)" || {
+        Show 3 "The module catalogue was not installed: no temporary directory could be made. ReCasaOS itself is installed and is not affected; no module can be installed by this run."
+        return 0
+    }
+
+    Show 2 "Downloading the module catalogue..."
+    GreyStart
+    if ! ${sudo_cmd} wget -t 3 -q -O "${work}/catalogue.json" "${CASAOS_RELEASE_BASE_URL}/modules-catalogue-${CASAOS_INSTALL_RELEASE_TAG}.json"; then
+        reason="could not be downloaded"
+    elif ! printf '%s  %s\n' "${sum}" "${work}/catalogue.json" | ${sudo_cmd} sha256sum --check --status -; then
+        reason="is not the file this installer expects (its SHA-256 digest differs)"
+    elif ! ${sudo_cmd} install -d -m 0755 "${CASA_MODULE_CATALOGUE_DIR}" ||
+        ! ${sudo_cmd} install -m 0644 "${work}/catalogue.json" "${file}.new" ||
+        ! ${sudo_cmd} mv -f "${file}.new" "${file}"; then
+        reason="could not be put in place"
+    fi
+    ColorReset
+    ${sudo_cmd} rm -rf "${work}"
+
+    if [ -n "${reason}" ]; then
+        ${sudo_cmd} rm -f "${file}.new"
+        Show 3 "The module catalogue ${reason}. ReCasaOS itself is installed and is not affected; no module can be installed by this run. Run the installer again to try again."
+        return 0
+    fi
+    MODULE_CATALOGUE_READY=1
+    Show 0 "Module catalogue installed."
+}
+
+# One module, with the core's assistant: its lines as they come (the steps and
+# the sentences), then, when the install did not end well, the step and the
+# reason from its result line (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed>
+# <step> <code> <undo> <time>). Nothing here changes the exit status of this script.
+Install_One_Module() {
+    local name="$1" work status=0 line kind="" step="" code="" undo="" rname=""
+
+    work="$(mktemp -d)" || {
+        Show 3 "The module ${name} was not installed: no temporary directory could be made."
+        return 0
+    }
+    Show 2 "Installing the module ${name}..."
+    GreyStart
+    # no input, so that it cannot read the rest of a script piped into bash; the
+    # status of the assistant is kept in a file, the pipe's being tee's
+    { ${sudo_cmd} "${CASA_BIN}" module install "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
+    ColorReset
+    if [ -s "${work}/status" ]; then
+        read -r status <"${work}/status" || status=1
+    fi
+    # a run has one result line; were there more, the first would be final, as it is for the core
+    line="$(grep '^CASAOS_MODULE_RESULT ' "${work}/out" 2>/dev/null | head -n 1)" || line=""
+    ${sudo_cmd} rm -rf "${work}"
+    if [ -n "${line}" ]; then
+        read -r _ _ rname kind step code undo _ <<RESULT_LINE
+${line}
+RESULT_LINE
+        [ "${rname}" = "${name}" ] || kind=""
+        step="$(printf '%.40s' "${step}" | tr -c 'a-z0-9_-' '?')"
+        code="$(printf '%.60s' "${code}" | tr -c 'a-z0-9_-' '?')"
+    fi
+
+    if [ "${kind}" = ok ] && [ "${status}" = 0 ]; then
+        Show 0 "The module ${name} is installed."
+    elif [ "${kind}" = refused ]; then
+        Show 3 "The module ${name} was not installed: the assistant refused it (${code}). Nothing was changed."
+    else
+        if [ "${kind}" = failed ]; then
+            Show 3 "The module ${name} was not installed: it failed at the step ${step} (${code})."
+            [ "${undo}" != rollback_incomplete ] || Show 3 "What the install had done could not all be undone."
+        else
+            Show 3 "The module ${name} was not installed: the assistant did not report a success (exit status ${status})."
+        fi
+        Show 3 "To clean up what a failed install left, run: sudo casaos module remove ${name}   (the packages it installed stay)"
+    fi
+    return 0
+}
+
+# The modules asked for with --module, one after the other, once ReCasaOS is
+# installed and its services run. A module that fails is said and the next one is
+# tried: the exit status of this installer is the one ReCasaOS earned.
+Install_Modules() {
+    local name
+
+    [ -n "${MODULES_REQUESTED}" ] || return 0
+    if [ "${MODULE_CATALOGUE_READY}" != 1 ]; then
+        Show 3 "No module was installed: the module catalogue could not be installed by this run (see above). ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    if [ ! -x "${CASA_BIN}" ]; then
+        Show 3 "No module was installed: ${CASA_BIN} is not there. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    for name in ${MODULES_REQUESTED}; do
+        Install_One_Module "${name}"
+    done
+}
+
+###############################################################################
 # Main                                                                        #
 ###############################################################################
 
@@ -1226,6 +1394,8 @@ Valid options are:
     --use-debian-archive    On Debian 11, when apt answers 404 Not Found for a package, take the
                             security repository from archive.debian.org and go on (same as
                             RECASAOS_DEBIAN_ARCHIVE=1); the first copy of sources.list is kept
+    --module <name>         Once ReCasaOS runs, install this optional module (repeat the option
+                            for more than one); the module catalogue of the release lists them
     -h                      Show this help message and exit
 
 Anonymous statistics: https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics
@@ -1251,6 +1421,15 @@ while getopts ":p:h-:" arg; do
         use-debian-archive)
             DEBIAN_ARCHIVE=1
             ;;
+        module)
+            # "--module name": getopts leaves the name as the next argument
+            eval "module_name=\${${OPTIND}:-}"
+            OPTIND=$((OPTIND + 1))
+            Add_Requested_Module "${module_name}"
+            ;;
+        module=*)
+            Add_Requested_Module "${OPTARG#module=}"
+            ;;
         *)
             usage 1
             ;;
@@ -1261,6 +1440,7 @@ while getopts ":p:h-:" arg; do
         ;;
     esac
 done
+Validate_Module_Request
 
 # Existing CasaOS releases start this installer inside casaos.service. Move the
 # real update into its own systemd unit before the installer stops CasaOS.
@@ -1303,6 +1483,10 @@ INSTALL_COMPLETED=1
 if ! [[ -t 1 ]]; then
     Show 0 "CasaOS upgrade successfully"
 fi
+
+# The modules asked for with --module; whatever happens to them, the exit status
+# of this script stays the one of the install above
+Install_Modules
 
 # Step 10: Clear Term and Show Welcome Banner
 Welcome_Banner
