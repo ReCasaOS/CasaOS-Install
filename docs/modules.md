@@ -1,13 +1,14 @@
 # Modules
 
-A **module** is an optional component of ReCasaOS that lives in a repository of its own, ships its own releases, and is installed on a box only when its owner asks for it. A box without a module downloads none of it and shows nothing of it. The first one is `virt` (virtual machines, [CasaOS-VirtManagement](https://github.com/ReCasaOS/CasaOS-VirtManagement)); the design is written for any module that is a service behind the gateway.
+A **module** is an optional component of ReCasaOS that lives in a repository of its own, ships its own releases, and is installed on a box only when the person who runs the box asks for it. A box without a module downloads none of it and shows nothing of it. The first one planned is `virt` (virtual machines, [CasaOS-VirtManagement](https://github.com/ReCasaOS/CasaOS-VirtManagement)); the design is written for any module that is a service behind the gateway.
 
-This page is the contract between a module and ReCasaOS, and what ReCasaOS does with it. The parts marked *not built yet* are decided here and built in the order of the last section.
+This page is the contract between a module and ReCasaOS, and what ReCasaOS does with it. The last section says what is built and what is not.
 
 ## What a module is
 
-- A Go service, built like the other components (`CGO_ENABLED=0`, a systemd unit, a route registered with CasaOS-Gateway, events on the MessageBus), released from a `v*.*.*` tag by GoReleaser as `linux-{amd64,arm64}-<name>-v<version>.tar.gz` with a `checksums.txt` beside the archives.
-- Its archive holds a `build/sysroot/` tree (laid over `/` the way the installer lays the other components), and `module.json` at the root of the archive.
+- A service with a systemd unit and a route registered with CasaOS-Gateway, in a repository of the ReCasaOS organisation, released from a `v<number>.<number>.<number>` tag.
+- Its release publishes, for both architectures, `linux-amd64-casaos-<stem>-<tag>.tar.gz` and `linux-arm64-casaos-<stem>-<tag>.tar.gz` (`<stem>` is lower case letters and hyphens, the same in both), and a `checksums.txt` with the SHA-256 of each (`<digest>  <file name>`, as GoReleaser writes it).
+- An archive holds `module.json` at its root (exactly that name, and the same bytes in the two archives), a `build/sysroot/` tree (what the install puts on the box, see *What an archive may write*), and may hold `LICENSE` and `NOTICE`.
 - It never changes how ReCasaOS itself installs or starts, and a failed module install never fails ReCasaOS.
 
 ## The manifest, `module.json` (schema 1)
@@ -21,34 +22,40 @@ This page is the contract between a module and ReCasaOS, and what ReCasaOS does 
   "component": "CasaOS-VirtManagement",
   "unit": "casaos-virt-management.service",
   "gateway_route": "/v2/virt_management",
-  "packages": {
-    "common": ["qemu-utils", "libvirt-daemon-system", "libvirt-clients"],
-    "amd64": ["qemu-system-x86", "ovmf"],
-    "arm64": ["qemu-system-arm", "qemu-efi-aarch64"]
-  },
+  "packages": { "common": ["qemu-utils", "libvirt-daemon-system"], "amd64": ["qemu-system-x86", "ovmf"], "arm64": ["qemu-system-arm", "qemu-efi-aarch64"] },
   "min_recasaos": "0.5.23",
-  "os": ["debian:12", "debian:13", "ubuntu:24.04", "ubuntu:26.04"]
+  "os": ["debian:12", "debian:13", "ubuntu:24.04", "ubuntu:26.04"],
+  "os_upgrade": {
+    "stop_units": ["casaos-virt-management.service"],
+    "stop_timeout_seconds": 300,
+    "maintenance": {
+      "prepare": "/v2/virt_management/maintenance/prepare",
+      "status": "/v2/virt_management/maintenance/status",
+      "resume": "/v2/virt_management/maintenance/resume"
+    }
+  }
 }
 ```
 
-| Field | Meaning |
+| Field | Rule |
 |---|---|
-| `schema` | The version of this format; the reader refuses a schema it does not know. |
-| `name` | Lower case letters, digits and `-`, at most 32 characters: the module's id on the box (`/etc/casaos/modules/<name>.json`, `casaos module install <name>`). |
-| `title`, `description` | What the dashboard shows. English; the dashboard translates what it knows. |
-| `component` | The repository (under `github.com/ReCasaOS`) the archive comes from. |
-| `unit` | The systemd unit the install enables and starts, and the remove stops. |
-| `gateway_route` | The route the service registers; the dashboard treats the module as running when the gateway answers on it. |
-| `packages` | Distribution packages the module needs: `common` and the one of the box's architecture. Installed by apt, without recommends, from the box's own sources. |
-| `min_recasaos` | The oldest ReCasaOS release the module works with. |
-| `os` | The systems it supports, as `<id>:<version_id>` of `/etc/os-release`. The install is refused on any other. |
-| `os_upgrade` | *Not defined yet.* Declarative, never a hook run as root: what the core must know to move a box that has the module to the next operating system. It is written with the first release that needs it; until then a box with libvirt installed is refused that upgrade by the readiness report. |
+| `schema` | `1`. A change of the format is a new number, and a reader refuses a number it does not know. |
+| `name` | `[a-z][a-z0-9-]{0,31}`: the module's id on the box (`/etc/casaos/modules/<name>.json`, `casaos module install <name>`). |
+| `title` | 1 to 60 printable characters (no control character, no mark that turns the text round), with at least one letter, number, punctuation mark or symbol that shows. English; the dashboard shows it as text. |
+| `description` | optional, at most 300 printable characters; shown as text. What a person should know before installing (for `virt`: USB passthrough and its own firewall chains) is said here, and nowhere else. |
+| `component` | `[A-Za-z][A-Za-z0-9._-]{0,63}`: the repository, under `github.com/ReCasaOS`. |
+| `unit` | a systemd service, `[A-Za-z0-9][A-Za-z0-9:_.@-]{0,63}.service`: what the install enables and starts, and the remove stops. |
+| `gateway_route` | `/v<digits>/<name>`, lower case, digits and underscores, the name at most 40 characters, and not a name that the core or a service of the distribution answers on, under any version (`sys`, `users`, `usb`, `disks`, `storage`, `cloud`, `recover`, `other`, `zt`, `samba`, `file`, `folder`, `image`, `notify`, `gateway`, `casaos`, `app_management`, `message_bus`, `local_storage`, `port`, `driver`, `batch`, `test`, `health`, `apps`, `container`). The dashboard treats the module as running when the gateway answers on it. |
+| `packages` | `common`, `amd64`, `arm64`: Debian package names (lower case, two to 64 characters, not ending in `-`, `+` or `.deb`, none twice in a list), at most 32 to a list and 40 in all. Installed by apt, without recommends, from the box's own sources: `common` and the list of the box's architecture. |
+| `min_recasaos` | three numbers, `0.5.23`: the oldest release of the distribution (the tag in `/var/lib/casaos/fork-release`, not the version of the core) the module works with. |
+| `os` | at least one, at most 16, as `<id>:<version_id>` of `/etc/os-release`: `debian:12`, `ubuntu:24.04`. The install is refused on any other. |
+| `os_upgrade` | optional: what the upgrade of the operating system does around the module, declared and never scripted. `stop_units` can only be the module's own `unit`; the three calls are paths under its own `gateway_route`. See the last section for what the upgrade does with it today. |
 
-Where it lives on a box: `/etc/casaos/modules/<name>.json`, copied from the archive by the install. Both the installer and the core read it. A manifest the reader cannot parse, or whose `name` is not its file name, is ignored and said so.
+The file is data, and a reader trusts it only as far as it validates it: every value is checked against a fixed pattern, a field that is not in the table is an error, a key that comes twice is an error, a key spelled with other letters is an error, the file has 64 KiB at most, and nothing in it is ever run as a command, put in a shell or opened as a path. A manifest that does not pass is a module that cannot be told, and the report says so.
 
 ## The catalogue
 
-ReCasaOS does not discover modules on the network. Each ReCasaOS release carries a **catalogue** of the module versions it has been tested with, written by the release build from `release/modules.env` (the tag and the commit of each module) and from the `checksums.txt` each module release publishes, exactly as the components are today:
+ReCasaOS does not discover modules on the network. Each release of the distribution carries a **catalogue** of the module versions it has been tested with, and a box installs only what the catalogue names, at the tag it names, from the archive whose SHA-256 it gives. Nothing a module's author publishes reaches a box by itself.
 
 ```json
 {
@@ -56,45 +63,105 @@ ReCasaOS does not discover modules on the network. Each ReCasaOS release carries
   "modules": [
     {
       "name": "virt",
+      "component": "CasaOS-VirtManagement",
       "tier": "community",
-      "tag": "v0.1.0",
-      "commit": "<40 hex>",
+      "tag": "v0.1.1",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
       "assets": {
-        "amd64": { "url": "https://github.com/ReCasaOS/CasaOS-VirtManagement/releases/download/v0.1.0/linux-amd64-casaos-virt-management-v0.1.0.tar.gz", "sha256": "<64 hex>" },
-        "arm64": { "url": "...", "sha256": "..." }
-      }
+        "amd64": { "url": "https://github.com/ReCasaOS/CasaOS-VirtManagement/releases/download/v0.1.1/linux-amd64-casaos-virt-management-v0.1.1.tar.gz", "sha256": "<64 hexadecimal digits>" },
+        "arm64": { "url": "https://github.com/ReCasaOS/CasaOS-VirtManagement/releases/download/v0.1.1/linux-arm64-casaos-virt-management-v0.1.1.tar.gz", "sha256": "<64 hexadecimal digits>" }
+      },
+      "manifest": { "schema": 1, "name": "virt", "...": "the module.json of the archives, whole, as above" }
     }
   ]
 }
 ```
 
-It is installed with the release at `/usr/share/casaos/modules/catalogue.json`. `tier` is `core` (maintained here and proven on a real guest) or `community` (CI against a test double; the dashboard says so before the install). A new module version reaches boxes by being added to the catalogue of a ReCasaOS release, after its own CI is green: nothing a module author publishes reaches a box by itself.
+An entry carries the `component` (the repository) and the full `manifest`, which is the `module.json` of the archives: the box needs it before it has the archive, to say whether the system is supported, which packages the module needs and what to show of it.
 
-## `casaos module`, the one place the install lives *(not built yet)*
+| Field | Rule |
+|---|---|
+| `name` | as in the manifest, once in the catalogue. |
+| `component` | as in the manifest. |
+| `tier` | `core` (maintained here and proven on a real machine) or `community` (proven in CI against a test double, and said so before the install). |
+| `tag` | `v<number>.<number>.<number>`. |
+| `commit` | 40 lower-case hexadecimal digits: the commit that tag names. |
+| `assets` | `amd64` and `arm64`, at least one for a reader (the release build requires both); each has a `url` and a `sha256` (64 lower-case hexadecimal digits). The `url` is exactly `https://github.com/ReCasaOS/<component>/releases/download/<tag>/linux-<arch>-casaos-<stem>-<tag>.tar.gz` (no port, no user, no query, no other host, no other organisation) and at most 512 characters. |
+| `manifest` | passes every rule above; its `name` is the entry's, and its `component` is the entry's `component`. |
 
-A subcommand of the core binary (`/usr/bin/casaos`), not a script: the sha256 check, the rules for what an archive may write, and the reading of manifests and catalogues are Go code with tests, and nothing on the box needs `jq`. The installer's `--module <name>` option and the dashboard both end in it, so there is one implementation.
+The file has 1 MiB at most and 64 modules at most. It is read as a whole, as the manifest is: a field that the reader does not know, or one rule broken anywhere, and there is no module at all and an error, never the entries that happened to pass.
+
+**How a release carries it.** `release/modules.env` lists the modules of a release, four lines for each (`MODULE_<NAME>_TAG`, `_COMMIT`, `_COMPONENT`, `_TIER`; `<NAME>` is upper case, and the module's name is it in lower case with `_` as `-`). The release build (`scripts/build-release-bundle.sh`) fetches each module release's `checksums.txt` and its two archives from GitHub over HTTPS, the way it fetches the checksums of the components, and writes `modules-catalogue-<tag>.json`, a release asset, from them. The SHA-256 of an archive is the one its own release publishes; the manifest is the `module.json` read from the archives. The build checks that the tag is at the pinned commit, that each archive has the SHA-256 `checksums.txt` gives, that the two archives carry the same `module.json`, and that the manifest and the entry would be accepted by the reader on a box. A module that does not hold fails the whole build: there is no catalogue with some of its modules missing. The SHA-256 of the catalogue is written into `install.sh`, as the digests of the packages are.
+
+`install.sh` puts the catalogue at `/usr/share/casaos/modules/catalogue.json` (root, 0644) with the rest of the install and on every update, after checking it against that digest. A catalogue that is missing or does not match stops the installation of the catalogue and nothing else: ReCasaOS is installed, the installer says so, and no module is installed by that run. While `release/modules.env` lists no module there is no catalogue asset, `install.sh` carries no digest, no catalogue is placed (the file of an earlier release is removed), and the core reports `catalogue: {ok: false, error: "none"}`.
+
+## What an archive may write
+
+The archive is checked against the SHA-256 of the catalogue, which proves it is the archive the catalogue names and not that what is in it is harmless. The unpack reads every entry as hostile data and writes three kinds of file, each directly in its directory, and nothing else:
+
+| Where | What |
+|---|---|
+| `/usr/bin/<file>` | a program: a file, or a link to a file beside it. Not a name that is a program of the system's own that the assistant runs (`systemctl`, `apt-get`, `dpkg`, `sh`, `env` and a few more). |
+| `/usr/lib/systemd/system/` or `/lib/systemd/system/` | the unit of the manifest, exactly its `unit`, as a file. No other name: not another service, not a timer, not a template, not a drop-in directory. An archive that names the unit under both is refused. |
+| `/etc/casaos/<file>.sample` | a sample of the module's configuration: a file whose name ends in `.sample`. The configuration itself is the administrator's, and an archive that carries one is refused. |
+
+`module.json`, `LICENSE` and `NOTICE` at the root of the archive are read and not written to the box. `/var/lib/casaos` and `/usr/share/casaos` are not in the list at all: the core keeps its state there (the catalogue, the lists of the modules), and nothing a module has to ship goes in them.
+
+Every other path, a subdirectory of an allowed directory included, an entry that is not a file, a directory or a link, a link that points outside its own directory, a name with a character outside `A-Za-z0-9._-+@:`, more than 5000 entries or 400 MiB, is refused whole with `unpack_path` (or `unpack_limits`) before anything is written. A file that is there and was not written by an earlier install of the same module is never overwritten (`file_exists`). The modes are the archive's, without the setuid, setgid and sticky bits and without write for the group and the others.
+
+The install keeps two lists in `/var/lib/casaos/modules/`: `<name>.files`, every file and link it put down, the unit last, and `<name>.dirs`, the directories it had to make because the system had none. Both are written, whole, before the first directory is made and the first file put in place, so that a process that is killed half way leaves lists that name everything that may be there. A remove deletes exactly the files of the first that still hold what it says (a path that somebody has changed is left, and said), then the directories of the second that are empty.
+
+## `casaos module`, the one place the install lives
+
+A subcommand of the core binary (`/usr/bin/casaos module ...`), not a shell script: the SHA-256 check, the rules for what an archive may write and the reading of manifests and catalogues are Go code with tests, and nothing on the box needs `jq`. The installer's `--module` option, the core's API and so the dashboard all end in it, so there is one implementation.
 
 - `casaos module list`: the catalogue and what is installed, as JSON.
-- `casaos module plan <name>`: what an install would do, as JSON and read-only: the checks (system supported, architecture, ReCasaOS version, nothing else changing the packages, no operating-system upgrade open, disk room), the packages apt would install or upgrade (`apt-get -s`), the size to download.
-- `casaos module install <name>`: the steps, each with a marker line in the log: apt install of the packages; download of the archive; its sha256 compared with the catalogue (a mismatch removes the file and stops); unpack of `build/sysroot/` over `/`, recording each file in `/var/lib/casaos/modules/<name>.files`; `daemon-reload`; the manifest copied to `/etc/casaos/modules/<name>.json`; `enable --now` of the unit; a wait until the gateway answers on the route. A failure stops the unit, removes the recorded files and the manifest, keeps the apt packages (said in the last line), and exits non-zero.
-- `casaos module remove <name>`: stops and disables the unit, removes the recorded files and the manifest. It never purges packages and never touches the module's data (for `virt`: `/DATA/VM`, the libvirt network and pool, the machines); the last lines say how to purge them by hand.
+- `casaos module plan <name>`: what an install would do, as JSON, and nothing changed: the checks (`catalogue`, `os`, `arch`, `recasaos`, `already_installed`, `foreign_unit`, `busy`, `disk`, `apt`, in this order), the packages apt would install or upgrade (`apt-get -s` in a sandbox), the sizes, and a `plan_id`.
+- `casaos module install <name> [--yes] [--plan-id <id>]`: needs root. It plans again and refuses unless every check is ok; then the steps `packages`, `download` (https, GitHub hosts only, 200 MiB at most), `verify` (the SHA-256 of the catalogue: a mismatch removes the file and stops), `unpack`, `units`, `manifest` (copied to `/etc/casaos/modules/<name>.json`), `start` (`enable --now` of the unit) and `route` (waits until the gateway answers on `gateway_route`). A failure at any step stops the unit, deletes what the unpack wrote and the manifest, keeps the apt packages and says so, and ends with the failing step.
+- `casaos module remove <name> [--yes]`: stops and disables the unit, deletes the recorded files and the manifest. It never purges packages and never touches the module's data (for `virt`: `/DATA/VM`, the libvirt network and pool, the machines); its last lines say what is left and how to remove it by hand.
 - `casaos module status [name]`: installed or not, version, whether the unit is active and the route answers.
 
-Nothing from the network runs as code: only distribution packages through apt and the archive whose sha256 the catalogue pins. The module's service runs as root like the other ReCasaOS services; that is why the `community` tier is said out loud.
+`list`, `plan` and `status` print one JSON object and nothing else. Every run of `install` and `remove` writes the same lines to its standard output and to `/var/log/casaos/module-<name>.log`:
 
-## What the installer does *(not built yet)*
+```
+CASAOS_MODULE_STEP <nonce|-> <name> <step> <begin|done|failed> <time>
+CASAOS_MODULE_RESULT <nonce|-> <name> <ok|refused|failed> <step|-> <code|-> <undo> <time>
+```
 
-`install.sh --module <name>` (repeatable) runs `casaos module install <name>` after ReCasaOS itself is installed and running. Off by default. A failed module install prints why and leaves ReCasaOS installed and the exit status of the installer unchanged.
+and sentences between them (`failed at step download: download_failed`, `rolled back`, `kept_packages: ...`). What the commands it runs print goes in the log only, each line behind `| `. There is exactly one `RESULT` line, the last of a run that failed. `undo` is `rolled_back` or `rollback_incomplete` for an install that failed, `-` otherwise. The exit status is 0 for done, 2 for refused (a code, nothing changed) and 3 for failed (rolled back as said). The codes are those of the plan (`catalogue`, `os`, `arch`, `recasaos`, `already_installed`, `foreign_unit`, `busy`, `disk_short`, `disk_unknown`, `apt_missing`, `apt_failed`, `apt_removes`, `apt_downgrades`, `held_package`, `package_not_exact`) and `not_root`, `plan_changed`, `confirmation_needed`, `not_installed`, `checksum_mismatch`, `download_failed`, `download_too_large`, `packages_failed`, `unpack_path`, `file_exists`, `unpack_failed`, `units_failed`, `manifest_invalid`, `start_failed`, `route_timeout`, `interrupted`, `internal_error`.
 
-## What the core and the dashboard do *(not built yet)*
+On a box:
 
-- The core reads the catalogue and `/etc/casaos/modules/*.json`: `GET /v1/sys/modules` (what the box can install, what it has, compatibility with this system), `POST /v1/sys/modules/<name>/plan`, `POST /v1/sys/modules/<name>/install` and `.../remove` (header token only, bound to the plan by an id, started in a transient systemd unit with a nonce and marker lines like the Docker update), `GET /v1/sys/modules/<name>/status`. Refused while the operating-system upgrade engine holds the machine or another package operation runs.
-- The dashboard has a *Modules* page: each module with its title, tier, version, whether this system supports it, and an *Install* button that opens the plan (the packages, the download, "community module", what it opens: for `virt` USB passthrough and its own firewall chains) and asks for a confirmation. When the service answers on its route the module's own card appears, as the virtual machine card does today. *Remove* says what stays.
+| Path | Content |
+|---|---|
+| `/usr/share/casaos/modules/catalogue.json` | the catalogue of the release, put there by `install.sh` |
+| `/etc/casaos/modules/<name>.json` | the manifest of an installed module |
+| `/var/lib/casaos/modules/<name>.files`, `.dirs` | what the install put down, for the remove |
+| `/var/lib/casaos/modules/tmp/` | the download and unpack area, emptied when a run ends |
+| `/var/log/casaos/module-<name>.log` | the last run, step by step |
 
-## Order of work
+Nothing from the network runs as code: only distribution packages through apt and the archive whose SHA-256 the catalogue pins. The module's service runs as root like the other ReCasaOS services; that is why the `community` tier is said out loud.
 
-1. This page, and the move of CasaOS-VirtManagement to the `ReCasaOS` organisation.
-2. `casaos module`, the catalogue in the release build, `install.sh --module`, and a QEMU proof that installs and removes `virt` on Debian 12 and Ubuntu 24.04 against libvirt's test driver (no KVM) and checks that the rest of ReCasaOS did not change.
-3. The core's API.
-4. The dashboard page.
-5. `os_upgrade`, with the first module release that needs it.
+## `install.sh --module <name>`
+
+```bash
+curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash -s -- --module virt
+```
+
+The option is repeatable (`--module a --module b`, or `--module=a`). A name must be `[a-z][a-z0-9-]{0,31}`, and a name that is not is refused before anything on the machine is changed. So is `--module` when the release carries no catalogue, with a sentence that says so. Once ReCasaOS is installed and its services run, the installer runs `casaos module install <name> --yes` for each module in the order given, and prints its lines. A module that fails does not stop the others or ReCasaOS, and does not change the exit status of the installer: it prints the step that failed and why, and that `casaos module remove <name>` cleans a half install. A run with no `--module` installs no module, and the dashboard's update does not pass the option.
+
+## What the core and the dashboard do
+
+- The core serves `GET /v1/sys/modules` (the catalogue joined with what is installed, and whether this system supports each), `POST /v1/sys/modules/<name>/plan`, `POST /v1/sys/modules/<name>/install` (bound to the plan by its id) and `.../remove` (the access token in the header only), and `GET /v1/sys/modules/<name>/status`. An install or a remove runs in a transient unit, `casaos-module-<name>.service`, with a nonce in the marker lines above; the core keeps nothing about a job in memory, reads its state back from the log and the unit, and never starts one again by itself. It is refused while the upgrade of the operating system holds the machine or another package operation runs.
+- The dashboard has a *Modules* page: each module with its title, tier, version, whether this system supports it, and an *Install* button that opens the plan (the packages, the download, the sentence of the `community` tier, the `description` of the module) and asks for a confirmation. *Remove* says what stays. When the service answers on its route the module's own card appears, as the virtual machine card does today.
+
+## What is built and what is not
+
+Built, each in its own repository, and not in a release of the distribution yet: `casaos module` and its API (the core), the Modules page (the dashboard), the catalogue builder, `--module` and the placement of the catalogue (this repository). Their tests run without a machine: stand-in commands for the installer, fixtures for the builder, the unpack on a fake file system.
+
+Not done:
+
+- **The proof on a real guest.** A QEMU run, in CI, that installs `virt` on Debian 12 and Ubuntu 24.04 against libvirt's test driver (no KVM), goes through the dirty cases (a corrupted archive, a path that goes up, a unit of the same name, the package lock held, a full disk, a killed install), removes it, and checks that nothing the module does not own changed. It has not been written or run.
+- **The first entry.** `release/modules.env` holds only comments: no release carries a catalogue, `--module` is refused, and the core says there is no catalogue. `virt` enters it with its repository at `ReCasaOS/CasaOS-VirtManagement`, a release (`v0.1.1`) cut after the proof, and its tag and commit pinned.
+- **`os_upgrade`.** The upgrade of the operating system does not make the calls yet: its readiness report refuses a machine with any module installed, and names the module, so that a machine whose virtual machines are running is not upgraded under them.
+- **Updates of a module.** There is none apart from a new release of the distribution that carries a newer entry. No uninstall of packages, no dependencies between modules, no signature beyond the pinned SHA-256.

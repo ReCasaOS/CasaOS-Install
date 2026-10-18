@@ -57,6 +57,18 @@ A new major version (28 to 29) is a bigger step: read Docker's release notes fir
 
 Since v0.5.19 the dashboard's *System packages* update leaves Docker out and shows it on a line of its own, with the command above for the packages it lists. Before, it ran a plain `apt-get upgrade`, which included Docker's packages when Docker's repository was configured, and so could restart Docker and move it to a newer version.
 
+## Optional modules
+
+Some components are optional: they live in a repository of their own, ship their own releases and are installed only when you ask. [docs/modules.md](docs/modules.md) is the contract for a module's author and says what is checked before anything is written to your box.
+
+```bash
+curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash -s -- --module <name>
+```
+
+`--module <name>` (repeat it for more than one) installs the module once ReCasaOS itself is installed and running. Its name is checked before the installer changes anything, and a module that cannot be installed is reported with the step that failed and why, without failing the install of ReCasaOS or changing the installer's exit status; `sudo casaos module remove <name>` cleans up what a failed install left. Every release carries a catalogue of the modules it can install (`modules-catalogue-<tag>.json`, pinned by a SHA-256 written into `install.sh`, like the packages), and a module that is not in it cannot be installed.
+
+**No module is offered yet.** The releases carry no catalogue, so `--module` is refused with a sentence that says so, before anything on the machine is changed. The first module will be `virt` (virtual machines), and it enters a release only after its installation has been proven on Debian 12 and Ubuntu 24.04.
+
 ## Anonymous statistics
 
 A ReCasaOS box sends anonymous statistics, so that the maintainers know how many boxes are running, which release they run, how fast they update after a release, and on what hardware: what GitHub's download counters cannot tell. They are **on by default**, and they say so: at the end of every install and upgrade, in a notice the dashboard shows once, and here. Any one of the three ways below turns them off.
