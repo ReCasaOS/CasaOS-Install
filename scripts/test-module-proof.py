@@ -247,7 +247,7 @@ def context_problems(workflow):
 EPOCH0 = 1790000000.0
 OS_BY_LEG = {"d12": ("debian", "12"), "u24": ("ubuntu", "24.04")}
 CORE_UNITS = ["casaos.service", "casaos-gateway.service", "casaos-user-service.service", "casaos-message-bus.service", "casaos-local-storage.service", "casaos-app-management.service", "rclone.service"]
-BASE_PKGS = ["libc6", "systemd", "apt", "dash", "curl", "openssh-server", "docker-ce", "samba", "python3"]
+BASE_PKGS = ["libc6", "systemd", "apt", "dash", "curl", "openssh-server", "docker-ce", "samba", "python3", "cloud-image-utils"]
 DEPS = {"libvirt-daemon-system": ["libvirt-daemon", "libvirt-daemon-driver-qemu", "libvirt-daemon-config-network"], "qemu-system-x86": ["qemu-system-common", "qemu-system-data", "qemu-block-extra"],
         "libvirt-clients": ["libvirt0"]}
 PKG_FILES = {"libvirt-daemon-system": ["/etc/libvirt", "/etc/libvirt/libvirt.conf", "/etc/libvirt/libvirtd.conf", "/usr/bin/virt-admin", "/usr/lib/systemd/system/libvirtd.service"],
@@ -541,6 +541,7 @@ class World:
         self.etc = dict(BASE_ETC)
         self.tmp = []
         self.installed, self.hold, self.auto = set(BASE_PKGS), set(), set()
+        self.unseat_owned = set()
         self.apt = {"/var/lib/apt/extended_states": dict(size=10, mtime=5, sha=sha("ext0")), "/var/log/apt/history.log": dict(size=100, mtime=5, sha=sha("hist0")),
                     "/var/lib/dpkg/status": dict(size=1000, mtime=5, sha=sha("status0")), "/var/log/apt/eipp.log.xz": None}
         self.unit_enabled, self.unit_active, self.gw = False, False, False
@@ -963,8 +964,11 @@ class World:
                 return self.answer(200, self.cfg["core_version"]) if self.core_up() else None
             if path.startswith(self.kit["route"]):
                 rest = path[len(self.kit["route"]):]
-                if not (self.gw and self.unit_active) or rest not in ("/host",):
+                if not (self.gw and self.unit_active):
                     return 404, {"message": "not found"}
+                if rest not in ("/host",):
+                    # the real gateway matches the start of the path, and the module's own validator answers what it does not know
+                    return 400, {"message": "no matching operation was found"}
                 if auth != self.token or self.t - self.token_born > self.cfg["token_valid_s"]:
                     return 401, {"message": "token expired or not valid"}
                 return 200, {"message": "ok", "data": {"libvirt": "available", "libvirt_version": "10.0.0", "storage_path": "/DATA/VM", "network": "casaos"}}
@@ -1061,6 +1065,9 @@ class World:
             n.add("/run/systemd/transient/%s" % d)
         for p in self.installed - set(BASE_PKGS):
             n |= set(self.owned_files([p]))
+        if "cloud-image-utils" in self.installed:
+            n.add("/usr/bin/cloud-localds")
+        n.add("/var/tmp/systemd-private-%s-logind.service-x" % self.boot[:8])
         for p in self.etc:
             n.add(p)
         n |= set(self.escaped)
@@ -1126,7 +1133,7 @@ class World:
             o.append("job %s loaded active running dummy" % d)
         o += ["list %s active running" % u for u in sorted(CORE_UNITS)] + (["list %s active running" % self.kit["unit"]] if self.unit_active else [])
         o.append("@@ etccasaos")
-        ec = {"/etc/casaos/gateway.ini": "gw1"}
+        ec = {"/etc/casaos/gateway.ini": "gw1", "/etc/casaos/gateway.ini.sample": "gws1"}
         for p, e in self.fs.items():
             if p.startswith("/etc/casaos/") and e["kind"] == "f":
                 ec[p] = e["sha"]
@@ -1266,11 +1273,17 @@ class World:
         if verb == "canary_state":
             return 0, "canary %s %s %d\n" % self.canary
         if verb in ("pkg_unseat", "pkg_unseat_all"):
-            for p in (a if verb == "pkg_unseat" else k["packages"]):
+            gone = list(a if verb == "pkg_unseat" else k["packages"])
+            if "qemu-utils" in gone and "cloud-image-utils" in self.installed:
+                gone.append("cloud-image-utils")        # what depends on a package goes with it
+                self.unseat_owned |= {"/usr/bin/cloud-localds"}
+            for p in gone:
                 self.installed.discard(p)
                 self.auto.discard(p)
             self.apt_changed("auto")
-            return 0, "rc=0\nRemoving ...\n"
+            return 0, "rc=0\nRemoving ...\nwill_remove %s \n" % " ".join(gone)
+        if verb == "unseat_owned":
+            return 0, "".join(p + "\n" for p in sorted(self.unseat_owned)) + "done\n"
         if verb == "pkg_reseat":
             for p in a:
                 self.installed.add(p)
@@ -1309,8 +1322,9 @@ class World:
                 return 1, "not clean after %d s: unit\n" % waited
             return 0, "clean after %d s\n" % waited
         if verb == "dummy_start":
-            for i in range(1, int(a[0]) + 1):
-                self.dummies.add("casaos-module-mpdummy%d.service" % i)
+            if "casaos-module-mpdummy%s.service" % a[0] in self.dummies:
+                return 1, ""        # systemd-run: the unit exists
+            self.dummies.add("casaos-module-mpdummy%s.service" % a[0])
             return 0, "".join("%s loaded active running\n" % d for d in sorted(self.dummies))
         if verb == "dummy_stop":
             self.dummies = set() if not self.cfg.get("dummies_stay") else self.dummies
@@ -1339,7 +1353,7 @@ class World:
         if verb == "escape_state":
             return 0, "".join(p + "\n" for p in self.escaped) + "done\n"
         if verb == "pkg_files":
-            return 0, "".join(p + "\n" for p in sorted(set(self.owned_files(a))))
+            return 0, "".join(("/bin/virsh" if p == "/usr/bin/virsh" else p) + "\n" for p in sorted(set(self.owned_files(a))))
         if verb == "modlog":
             return 0, "".join(l + "\n" for l in self.log_lines)
         if verb == "journal":
@@ -2087,6 +2101,7 @@ def core_mutations():
     m("M4: libvirt is unavailable", fails("M4 gateway route and host", "libvirt is available"), lambda d: jdata(d, "m4-host", lambda x: x.update(libvirt="unavailable", reason="no socket")))
     m("M4: the route without a token is a 404", fails("M4 gateway route and host", "refused by the module, not 404"), lambda d: code(d, "m4-host-noauth", 404))
     m("M4: a route that is not registered answers", fails("M4 gateway route and host", "is 404 through the same gateway"), lambda d: code(d, "m4-ghost", 200))
+    m("M4: a route that is not registered is a 400 (it reached the module)", fails("M4 gateway route and host", "is 404 through the same gateway"), lambda d: code(d, "m4-ghost", 400))
     m("M4: the configuration was not written before the install", fails("M4 install markers", "libvirt's test driver was put in the configuration"), lambda d: write_out(d, "m4-conf.out", "no\n"))
     m("M4: the install was not given a plan_id", fails("M4 install markers", "--plan-id"), lambda d: write_out(d, "m4-plan-id", "\n"))
     return M
@@ -2129,6 +2144,8 @@ def core_mutations_api():
     m("M6: the core was restarted", fails("M6 the rest of the box is untouched", "casaos.service is the same invocation"), lambda d: subst(d, "snap-m6-after.units", "unit casaos.service active running inv-casaos", "unit casaos.service active running inv-other"))
     m("M6: a unit of ReCasaOS is gone from the list", fails("M6 the rest of the box is untouched", "the list of the units of ReCasaOS"), lambda d: drop_line(d, "snap-m6-after.units", "list casaos-gateway.service"))
     m("M6: a file of /etc/casaos changed", fails("M6 the rest of the box is untouched", "every file of /etc/casaos"), lambda d: subst(d, "snap-m6-after.etccasaos", "/etc/casaos/gateway.ini\tgw1", "/etc/casaos/gateway.ini\tgw2"))
+    m("M6: the sample of the module is left in /etc/casaos", fails("M6 the rest of the box is untouched", "every file of /etc/casaos"), lambda d: add_line(d, "snap-m6-after.etccasaos", "/etc/casaos/virt-management.conf.sample" + chr(9) + "abc"))
+    m("M6: the sample of another component is gone", fails("M6 the rest of the box is untouched", "every file of /etc/casaos"), lambda d: drop_line(d, "snap-m6-after.etccasaos", "/etc/casaos/gateway.ini.sample"))
     m("M6: the status after the job still has the module", fails("M6 what is gone and what stays", "the status after the job"), lambda d: jdata(d, "m6-status", lambda x: x["status"].update(installed=True)))
 
     # M7
@@ -2247,6 +2264,7 @@ def kill_mutations():
     m("M9 kill: the signal could not be sent", invalid_run("the signal could not be sent"), lambda d: subst(d, K("units") + "-watch-result.out", "rc=0", "rc=1"))
     m("M9 kill: no process to signal", invalid_run("no process of the assistant"), lambda d: write_out(d, K("units") + "-watch-result.out", "no process of the assistant to signal\n"))
     m("M9 kill: the step is too short to be seen", not_testable(T("verify"), "shorter than that"), lambda d: (write_out(d, K("verify") + "-watch-result.out", "never saw the step verify begin\n"), rows_edit(d, K("verify") + "-job", lambda rows: rows[:-1] + [rows[-1][:COL["state"]] + ["succeeded", "done"] + rows[-1][COL["state"] + 2:]])))
+    m("M9 kill: nothing to signal because the install was over", not_testable(T("route"), "was over"), lambda d: (write_out(d, K("route") + "-watch-result.out", "no process of the assistant to signal" + chr(10)), rows_edit(d, K("route") + "-job", lambda rows: rows[:-1] + [rows[-1][:COL["state"]] + ["succeeded", "done"] + rows[-1][COL["state"] + 2:]])))
     m("M9 kill: the install failed before the step", invalid_run("without reaching the step"), lambda d: (write_out(d, K("verify") + "-watch-result.out", "never saw the step verify begin\n"), set_last(d, K("verify") + "-job", state="failed", code="packages_failed")))
     m("M9 kill: the signal landed after the step", not_testable(T("manifest"), "the log ended at"), lambda d: edit_lines(d, K("manifest") + "-watch-result.out", lambda ls: [l.replace("virt manifest begin", "virt start begin") if l.startswith("after=") else l for l in ls]))
     m("M9 kill: the install had ended", not_testable(T("route"), "had ended"), lambda d: edit_lines(d, K("route") + "-watch-result.out", lambda ls: [("after=CASAOS_MODULE_RESULT %s virt ok done - - 2026-09-21T14:00:00Z" % ("0" * 32)) if l.startswith("after=") else l for l in ls]))
@@ -2299,6 +2317,8 @@ def end_mutations():
     m("M11: a name that nothing explains", fails("M11 the rest of the file system", "every name that is new or gone"), lambda d: add_line(d, "snap-m11-end.names", "/usr/bin/stray-program"))
     m("M11: the sandbox of a plan is left in /var/tmp", fails("M11 the rest of the file system", "/var/tmp holds what it held", also=()), lambda d: add_line(d, "snap-m11-end.names", "/var/tmp/casaos-plan-1"))
     m("M11: dpkg lists no file of the packages", invalid_run("lists no file of the module's packages"), lambda d: write_out(d, "m11-owned.out", ""))
+    m("M11: the removal of a package was not the proof's", fails("M11 dpkg", "no package was removed", also=("M11 the rest of the file system",)), lambda d: [write_out(d, f, read_out(d, f).replace("will_remove", "gone")) for f in os.listdir(d) if f.endswith("-unseat.out")])
+    m("M11: a file of a merged /usr that nothing explains", fails("M11 the rest of the file system", "every name that is new or gone"), lambda d: subst(d, "m11-owned.out", "/bin/virsh", "/bin/other"))
     m("M11: the control is missing", invalid_run("m2-ctl-b is missing"), lambda d: [os.remove(os.path.join(d, f)) for f in os.listdir(d) if f.startswith("snap-m2-ctl-b.")])
     return M
 
