@@ -272,6 +272,8 @@ build_probe_core() {
         refuse_catalogue "Go is needed to build the core that this release pins, to prove that it has 'casaos module', and there is none in PATH."
     (
         cd "${WORKSPACE_ROOT}/CasaOS" &&
+            # The API code of the core is generated, and git does not hold it.
+            env -u GOOS -u GOARCH -u GOARM go generate &&
             env -u GOOS -u GOARCH -u GOARM CGO_ENABLED=0 \
                 go build -buildvcs=false -trimpath -tags "musl netgo osusergo" -o "${out}" .
     ) || refuse_catalogue "The core that this release pins (CasaOS at ${CASAOS_COMMIT}) could not be built, so it could not be proved to have 'casaos module'."

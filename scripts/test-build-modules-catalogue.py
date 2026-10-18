@@ -1287,6 +1287,7 @@ class BuildScript(Base):
     def stand_in_go(self, fails=False):
         """`go build ... -o OUT .` puts the stand-in core of the case at OUT."""
         self.script("go", """#!/bin/sh
+[ "${1:-}" = generate ] && exit 0
 { echo "args=$*"; echo "cwd=$(pwd)"; echo "goos=${GOOS:-} goarch=${GOARCH:-} goarm=${GOARM:-} cgo=${CGO_ENABLED:-}"; } >> '@@LOG@@'
 [ "${1:-}" = build ] || exit 3
 @@FAILS@@
