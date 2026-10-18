@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.33] - 2026-10-18
+
+Components: CasaOS `v0.4.77`, CasaOS-UI `v0.4.91`. Unchanged from v0.5.32: CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **A guided wizard for the upgrade of the operating system**, in the *Operating system* window. Six steps are always visible (check the machine, bring the current release up to date, prepare the plan, rehearse, start the upgrade, restart and check), one sentence says where you are and what the one next action is, and one button does it. It closes the finished refresh, asks for the plan by itself and again when it is older than the refresh, and closes the rehearsal once you have put the machine back, so you no longer have to know what the engine requires in which order. It never hides a stop: a failed, interrupted or half-upgraded run shows its state and its own buttons inside the step, and the wizard offers nothing past a state that needs you. The status of the upgrade now tells the time of the last refresh (`last_refresh_at`), so the wizard resumes at the right step after a reload.
+
+### Fixed
+
+- The assistant for optional modules lets an interrupted install finish dpkg (it ends `apt-get` the way that leaves dpkg clean) and repairs an interrupted dpkg before it installs, instead of leaving the next install to fail. Nothing is offered by the catalogue yet.
+
 ## [0.5.32] - 2026-10-18
 
 Components: CasaOS `v0.4.76`. Unchanged from v0.5.31: CasaOS-UI `v0.4.90`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
