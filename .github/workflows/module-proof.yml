@@ -1,0 +1,269 @@
+name: module-proof
+
+# Proof that the module assistant of ReCasaOS (`casaos module list|plan|install|remove|status`), the Modules API of the core (/v1/sys/modules) and the transient unit the core starts for an
+# install and a remove, install, run and take off a real module on a real machine that boots, restarts and is made dirty on purpose. The module is the virtual machine module
+# (ReCasaOS/CasaOS-VirtManagement), built here from a git ref of its repository the way its own release builds it (its goreleaser configuration: the hooks, then CGO_ENABLED=0 for linux/amd64
+# with the same ldflags), put in an archive of the shape of its release (build/sysroot/..., module.json, LICENSE, NOTICE; the name linux-amd64-casaos-virt-management-v0.1.1.tar.gz), and named
+# by a TEST catalogue: the manifest of the archive in it as it is, a url of the release form, tier community. libvirt answers through its test driver (URI = test:///default in
+# /etc/casaos/virt-management.conf), so the guest needs no KVM of its own.
+#
+# The assistant reads CASAOS_MODULE_CATALOGUE and CASAOS_MODULE_ARCHIVE_FILE only with CASAOS_MODULE_TEST=1, which no unit of the release sets. The commands run by hand get the three variables
+# in their own environment. For the cases that go through the core (M5 to M9) they are put in the environment of systemd's manager and the core is restarted, so that the core's own process
+# (the plan and the list run in it) and the transient unit systemd-run starts (the install and the remove) have them; they are taken out again, and read back, before the guest restarts.
+#
+# Each leg is a QEMU guest booted with KVM from the distribution's cloud image (the way install-check.yml and the proofs of the operating system upgrade boot theirs), with two forwards: ssh,
+# and the gateway of ReCasaOS. scripts/module-proof.sh installs the published release on it with its installer, and then, from the RUNNER (the guest restarts, and a case kills the process
+# that installs, and the evidence has to be on the side that survives it), drives the assistant by hand and the core through the gateway with the token of a login of the box's own, and asks
+# the guest only for what only it can say (snapshots of the machine, the log of the module, the units). scripts/module-proof-report.py judges what was recorded (PASS, FAIL, NOT TESTABLE with
+# its reason, or INVALID RUN) and fails the job for a FAIL and for an INVALID RUN alike. Nothing is judged in the guest, and a step whose undo failed is an INVALID RUN, never a FAIL.
+#
+#   M1  the release carries the assistant: `casaos -v` against the pin of the release, and the first core that has `casaos module` (a release without it is an INVALID RUN that says so)
+#   M2  the empty state: list, plan and status as root and as an unprivileged user: one JSON object each, no catalogue, nothing created (against a control of what the box changes by itself)
+#   M3  the plan with the test catalogue: the checks, the packages against what `apt-get -s install` itself says on the guest, the files of apt and dpkg unchanged, the same plan as nobody
+#   M4  the install by hand: the markers in order, the files with their hashes and modes, the lists, the manifest, the unit, the packages, the gateway route, the host answer
+#   M5  the API: the list, a second install refused, the plan, the status, a stale plan_id
+#   M6  the remove through the API: the job unit, the steps, what is gone and what stays, the core and the other services untouched
+#   M7  the install through the API from clean: the properties of the job unit and the glob the busy check asks systemd about, on a real systemd
+#   M8  the dirty matrix, each with its undo and a check that nothing is left: a corrupted archive, archives with `../`, usr/bin/systemctl, var/lib/casaos, usr/share/casaos or
+#       etc/casaos/modules, a unit of the same name, dpkg's lock, the flag of the upgrade of the operating system, a full disk, a link in the area of the install, a held package, a package
+#       apt marks as manually installed
+#   M9  the assistant killed (SIGKILL) at each step, the unit stopped during the packages and during the start, a SIGTERM: the job reads interrupted or failed, never succeeded, the box
+#       is quiet, `casaos module remove` finishes what was started and a fresh install goes through
+#   M10 the guest restarts with the module installed: its unit is enabled and active again, the route answers, the remove works
+#   M11 the invariance: /etc, /var/lib/dpkg and the rest differ only by the module's packages, the files they own and what the assistant keeps
+#
+#   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64
+# `legs` chooses the cells (scripts/module-proof-legs.json): all of them or one.
+#
+# It needs a release whose core has the assistant (the first core that has `casaos module`): `tag` is the installer release under test, and a release whose core is older is an INVALID RUN
+# that says so before anything else runs. `module_ref` is the git ref of the module's repository that is built (main by default). The guest needs the network: the mirrors of the system,
+# and the module's packages. It publishes nothing and changes nothing outside the guests. By hand only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The installer release to install, a tag of this repository (a pre-release when it is a candidate); empty for the latest published release
+        required: false
+        default: ''
+        type: string
+      module_ref:
+        description: The git ref of ReCasaOS/CasaOS-VirtManagement to build the module from
+        required: false
+        default: main
+        type: string
+      legs:
+        description: Which legs to run, all of them or one (d12 is Debian 12, u24 is Ubuntu 24.04)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - d12
+          - u24
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: The legs of this run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    env:
+      LEGS: ${{ inputs.legs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The legs this run proves
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >>"${GITHUB_OUTPUT}"
+          import json
+          import os
+          want = os.environ["LEGS"]
+          chosen = [c for c in json.load(open("scripts/module-proof-legs.json")) if want == "all" or c["leg"] == want]
+          if not chosen:
+              raise SystemExit("no leg is %r" % want)
+          print("matrix=" + json.dumps({"include": chosen}, separators=(",", ":")))
+          PY
+          echo "legs of this run: ${LEGS}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  vm:
+    name: ${{ matrix.leg }}, ${{ matrix.name }}, ${{ matrix.label }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      PYTHONDONTWRITEBYTECODE: "1"
+      TAG: ${{ inputs.tag }}
+      MODULE_REF: ${{ inputs.module_ref }}
+      LEG: ${{ matrix.leg }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      OUT: ${{ github.workspace }}/out
+      KIT: ${{ github.workspace }}/kit
+      SSH_CONFIG: ssh_config
+      GW_PORT: "8080"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # the runner's temporary directory is not a context a job-level `env` may name: it is set here, for the steps that follow
+      - name: Where the runner keeps the token of the box's user
+        run: |
+          set -euo pipefail
+          echo "WORK=${RUNNER_TEMP}/mp-work" >>"${GITHUB_ENV}"
+
+      - name: The proof can say no
+        run: |
+          set -euo pipefail
+          python3 scripts/test-module-proof.py
+          bash -n scripts/module-proof.sh
+          bash -n scripts/os-readiness-proof.sh
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ReCasaOS/CasaOS-VirtManagement
+          ref: ${{ inputs.module_ref }}
+          path: module
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: module/go.mod
+          cache: false
+
+      - name: Build the module and the kit
+        run: |
+          set -euo pipefail
+          bash scripts/module-proof.sh build-kit module kit
+          echo "module: ${MODULE_REF} at $(git -C module rev-parse HEAD)" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG}" ]; then
+            TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          fi
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
+          # a candidate is a pre-release: GitHub does not call it the latest release, so nothing installs it by itself
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo "TAG=${TAG}" >>"${GITHUB_ENV}"
+          mkdir published
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256 -p components.lock
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          # The runner's apt sometimes stalls without a word (it has taken a whole job
+          # before): a few bounded tries, for that and for nothing else.
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize disk.img 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8080-:80 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      # The values reach the guest through the environment of the job, which the matrix of this file sets; none of them is typed by whoever dispatches the run
+      # (the tag is checked against the shape of a release tag before it is used, and reaches nothing but gh and the installer's file name; the ref of the module reaches the checkout).
+      - name: Prepare the guest
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          INSTALL_SH=published/install.sh COMPONENTS_LOCK_FILE=published/components.lock bash scripts/module-proof.sh prepare
+
+      - name: Prove it
+        timeout-minutes: ${{ matrix.prove_timeout }}
+        run: |
+          set -euo pipefail
+          bash scripts/module-proof.sh run "${LEG}"
+
+      # Red for a verdict that fails and for a run that proves nothing alike.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          if ! { test -s out/timeline.tsv || test -s out/aborted || test -s out/guest/aborted; }; then
+            { echo "the run left no evidence: nothing to report"; cat out/aborted out/guest/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          python3 scripts/module-proof-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: What the machine says when it is not well
+        if: always()
+        run: |
+          ssh -F ssh_config vm 'sudo sh /usr/local/lib/mp/guest.sh diag' || true
+          tail -30 serial.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: module-proof-${{ matrix.leg }}
+          path: |
+            out
+            kit/kit.json
+            kit/binary-version
+            serial.log
+          if-no-files-found: ignore
