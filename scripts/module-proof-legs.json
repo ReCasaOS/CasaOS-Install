@@ -1,4 +1,5 @@
 [
   {"leg": "d12", "name": "Debian 12", "label": "the module on a Debian 12 guest, libvirt's test driver", "id": "debian", "version": "12", "base": "https://cloud.debian.org/images/cloud/bookworm/latest", "image": "debian-12-genericcloud-amd64.qcow2", "sums": "SHA512SUMS", "algo": "sha512sum", "timeout": 340, "prove_timeout": 270},
-  {"leg": "u24", "name": "Ubuntu 24.04", "label": "the module on an Ubuntu 24.04 guest, libvirt's test driver", "id": "ubuntu", "version": "24.04", "base": "https://cloud-images.ubuntu.com/releases/24.04/release", "image": "ubuntu-24.04-server-cloudimg-amd64.img", "sums": "SHA256SUMS", "algo": "sha256sum", "timeout": 340, "prove_timeout": 270}
+  {"leg": "u24", "name": "Ubuntu 24.04", "label": "the module on an Ubuntu 24.04 guest, libvirt's test driver", "id": "ubuntu", "version": "24.04", "base": "https://cloud-images.ubuntu.com/releases/24.04/release", "image": "ubuntu-24.04-server-cloudimg-amd64.img", "sums": "SHA256SUMS", "algo": "sha256sum", "timeout": 340, "prove_timeout": 270},
+  {"leg": "u22", "name": "Ubuntu 22.04", "label": "the module on an Ubuntu 22.04 guest, libvirt's test driver", "id": "ubuntu", "version": "22.04", "base": "https://cloud-images.ubuntu.com/releases/22.04/release", "image": "ubuntu-22.04-server-cloudimg-amd64.img", "sums": "SHA256SUMS", "algo": "sha256sum", "timeout": 340, "prove_timeout": 270}
 ]

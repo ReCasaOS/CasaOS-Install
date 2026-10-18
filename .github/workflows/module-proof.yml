@@ -32,7 +32,7 @@ name: module-proof
 #   M10 the guest restarts with the module installed: its unit is enabled and active again, the route answers, the remove works
 #   M11 the invariance: /etc, /var/lib/dpkg and the rest differ only by the module's packages, the files they own and what the assistant keeps
 #
-#   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64
+#   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64            u22  Ubuntu 22.04 amd64
 # `legs` chooses the cells (scripts/module-proof-legs.json): all of them or one.
 #
 # It needs a release whose core has the assistant (the first core that has `casaos module`): `tag` is the installer release under test, and a release whose core is older is an INVALID RUN
@@ -53,7 +53,7 @@ on:
         default: main
         type: string
       legs:
-        description: Which legs to run, all of them or one (d12 is Debian 12, u24 is Ubuntu 24.04)
+        description: Which legs to run, all of them or one (d12 is Debian 12, u24 is Ubuntu 24.04, u22 is Ubuntu 22.04)
         required: false
         default: all
         type: choice
@@ -61,6 +61,7 @@ on:
           - all
           - d12
           - u24
+          - u22
 
 permissions:
   contents: read

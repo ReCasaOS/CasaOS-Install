@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn what module-proof.sh wrote into verdicts, or say the run is invalid.
 
-    module-proof-report.py <out dir> <d12|u24>
+    module-proof-report.py <out dir> <d12|u24|u22>
 
 Prints a markdown report (and writes it to <out dir>/report.md).
 
@@ -9,7 +9,7 @@ Exit status: 0 only when no verdict is a FAIL and the run is valid. 1 for a FAIL
 broke: the run stopped early, the release has no assistant, a mirror or the network of the runner failed, the guest did not boot, an undo failed, a snapshot of the guest is missing).
 An invalid run proves nothing and is never green. NOT TESTABLE is neutral and visible: a case whose precondition this guest could not reach, with the reason; it is never a pass.
 
-What the runner did (module-proof.sh), on a fresh Debian 12 or Ubuntu 24.04 cloud image with the release of ReCasaOS under test installed by its installer, with the virtual machine module
+What the runner did (module-proof.sh), on a fresh Debian 12, Ubuntu 24.04 or Ubuntu 22.04 cloud image with the release of ReCasaOS under test installed by its installer, with the virtual machine module
 built from a git ref of its repository, put in an archive of the shape of its release, named by a test catalogue, and installed with libvirt's test driver (no KVM), by hand and through
 the core's API, with the guest asked for what only it can say (snapshots of the machine, the markers of the log, the units):
 
@@ -38,14 +38,14 @@ import time
 from datetime import datetime
 
 if len(sys.argv) != 3:
-    print("usage: module-proof-report.py <out dir> <d12|u24>", file=sys.stderr)
+    print("usage: module-proof-report.py <out dir> <d12|u24|u22>", file=sys.stderr)
     sys.exit(2)
 out_dir, leg = sys.argv[1], sys.argv[2]
 
 # ---- what the assistant and the core promise (docs/os-modules.md of the core, pkg/modulecmd, pkg/osmodule) -------------------------------------------------------
 
 MIN_CORE = (0, 4, 75)                         # the first core that has `casaos module`
-LEGS = {"d12": ("debian", "12"), "u24": ("ubuntu", "24.04")}
+LEGS = {"d12": ("debian", "12"), "u24": ("ubuntu", "24.04"), "u22": ("ubuntu", "22.04")}
 CHECKS = ("catalogue", "os", "arch", "recasaos", "already_installed", "foreign_unit", "busy", "dpkg_state", "disk", "apt")
 INSTALL_STEPS = ("packages", "download", "verify", "unpack", "units", "manifest", "start", "route")
 REMOVE_STEPS = ("stop", "files", "manifest", "reload")
@@ -635,7 +635,7 @@ def module_entry(listing, name="virt"):
 
 try:
     if leg not in LEGS:
-        invalid("the leg is d12 or u24, not %r" % leg)
+        invalid("the leg is d12, u24 or u22, not %r" % leg)
         finish()
     marks, first_mark = timeline()
     aborted = " ".join(read("aborted").split())

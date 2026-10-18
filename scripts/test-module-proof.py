@@ -93,7 +93,7 @@ MODULE_JSON = """{
     "arm64": ["qemu-system-arm", "qemu-efi-aarch64"]
   },
   "min_recasaos": "0.5.23",
-  "os": ["debian:12", "debian:13", "ubuntu:24.04", "ubuntu:26.04"]
+  "os": ["debian:12", "debian:13", "ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04"]
 }
 """
 UNIT_TEXT = """[Unit]
@@ -245,7 +245,7 @@ def context_problems(workflow):
 # ---- the guest and its core: the answers of the real ones --------------------------------------------------------------------------------------------
 
 EPOCH0 = 1790000000.0
-OS_BY_LEG = {"d12": ("debian", "12"), "u24": ("ubuntu", "24.04")}
+OS_BY_LEG = {"d12": ("debian", "12"), "u24": ("ubuntu", "24.04"), "u22": ("ubuntu", "22.04")}
 CORE_UNITS = ["casaos.service", "casaos-gateway.service", "casaos-user-service.service", "casaos-message-bus.service", "casaos-local-storage.service", "casaos-app-management.service", "rclone.service"]
 BASE_PKGS = ["libc6", "systemd", "apt", "dash", "curl", "openssh-server", "docker-ce", "samba", "python3", "cloud-image-utils"]
 DEPS = {"libvirt-daemon-system": ["libvirt-daemon", "libvirt-daemon-driver-qemu", "libvirt-daemon-config-network"], "qemu-system-x86": ["qemu-system-common", "qemu-system-data", "qemu-block-extra"],
@@ -1851,10 +1851,10 @@ def static_checks():
             print(e)
         check("the helper of the runner is Python that compiles", ok)
     legs = json.load(open(LEGS_JSON))
-    check("the legs file names the two legs, with what the workflow needs", [l["leg"] for l in legs] == ["d12", "u24"] and all(
+    check("the legs file names the three legs, with what the workflow needs", [l["leg"] for l in legs] == ["d12", "u24", "u22"] and all(
         {"leg", "name", "label", "id", "version", "base", "image", "sums", "algo", "timeout", "prove_timeout"} <= set(l) for l in legs), "")
     check("the proof step has less time than the job", all(l["prove_timeout"] < l["timeout"] for l in legs) and all(l["timeout"] <= 360 for l in legs), "")
-    check("the legs are the systems the module supports", [(l["id"], l["version"]) for l in legs] == [("debian", "12"), ("ubuntu", "24.04")] and all("amd64" in l["image"] for l in legs), "")
+    check("the legs are the systems the module supports", [(l["id"], l["version"]) for l in legs] == [("debian", "12"), ("ubuntu", "24.04"), ("ubuntu", "22.04")] and all("amd64" in l["image"] for l in legs), "")
     try:
         import yaml
         wf = yaml.safe_load(open(WORKFLOW, encoding="utf-8"))
@@ -1864,7 +1864,7 @@ def static_checks():
         triggers = wf.get("on", wf.get(True))
         check("the workflow is dispatched by hand only, with the tag, the ref of the module and the legs", list(triggers) == ["workflow_dispatch"] and set(triggers["workflow_dispatch"]["inputs"]) == {"tag", "module_ref", "legs"}, str(triggers))
         check("the module ref defaults to main", triggers["workflow_dispatch"]["inputs"]["module_ref"]["default"] == "main", "")
-        check("the legs the workflow offers are the legs of the file", triggers["workflow_dispatch"]["inputs"]["legs"]["options"] == ["all", "d12", "u24"], "")
+        check("the legs the workflow offers are the legs of the file", triggers["workflow_dispatch"]["inputs"]["legs"]["options"] == ["all", "d12", "u24", "u22"], "")
         text = open(WORKFLOW, encoding="utf-8").read()
         check("the workflow publishes nothing", not re.search(r"gh release (create|upload|edit)|git push|actions/(create-release|upload-release)", text), "")
         check("the workflow runs this test, the script and the report", "test-module-proof.py" in text and "module-proof.sh" in text and "module-proof-report.py" in text, "")
@@ -2392,17 +2392,19 @@ def main():
         return
     keep = KEEP
     if keep and os.path.isdir(os.path.join(keep, "d12")) and os.environ.get("REPORT_ONLY"):
-        base_d12, base_u24 = os.path.join(keep, "d12"), os.path.join(keep, "u24")
+        base_d12, base_u24, base_u22 = os.path.join(keep, "d12"), os.path.join(keep, "u24"), os.path.join(keep, "u22")
     else:
         base_d12, w12, proc12 = run_script(kit, "d12", "")
         base_u24, w24, proc24 = run_script(kit, "u24", "")
+        base_u22, w22, proc22 = run_script(kit, "u22", "")
         healthy_checks("d12", base_d12, w12, proc12, "d12")
         healthy_checks("u24", base_u24, w24, proc24, "u24")
+        healthy_checks("u22", base_u22, w22, proc22, "u22")
         if keep:
-            for n, src in (("d12", base_d12), ("u24", base_u24)):
+            for n, src in (("d12", base_d12), ("u24", base_u24), ("u22", base_u22)):
                 shutil.rmtree(os.path.join(keep, n), ignore_errors=True)
                 shutil.copytree(src, os.path.join(keep, n))
-    for leg, base in (("d12", base_d12), ("u24", base_u24)):
+    for leg, base in (("d12", base_d12), ("u24", base_u24), ("u22", base_u22)):
         rc_, text = report(base, leg)
         check("a healthy %s leg passes, every case by name" % leg, rc_ == 0 and head(text) == "PASS" and all(verdict_line(text, n) and verdict_line(text, n)[0] == "PASS" for n in EXPECTED), text[:2500])
         check("a healthy %s leg prints the first real-guest numbers" % leg, all(k in text for k in ("The first real-guest numbers", "time of the plan", "install by hand, seconds per step", "remove through the API",
@@ -2413,7 +2415,7 @@ def main():
         return
     scenarios(kit)
     if not keep:
-        for d in (os.path.dirname(base_d12), os.path.dirname(base_u24), os.path.dirname(kit)):
+        for d in (os.path.dirname(base_d12), os.path.dirname(base_u24), os.path.dirname(base_u22), os.path.dirname(kit)):
             shutil.rmtree(d, ignore_errors=True)
 
 

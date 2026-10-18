@@ -1946,7 +1946,7 @@ cleanup() {
 
 runner_run() {
     local leg="${1:-}"
-    case "${leg}" in d12 | u24) ;; *) echo "usage: $0 run d12|u24" >&2; exit 2 ;; esac
+    case "${leg}" in d12 | u24 | u22) ;; *) echo "usage: $0 run d12|u24|u22" >&2; exit 2 ;; esac
     set -u
     init_out
     rm -f "${WORK}"/pending-*
@@ -2034,7 +2034,7 @@ main() {
     guest-prepare) guest_prepare ;;
     prepare) runner_prepare ;;
     run) shift; runner_run "$@" ;;
-    *) echo "usage: $0 build-kit MODULE_DIR KIT_DIR | guest-prepare | prepare | run d12|u24" >&2; exit 2 ;;
+    *) echo "usage: $0 build-kit MODULE_DIR KIT_DIR | guest-prepare | prepare | run d12|u24|u22" >&2; exit 2 ;;
     esac
 }
 
