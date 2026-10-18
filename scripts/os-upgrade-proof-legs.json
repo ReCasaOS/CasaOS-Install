@@ -1,0 +1,4 @@
+[
+  {"leg": "core", "name": "Debian 11", "label": "the path of a person who runs the upgrade: switch, refresh, plan, rehearsal, refusals, call-off, the hop", "id": "debian", "version": "11", "base": "https://cloud.debian.org/images/cloud/bullseye/latest", "image": "debian-11-genericcloud-amd64.qcow2", "sums": "SHA512SUMS", "algo": "sha512sum", "args": "--use-debian-archive", "docker_from": "28.0.4", "timeout": 270, "prove_timeout": 230},
+  {"leg": "faults", "name": "Debian 11", "label": "the hop with faults: a killed unit, a cut network, a power cut", "id": "debian", "version": "11", "base": "https://cloud.debian.org/images/cloud/bullseye/latest", "image": "debian-11-genericcloud-amd64.qcow2", "sums": "SHA512SUMS", "algo": "sha512sum", "args": "--use-debian-archive", "docker_from": "28.0.4", "timeout": 350, "prove_timeout": 310}
+]

@@ -1,0 +1,260 @@
+name: os-upgrade-proof
+
+# Proof that the ENGINE of the operating system upgrade (the unit that runs the blocks of the hop under systemd, the core that reads its log and answers the page's calls:
+# /v1/sys/os/upgrade/{status,beta,refresh,plan,start,abort,ack,reboot,resume}) does what it says, on a real Debian 11 guest that boots, through a real restart, and with real faults.
+# The commands of the hop were measured (os-upgrade-measure.yml) and its plan was proved (os-plan-proof.yml); the machinery around the commands was only ever run with stand-ins. This is
+# the proof that has to be green before the feature is switched on, on a machine that matters.
+#
+# Each leg is a QEMU guest booted with KVM from the Debian 11 cloud image (the way os-plan-proof.yml and os-upgrade-measure.yml boot theirs), with a QEMU monitor and two forwards: ssh,
+# and the gateway of ReCasaOS. scripts/os-upgrade-proof.sh installs Docker 28.0.4 and the published ReCasaOS release on it as os-plan-proof.sh does, starts the witness containers, puts
+# the timers of apt on (quiet), and then, from the RUNNER (the guest restarts, is reset and has its network cut in the middle of a case, and the evidence has to be on the side that
+# survives it), drives the engine through the gateway with the token of a login of the box's own, the way the page does, and asks the guest only for what only it can say (snapshots of
+# the machine, the busy flag, the boot id). scripts/os-upgrade-proof-report.py judges what was recorded (PASS, FAIL, NOT TESTABLE with its reason, or INVALID RUN) and fails the job for a
+# FAIL and for an INVALID RUN alike. Nothing is judged in the guest, and a step whose undo failed is an INVALID RUN, never a FAIL of the engine.
+#
+#   core    the path of a person who runs the upgrade, in this order, each case leaving the machine as the next one needs it:
+#           C1 flag off      the CONTROL window (what the box changes by itself), then with /etc/casaos/os-upgrade.beta absent: POST start and POST refresh answer 409 beta_off, the status
+#                            is idle with beta_enabled false, nothing of the engine was made or started
+#           C2 switch on     POST beta {enabled:true}: the file is there, the status says so
+#           C3 refresh       refreshing, then refreshed (or reboot_first: the restart is made and the run closed): the sources and the timers of apt as they were, no package removed,
+#                            the busy flag there while it works and gone when it is done
+#           C4 plan, rehearsal   the plan, a rehearsal to rehearsed (the sources of Debian 12 in place, the timers stopped, held for at most 30 minutes), the discard, rehearsal_done:
+#                            the machine as before (the hash of /etc/apt, the timers, no new package), the close
+#           C5 refusals      a wrong hostname (hostname_mismatch), a missing acknowledgement (acks_missing), a start while dpkg's lock is held, a second start while a run is open
+#                            (run_open), and the page's PUT /v1/sys/state/restart while the unit works (os_upgrade_open, and the guest does not restart)
+#           C6 call-off      the hop is started and called off in block 3 or 4: the machine is put back, the run is failed with the class abort, the close
+#           C7 the hop       the real one: the blocks in their order, awaiting_reboot with the checks green, the restart (the boot id changes), resuming, verifying, succeeded or
+#                            succeeded_with_findings (the findings are printed), the close: Debian 12, a newer kernel, sshd and the ReCasaOS services, the witness containers, the timers
+#                            of apt, no unit failed that was not failed before, the backup folder moved into the run's folder; and the first real numbers of the engine (seconds per
+#                            block, bytes downloaded, free space, the kernels, the time the guest was away, the time from the restart to the verdict)
+#   faults  only after core is green (a failing core leg cancels it), each fault from a snapshot of the whole guest (memory included, so the plan is still live) taken after C4, with the clock of the
+#           restored guest set from the runner's (it is the snapshot's, behind the Release files of the mirrors) before anything else is asked of it:
+#           F1 the unit killed in block 3 or 4: interrupted, the core puts the machine back by itself, failed, the machine as before
+#           F2 the unit killed after the point of no return, once dpkg is seen at work: interrupted, NO repair by itself (the shipped setting allows none), resume, awaiting_reboot, the restart, succeeded
+#           F3 the network cut after the point of no return: stopped_at_waypoint of the class network, the network back, resume, awaiting_reboot, the restart, succeeded
+#           F4 a power cut (the QEMU monitor's reset) in block 6, once dpkg is seen at work: interrupted (power), half upgraded, resume: success, or the precise class it stops at (printed: nobody has seen this)
+# A fault whose precondition the guest cannot reach (dpkg never seen at work, the hop over before the fault is due) is NOT TESTABLE with the reason, never skipped silently.
+#
+# It needs a release whose core has the engine (v0.5.29 or later): a 404 on /v1/sys/os/upgrade/status is an INVALID RUN that says so. `tag` is the installer release under test (a
+# pre-release is proved by its tag; empty for the latest published release). The guest needs the network: the mirrors of Debian 11 (deb.debian.org, archive.debian.org for its security
+# line) and of Debian 12. It publishes nothing and changes nothing outside the guests. By hand only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The installer release to install, a tag of this repository (a pre-release when it is a candidate); empty for the latest published release
+        required: false
+        default: ''
+        type: string
+      legs:
+        description: Which legs to run, all of them (core first, then faults) or one
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - core
+          - faults
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: The legs of this run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    env:
+      LEGS: ${{ inputs.legs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The legs this run proves
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >>"${GITHUB_OUTPUT}"
+          import json
+          import os
+          want = os.environ["LEGS"]
+          chosen = [c for c in json.load(open("scripts/os-upgrade-proof-legs.json")) if want == "all" or c["leg"] == want]
+          if not chosen:
+              raise SystemExit("no leg is %r" % want)
+          print("matrix=" + json.dumps({"include": chosen}, separators=(",", ":")))
+          PY
+          echo "legs of this run: ${LEGS}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  vm:
+    name: ${{ matrix.leg }}, ${{ matrix.name }}, ${{ matrix.label }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      # one leg at a time, core first: a core leg that fails cancels the faults leg that waits behind it
+      fail-fast: true
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      PYTHONDONTWRITEBYTECODE: "1"
+      TAG: ${{ inputs.tag }}
+      LEG: ${{ matrix.leg }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      INSTALLER_ARGS: ${{ matrix.args }}
+      DOCKER_FROM: ${{ matrix.docker_from }}
+      OUT: ${{ github.workspace }}/out
+      SSH_CONFIG: ssh_config
+      GW_PORT: "8080"
+      MON_SOCK: mon.sock
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The proof can say no
+        run: |
+          set -euo pipefail
+          # the test reads this workflow with PyYAML, to hold every expression of it to the places where GitHub has its contexts
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y -qq python3-yaml
+          python3 scripts/test-os-upgrade-proof.py
+          bash -n scripts/os-upgrade-proof.sh
+          bash -n scripts/os-readiness-proof.sh
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG}" ]; then
+            TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          fi
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
+          # a candidate is a pre-release: GitHub does not call it the latest release, so nothing installs it by itself
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo "TAG=${TAG}" >>"${GITHUB_ENV}"
+          mkdir published
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          # the guest's disk goes where there is more room: the snapshot of the whole machine and the hop's downloads need it (the report prints the free space)
+          df -h . /mnt | tee host-df-start.txt
+          here="$(df -Pm . | awk 'NR == 2 {print $4}')"
+          there="$(df -Pm /mnt | awk 'NR == 2 {print $4}')"
+          disk_dir="${PWD}"
+          if [ "${there}" -gt "${here}" ]; then
+            sudo mkdir -p /mnt/oup
+            sudo chown "$(id -u):$(id -g)" /mnt/oup
+            disk_dir=/mnt/oup
+          fi
+          echo "DISK_DIR=${disk_dir}" >>"${GITHUB_ENV}"
+          echo "the guest's disk is in ${disk_dir}: ${here} MB free here, ${there} MB on /mnt"
+          curl -fsSL -o "${disk_dir}/disk.img" "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | (cd "${disk_dir}" && "${ALGO}" --check)
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          # The runner's apt sometimes stalls without a word (it has taken a whole job
+          # before): a few bounded tries, for that and for nothing else.
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          # the snapshot of the whole machine (savevm) needs every writable disk to be a qcow2, and the seed is only read
+          qemu-img convert -f raw -O qcow2 seed.img seed.qcow2
+          qemu-img resize "${DISK_DIR}/disk.img" 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -monitor "unix:${PWD}/mon.sock,server,nowait" \
+            -drive file="${DISK_DIR}/disk.img",if=virtio,format=qcow2 \
+            -drive file=seed.qcow2,if=virtio,format=qcow2,readonly=on \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8080-:80 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      # The values reach the guest through the environment of the job, which the matrix of this file sets; none of them is typed by whoever dispatches the run
+      # (the tag is checked against the shape of a release tag before it is used, and reaches nothing but gh and the installer's file name).
+      - name: Prepare the guest
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          INSTALL_SH=published/install.sh bash scripts/os-upgrade-proof.sh prepare
+
+      - name: Prove it
+        timeout-minutes: ${{ matrix.prove_timeout }}
+        run: |
+          set -euo pipefail
+          bash scripts/os-upgrade-proof.sh run "${LEG}"
+
+      # Red for a verdict that fails and for a run that proves nothing alike.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp host-df-start.txt out/ 2>/dev/null || true
+          df -h . /mnt >out/host-df-end.txt 2>&1 || true
+          if ! { test -s out/timeline.tsv || test -s out/aborted || test -s out/guest/aborted; }; then
+            { echo "the run left no evidence: nothing to report"; cat out/aborted out/guest/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          python3 scripts/os-upgrade-proof-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: What the machine says when it is not well
+        if: always()
+        run: |
+          ssh -F ssh_config vm 'sudo sh /usr/local/lib/oup/guest.sh diag' || true
+          tail -30 serial.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: os-upgrade-proof-${{ matrix.leg }}
+          path: |
+            out
+            serial.log
+          if-no-files-found: ignore
