@@ -1487,6 +1487,15 @@ try:
             return None
         return sorted(v) if isinstance(v, list) and all(isinstance(x, str) for x in v) else None
 
+    # a case that leaves the box broken (dpkg interrupted, a fresh install refused) makes the next ones unreachable: they are said once, as the consequence of the first, not as INVALID each
+    cascade = {"by": None, "lost": []}
+
+    def unreached(title, reason):
+        if cascade["by"]:
+            cascade["lost"].append(title)
+        else:
+            invalid("%s: %s" % (title, reason))
+
     def judge_m9_case(cid, mode, step):
         title = {"kill": "M9 SIGKILL at the step %s", "stop": "M9 systemctl stop during the step %s", "term": "M9 SIGTERM at the step %s"}[mode] % step
         if not gate("M9_" + cid, title):
@@ -1518,19 +1527,19 @@ try:
             if final is not None and final.state == "succeeded":
                 not_testable(title, "the install was over when the watcher went for the assistant (it saw the step begin, and no process was left to signal): the step is shorter than the watcher's look")
             else:
-                invalid("%s: %s" % (title, w["noproc"]))
+                unreached(title, w["noproc"])
             return
         if "never" in w:
             if final is not None and final.state == "succeeded":
                 not_testable(title, "the install went through step %s without the watcher (a look every 20 ms) seeing it begin: the step is shorter than that" % step)
             else:
-                invalid("%s: the install ended (%s%s) without reaching the step: %s" % (title, final.state if final else "no answer", " " + final.code if final and final.code != "-" else "", w["never"]))
+                unreached(title, "the install ended (%s%s) without reaching the step: %s" % (final.state if final else "no answer", " " + final.code if final and final.code != "-" else "", w["never"]))
             return
         if mode == "stop" and "stopped" not in w:
-            invalid("%s: the watcher did not stop the unit: %s" % (title, cell(watch_res.out, 120)))
+            unreached(title, "the watcher did not stop the unit: %s" % cell(watch_res.out, 120))
             return
         if mode in ("kill", "term") and w.get("signalled", {}).get("rc") != "0":
-            invalid("%s: the signal could not be sent: %s" % (title, cell(watch_res.out, 120)))
+            unreached(title, "the signal could not be sent: %s" % cell(watch_res.out, 120))
             return
         seen = landed_in(w.get("seen"))
         after_ = landed_in(w.get("after"))
@@ -1606,6 +1615,8 @@ try:
             c.note("the kill left %d things on the box" % len(dead.footprint()))
         c.note("the signal landed: %s" % (cell(w.get("after") if mode == "kill" else w.get("seen"), 90)))
         if c.fails:
+            if cascade["by"] is None and (dead.get("dpkg_audit") != "0" or clean.get("dpkg_audit") != "0" or fr.rc != 0):
+                cascade["by"] = title
             c.done()
         elif not within:
             not_testable(title, "%s; what was checked held (%d checks), for the step it did land in" % (why, c.passed))
@@ -1615,6 +1626,14 @@ try:
     def judge_m9():
         for cid, mode, step in M9_CASES:
             judge_m9_case(cid, mode, step)
+        short = [v[1][len("M9 SIGKILL at the step "):] for v in verdicts if v[0] == "NOT TESTABLE" and v[1].startswith("M9 SIGKILL at the step ")]
+        if short:
+            notes.append("M9 SIGKILL at the step(s) %s is NOT TESTABLE on a real guest: the module's archive is a local file (no download to slow down), so those steps last milliseconds, shorter than any watcher; "
+                         "throttling the network cannot reach them, and a stall (chattr, a lock) would test the stall, not the step." % ", ".join(short))
+
+    def report_cascade():
+        if cascade["lost"]:
+            not_testable("NOT REACHED: " + "; ".join(cascade["lost"]), "consequence of the failure of %s, which left the box broken: they never started" % cascade["by"])
 
     # ---- M10 -----------------------------------------------------------------------------------------------------------------------------
 
@@ -1630,7 +1649,7 @@ try:
         if not all((before, after, removed, inst, status, rm, fp, host)):
             return
         if inst.rc != 0 or before.get("unit_active") != "active":
-            invalid("M10: the module was not installed and running before the restart (install: %s, unit %s)" % (inst.shown(), before.get("unit_active")))
+            unreached("M10", "the module was not installed and running before the restart (install: %s, unit %s)" % (inst.shown(), before.get("unit_active")))
             return
         c = Case("M10 the restart")
         old = one(read("m10-reboot.boot-old"))
@@ -1664,7 +1683,8 @@ try:
     ALLOWED_ETC = [r"^/etc/(passwd|group|shadow|gshadow|subuid|subgid)-?$", r"^/etc/alternatives(/|$)", r"^/etc/ld\.so\.cache$", r"^/etc/\.pwd\.lock$", r"^/etc/systemd/system/[^/]*\.wants(/|$)",
                    r"^/etc/systemd/system/[^/]*\.requires(/|$)", r"^/etc/libvirt(/|$)", r"^/etc/qemu(/|$)", r"^/etc/apparmor\.d(/|$)", r"^/etc/apparmor(/|$)", r"^/etc/dbus-1(/|$)",
                    r"^/etc/ssl(/|$)", r"^/etc/sasl2(/|$)", r"^/etc/default(/|$)", r"^/etc/logrotate\.d(/|$)", r"^/etc/sysctl\.d(/|$)", r"^/etc/modprobe\.d(/|$)", r"^/etc/modules-load\.d(/|$)",
-                   r"^/etc/security(/|$)", r"^/etc/polkit-1(/|$)", r"^/etc/ssh(/|$)", r"^/etc/mailcap(\.order)?$", r"^/etc/(passwd|group)\.lock$", r"^/etc/casaos/modules$"]
+                   # /etc/dnsmasq.d/libvirt-daemon: made by the postinst of the libvirt packages on Ubuntu (their dnsmasq drop-in), listed by no package: the only file of that kind the recorded run showed
+                   r"^/etc/dnsmasq\.d/libvirt-daemon$", r"^/etc/security(/|$)", r"^/etc/polkit-1(/|$)", r"^/etc/ssh(/|$)", r"^/etc/mailcap(\.order)?$", r"^/etc/(passwd|group)\.lock$", r"^/etc/casaos/modules$"]
     ALLOWED_NAMES = [r"^/DATA/VM(/|$)", r"^/var/lib/casaos/modules(/|$)", r"^/etc/casaos/modules$", r"^/var/log/casaos/(module-virt|virt-management)", r"^/var/(lib/dpkg|lib/apt|cache/apt|log/apt)(/|$)",
                      r"^/etc(/|$)"]
 
@@ -1711,7 +1731,7 @@ try:
         c.check(not removed, "no package was removed", "none", few(removed))
         c.check(set(changed) - noise_pk <= planned, "the packages whose version changed are the ones the plan said it would upgrade", few(sorted(planned & set(changed))) or "none", few(sorted(set(changed) - noise_pk - planned)))
         c.check(set(added) - noise_pk <= planned, "the packages that are new are the ones the plan said it would install", few(sorted(planned)[:6]), few(sorted(set(added) - noise_pk - planned)))
-        c.check(set(PKGS) <= set(ie), "the packages of the manifest are installed", few(PKGS), few(sorted(set(PKGS) - set(ie))))
+        c.check(set(PKGS) <= set(ie), "the packages of the manifest are installed (%s)" % few(PKGS), "none missing", "missing: " + few(sorted(set(PKGS) - set(ie))))
         c.note("%d new packages, %d upgraded" % (len(added), len(changed)))
         if unseated & set(ia):
             c.note("the proof's own removals took along: %s" % few(sorted(unseated & set(ia))))
@@ -1751,6 +1771,7 @@ try:
     for fn, cid in ((judge_m1, "M1"), (judge_m2, "M2"), (judge_m3, "M3"), (judge_m4, "M4"), (judge_m5, "M5"), (judge_m6, "M6"), (judge_m7, "M7"), (judge_m8, "M8"), (judge_m9, "M9"),
                     (judge_m10, "M10"), (judge_m11, "M11")):
         run_judge(fn, cid)
+    run_judge(report_cascade, "the cascade")
 
     box = {}
     for ln in read("guest/box-facts").splitlines():

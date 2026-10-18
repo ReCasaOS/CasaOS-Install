@@ -1587,7 +1587,7 @@ def judged(label, base_status, rc, text, exp, others_same=True):
     h = head(text)
     if exp.kind == "FAIL":
         line = [ln for ln in text.splitlines() if ln.startswith("- **FAIL** " + exp.name)]
-        ok = bool(line) and rc == 1 and "FAIL" in h and exp.needle in " ".join(line)
+        ok = bool(line) and rc == 1 and "FAIL" in h and "INVALID" not in h and exp.needle in " ".join(line)
         if ok and others_same:
             changed = sorted(n for n, s in st.items() if not n.startswith(exp.name) and not any(n.startswith(a) for a in exp.also) and base_status.get(n) != s)
             ok = not changed
@@ -2283,6 +2283,9 @@ def kill_mutations():
     m("M9 stop: the job is rolled back and the result is another", fails("M9 systemctl stop during the step start", "the RESULT line says failed start interrupted rolled_back"), lambda d: subst(d, "m9-stop-start-log.out", "failed start interrupted rolled_back", "failed start units_failed rolled_back"))
     m("M9 stop at packages: dpkg was not running", not_testable("M9 systemctl stop during the step packages", "dpkg was not running"), lambda d: subst(d, "m9-stop-packages-watch-result.out", "dpkg_seen=yes", "dpkg_seen=no"))
     m("M9 stop at packages: dpkg is left interrupted", fails("M9 systemctl stop during the step packages", "dpkg --audit finds nothing a second after the stop"), lambda d: subst(d, "m9-stop-packages-watch-result.out", "dpkg_audit=0", "dpkg_audit=2"))
+    m("M9 stop at packages: the box left broken is said once, the cases that cannot start after it are not INVALID", fails("M9 systemctl stop during the step packages", "dpkg --audit finds nothing a second after the stop", also=("M9 systemctl stop during the step start", "NOT REACHED")),
+      lambda d: (subst(d, "m9-stop-packages-watch-result.out", "dpkg_audit=0", "dpkg_audit=2"), rc(d, "m9-stop-packages-fresh", 3), write_out(d, "m9-stop-start-watch-result.out", "never saw the step start begin\n"),
+                 set_last(d, "m9-stop-start-job", state="failed", code="packages_failed")))
     m("M9 stop at packages: the job reads succeeded", fails("M9 systemctl stop during the step packages", "never reads succeeded"), lambda d: rows_edit(d, "m9-stop-packages-job", lambda rows: rows + [rows[-1][:COL["state"]] + ["succeeded"] + rows[-1][COL["state"] + 1:]]))
     return M
 
@@ -2312,6 +2315,8 @@ def end_mutations():
     m("M11: a package changed version without the plan", fails("M11 dpkg", "whose version changed"), lambda d: subst(d, "snap-m11-end.dpkg", "libc6\t1.0", "libc6\t2.0"))
     m("M11: a package nobody planned was installed", fails("M11 dpkg", "that are new"), lambda d: add_line(d, "snap-m11-end.dpkg", "nmap\t7.0\tii "))
     m("M11: a package of the manifest is not installed", fails("M11 dpkg", "the packages of the manifest are installed", also=()), lambda d: drop_line(d, "snap-m11-end.dpkg", "ovmf\t"))
+    m("M11: the drop-in that libvirt's own script makes in /etc/dnsmasq.d is explained", passes("M11 /etc"), lambda d: add_line(d, "snap-m11-end.etc", "/etc/dnsmasq.d/libvirt-daemon	abc"))
+    m("M11: another file of /etc/dnsmasq.d is not", fails("M11 /etc", "every file of /etc"), lambda d: add_line(d, "snap-m11-end.etc", "/etc/dnsmasq.d/other	abc"))
     m("M11: a file of /etc that nothing explains", fails("M11 /etc", "every file of /etc"), lambda d: add_line(d, "snap-m11-end.etc", "/etc/cron.d/evil\tabc"))
     m("M11: a file of /etc that was there is gone", fails("M11 /etc", "every file of /etc"), lambda d: drop_line(d, "snap-m11-end.etc", "/etc/hostname\t"))
     m("M11: a name that nothing explains", fails("M11 the rest of the file system", "every name that is new or gone"), lambda d: add_line(d, "snap-m11-end.names", "/usr/bin/stray-program"))
