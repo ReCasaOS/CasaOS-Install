@@ -57,6 +57,20 @@ A new major version (28 to 29) is a bigger step: read Docker's release notes fir
 
 Since v0.5.19 the dashboard's *System packages* update leaves Docker out and shows it on a line of its own, with the command above for the packages it lists. Before, it ran a plain `apt-get upgrade`, which included Docker's packages when Docker's repository was configured, and so could restart Docker and move it to a newer version.
 
+## Optional modules
+
+Some components are optional: they live in a repository of their own, ship their own releases and are installed only when you ask. [docs/modules.md](docs/modules.md) is the contract for a module's author and says what is checked before anything is written to your box.
+
+```bash
+curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash -s -- --module <name>
+```
+
+`--module <name>` (repeat it for more than one) installs the module once ReCasaOS itself is installed and running. Its name is checked before the installer changes anything, and a module that cannot be installed is reported with the step that failed and why, without failing the install of ReCasaOS or changing the installer's exit status; `sudo casaos module remove <name>` cleans up what a failed install left. Every release carries a catalogue of the modules it can install (`modules-catalogue-<tag>.json`, pinned by a SHA-256 written into `install.sh`, like the packages), and a module that is not in it cannot be installed. The installer puts the catalogue in place only after its SHA-256 matches; when it cannot (or when the release has none), the catalogue of an earlier release is removed, so that no module is offered from it, and the installer says so.
+
+**No module is offered yet.** The releases carry no catalogue, so `--module` is refused with a sentence that says so, before anything on the machine is changed. The first module will be `virt` (virtual machines), and it enters a release only after its installation has been proven on Debian 12 and Ubuntu 24.04.
+
+The installer only gives `module` to the core it has just installed and only when that core reports a version that has the command, and a release is only built with a catalogue after the core it pins has been built and its `casaos module list` has been run on that catalogue: an older core would take `module` for a start of the server. `sudo casaos-uninstall` removes the modules before it removes ReCasaOS (see [Uninstall](#uninstall)).
+
 ## Anonymous statistics
 
 A ReCasaOS box sends anonymous statistics, so that the maintainers know how many boxes are running, which release they run, how fast they update after a release, and on what hardware: what GitHub's download counters cannot tell. They are **on by default**, and they say so: at the end of every install and upgrade, in a notice the dashboard shows once, and here. Any one of the three ways below turns them off.
@@ -753,7 +767,7 @@ Nothing is built on a workstation.
 
 1. Each component is tagged and its own workflow publishes tarballs and, except the dashboard, a `checksums.txt`.
 2. Those tags and commits are pinned in [`release/components.env`](release/components.env).
-3. This repository is tagged. Its workflow checks out the six components at the pinned commits, packages their setup scripts as the compatibility overlay, fetches the published digest of every package that has one, mirrors the App Store seed, computes the digest of the dashboard and of the mirrored seed from the packages themselves and of the uninstall script it ships, writes every tag and digest into `install.sh`, and publishes the result. It refuses to produce an installer with a placeholder left unfilled.
+3. This repository is tagged. Its workflow checks out the six components at the pinned commits, packages their setup scripts as the compatibility overlay, fetches the published digest of every package that has one, mirrors the App Store seed, computes the digest of the dashboard and of the mirrored seed from the packages themselves and of the uninstall script it ships, writes every tag and digest into `install.sh`, and publishes the result. It refuses to produce an installer with a placeholder left unfilled, and to build a module catalogue for a release whose core is older than the first one that has `casaos module`, or that does not read the catalogue it is built with when it is built and run.
 
 `scripts/build-release-bundle.sh` is that step. It can be run locally: `WORKSPACE_ROOT` names the directory holding the six component checkouts at the pinned commits, `CHECKSUMS_BASE_URL` is where the six components' `checksums.txt` and the dashboard tarball are downloaded from, and `UPSTREAM_BASE_URL` is where the App Store seed tarball is downloaded from. Both default to GitHub; a `file://` URL pointing at a local tree laid out as `<repo>/releases/download/<tag>/` exercises the whole chain before any release exists.
 
@@ -774,6 +788,8 @@ If something in the code looks wrong, please [open an issue](https://github.com/
 ```bash
 sudo casaos-uninstall
 ```
+
+If optional modules are installed, the uninstaller first removes each one with `casaos module remove <name> --yes` and shows what it says; a module that cannot be removed is reported with the step and the reason, and the uninstall goes on. **What stays on purpose:** the packages the module needed and its data (for the virtual machines module, `/DATA/VM`). The uninstaller prints, at its end, the commands that purge them by hand, and does not run them.
 
 ## History
 
