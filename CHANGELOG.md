@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.37] - 2026-10-19
+
+Components: module `virt` (CasaOS-VirtManagement) `v0.1.3`. Unchanged from v0.5.36: CasaOS `v0.4.77`, CasaOS-UI `v0.4.92`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- **Virtual machines can be created on the NAT network.** `virt` v0.1.3 installs `dnsmasq-base`, which libvirt starts for the network named casaos and only recommends: without it the first machine failed with "Cannot check dnsmasq binary". A box that has `virt` already can run `apt-get install dnsmasq-base`.
+
 ## [0.5.36] - 2026-10-19
 
 Components: CasaOS-UI `v0.4.92`, module `virt` (CasaOS-VirtManagement) `v0.1.2`. Unchanged from v0.5.35: CasaOS `v0.4.77`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
