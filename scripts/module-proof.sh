@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Proof that the module assistant of ReCasaOS (`casaos module list|plan|install|remove|status`, the Modules API of the core, and the transient unit the core starts for an install and a
-# remove) installs, runs and takes off a real module on a real machine that boots, restarts and is made dirty on purpose. The module is the virtual machine module
+# Proof that the module assistant of ReCasaOS (`casaos module list|plan|install|update|remove|status`, the Modules API of the core, and the transient unit the core starts for an install, an
+# update and a remove) installs, runs, updates and takes off a real module on a real machine that boots, restarts and is made dirty on purpose. The module is the virtual machine module
 # (CasaOS-VirtManagement); libvirt answers through its test driver (URI = test:///default), so no KVM is needed inside the guest.
 #
 # Unlike os-plan-proof.sh this script runs ON THE CI RUNNER and drives the guest: the guest is restarted, and a case kills the process that is installing and the unit it runs in, and the
@@ -30,6 +30,10 @@
 #   M9  kills of the assistant at each step, a stop of the unit during the packages and during the start, a SIGTERM
 #   M10 a restart of the guest with the module installed, and the remove after it
 #   M11 the invariance of everything the module does not own
+#   U1..U9 the update of an installed module (after M11, and only on a core that has `casaos module update`, MODULE_UPDATE_MIN_CORE): what the list says of a newer tag, the plan of an
+#       update (and that it writes nothing), the update by hand and through the API (the files, the lists, the manifest and the version swapped, the unit started again), a file the
+#       administrator changed refusing it, a failure putting the old version back byte for byte, a kill leaving a backup that the next run puts back (never half of each version), the
+#       invariance of what the module does not own, and a restart of the guest after it
 #
 # How the test variables reach the core. The assistant honours CASAOS_MODULE_CATALOGUE and CASAOS_MODULE_ARCHIVE_FILE only with CASAOS_MODULE_TEST=1. The commands run by hand get the three
 # in their own environment. The core runs the plan and the list in its own process and the install in a transient unit started by systemd-run, and neither passes anything of its own
@@ -39,8 +43,8 @@
 #
 # Needs, on the runner: bash 5 (EPOCHREALTIME), curl, python3, ssh, scp, timeout, git and go (build-kit). On the guest: what the preparation installs.
 # Environment (runner): OUT (default ./mp-out), WORK (default ./mp-work: the token, never in OUT), KIT (default ./kit), SSH_CONFIG (ssh_config) and SSH_HOST (vm), GW_PORT (8080: the runner's
-# end of the forward to the guest's port 80), CASES (a comma list of the cases to run, m1..m11; all by default; M8_ONLY and M9_ONLY pick among the dirty cases and the kills the same way), MP_FAST and MP_TICK (the tests of this script skip the sleeps and tell
-# their stand-in of the guest how much time went by), PROOF_MODULE_VERSION (0.1.1), MODULE_MIN_CORE (the first core with `casaos module`), and the waits below.
+# end of the forward to the guest's port 80), CASES (a comma list of the cases to run, m1..m11 and u; all by default; M8_ONLY and M9_ONLY pick among the dirty cases and the kills the same way, U_ONLY among u1..u9, U7_ONLY among the kills of the update), MP_FAST and MP_TICK (the tests of this script skip the sleeps and tell
+# their stand-in of the guest how much time went by), PROOF_MODULE_VERSION (0.1.1), PROOF_UPDATE_VERSION (0.1.2), MODULE_MIN_CORE (the first core with `casaos module`), MODULE_UPDATE_MIN_CORE (the first core with `casaos module update`), and the waits below.
 
 # shellcheck disable=SC2034
 # (the fields of a poll are read into J_* whether or not a case looks at each of them)
@@ -58,13 +62,15 @@ GUEST_KIT=/usr/local/lib/mp/kit
 GUEST_TOOLS_DIR=/usr/local/lib/mp
 PROOF_USER=mpproof
 LIST_PATH=/v1/sys/modules
+PROOF_UPDATE_VERSION="${PROOF_UPDATE_VERSION:-0.1.2}"
+UPD_MIN_CORE="${MODULE_UPDATE_MIN_CORE:-v0.4.78}"
 
 # write_mp_py <file>: the JSON of the core's answers and the kit, read and written by Python (the runner has no jq the proof can rely on). Subcommands:
 #   get FILE PATH                         a value of a JSON file by its dotted path ("-" when it is not there)
 #   jobrow FILE HTTP CURL UNIT T0 T1      the row of a poll of the status of a module
 #   snapsplit FILE PREFIX                 the sections of a snapshot into PREFIX.<section> (status 1 when it has no end)
 #   version_ge A B                        status 0 when release A is B or later
-#   kit MODULE_DIR OUT VERSION COMMIT     the archive, the catalogues and kit.json
+#   kit MODULE_DIR OUT VERSION COMMIT UPDATE_VERSION   the archive, the catalogues, the old and the new archive of the update and kit.json
 #   plan_packages FILE                    the packages a plan (a file with its JSON) installs and upgrades, on one line
 write_mp_py() {
     cat >"$1" <<'MP_PY'
@@ -376,11 +382,66 @@ def project_of(component):
     return "".join(("-" + c.lower()) if c.isupper() else c for c in stem).lstrip("-")
 
 
-def cmd_kit(module_dir, out, version, commit):
-    """kit MODULE_DIR OUT VERSION COMMIT: the archive of the module as its release makes it, the test catalogue that names it, a corrupted copy, the hostile archives with a catalogue
-    for each, the list of what the archive puts on a box, the module's packages, the configuration for libvirt's test driver, and kit.json, which the report reads."""
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or not COMMIT_RE.fullmatch(commit):
+# the update: two archives of the module that is the same but for what the update has to swap. The old one (the proof's version) has a second sample that the new one drops; the new one
+# (the update version) has another second sample, a unit file that is not byte for byte the old one's, and a manifest that names one package more. A third archive is the new one with a
+# unit file the system cannot load. Each has a test catalogue (tier community) that names it.
+UPDATE_PACKAGE = "hello"
+LEGACY_SAMPLE = "build/sysroot/etc/casaos/mp-legacy.conf.sample"
+NEXT_SAMPLE = "build/sysroot/etc/casaos/mp-next.conf.sample"
+
+
+def with_data(entries, name, fn):
+    hit = [e for e in entries if e["name"] == name and e["type"] == "f"]
+    if len(hit) != 1:
+        raise Refused("the module has no %s" % name)
+    return [dict(e, data=fn(e["data"])) if e is hit[0] else e for e in entries]
+
+
+def version_files(entries):
+    return [{"path": "/" + e["name"][len("build/sysroot/"):], "sha256": sha256_bytes(e["data"]), "mode": "%o" % e["mode"], "bytes": len(e["data"])}
+            for e in entries if e["type"] == "f" and e["name"].startswith("build/sysroot/")]
+
+
+def update_kit(entries, raw, manifest, project, component, commit, old_tag, new_tag, out):
+    unit_entry = "build/sysroot/usr/lib/systemd/system/" + manifest["unit"]
+    pk = manifest.get("packages", {})
+    if UPDATE_PACKAGE in pk.get("common", []) + pk.get("amd64", []) + pk.get("arm64", []):
+        raise Refused("the module already names %s, which the new version is to add" % UPDATE_PACKAGE)
+    new_manifest = json.loads(json.dumps(manifest))
+    new_manifest.setdefault("packages", {}).setdefault("common", []).append(UPDATE_PACKAGE)
+    new_raw = (json.dumps(new_manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    parse_manifest(new_raw, manifest["name"])
+    old_entries = entries + [entry_file(LEGACY_SAMPLE, ("# the sample of %s, which the next version no longer has\n" % old_tag).encode())]
+    new_entries = with_data(entries, "module.json", lambda _: new_raw)
+    new_entries = with_data(new_entries, unit_entry, lambda d: d + ("# casaos module proof %s\n" % new_tag).encode())
+    new_entries = new_entries + [entry_file(NEXT_SAMPLE, ("# the sample that %s adds\n" % new_tag).encode())]
+    bad_entries = with_data(new_entries, unit_entry, lambda d: re.sub(rb"(?m)^ExecStart=.*$", b"ExecStart=casaos-module-proof-not-absolute", d))
+    if bad_entries == new_entries:
+        raise Refused("the unit file has no `ExecStart=` line to spoil")
+    infos, variants = {}, {}
+    for key, name, tag, ents, man, man_raw in (("old", "uold", old_tag, old_entries, manifest, raw), ("new", "unew", new_tag, new_entries, new_manifest, new_raw),
+                                               ("bad", "ubad", new_tag, bad_entries, new_manifest, new_raw)):
+        blob = tarball(ents)
+        arc, cat = "upd-%s.tar.gz" % key, "catalogue-upd-%s.json" % key
+        write(os.path.join(out, arc), blob)
+        write(os.path.join(out, cat), catalogue_text(man, project, component, tag, commit, sha256_bytes(blob)))
+        mp = man.get("packages", {})
+        infos[key] = {"tag": tag, "archive": {"sha256": sha256_bytes(blob), "bytes": len(blob), "url": asset_url(component, tag, "linux-amd64-casaos-%s-%s.tar.gz" % (project, tag))},
+                      "files": version_files(ents), "manifest_sha256": sha256_bytes(man_raw), "packages": sorted(set(mp.get("common", []) + mp.get("amd64", []))), "catalogue": cat, "archive_file": arc}
+        variants[name] = {"archive": arc, "catalogue": cat}
+    write(os.path.join(out, "upd-packages.list"), (UPDATE_PACKAGE + "\n").encode())
+    infos.update(variants=variants, added=[UPDATE_PACKAGE], legacy_path="/" + LEGACY_SAMPLE[len("build/sysroot/"):], next_path="/" + NEXT_SAMPLE[len("build/sysroot/"):])
+    return infos
+
+
+def cmd_kit(module_dir, out, version, commit, update_version):
+    """kit MODULE_DIR OUT VERSION COMMIT UPDATE_VERSION: the archive of the module as its release makes it, the test catalogue that names it, a corrupted copy, the hostile archives with a
+    catalogue for each, the old and the new archive of the update with a catalogue each, the list of what the archives put on a box, the module's packages, the configuration for libvirt's
+    test driver, and kit.json, which the report reads."""
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", update_version) or not COMMIT_RE.fullmatch(commit):
         raise Refused("the version or the commit is not one")
+    if tuple(int(x) for x in update_version.split(".")) <= tuple(int(x) for x in version.split(".")):
+        raise Refused("the version of the update (%s) is not later than the proof's (%s)" % (update_version, version))
     tag = "v" + version
     with open(os.path.join(module_dir, "module.json"), "rb") as f:
         raw = f.read()
@@ -401,11 +462,11 @@ def cmd_kit(module_dir, out, version, commit):
         write(os.path.join(out, key + ".tar.gz"), bad)
         write(os.path.join(out, "catalogue-%s.json" % key), catalogue_text(manifest, project, component, tag, commit, sha256_bytes(bad)))
         variants[key] = {"archive": key + ".tar.gz", "catalogue": "catalogue-%s.json" % key, "entry": path}
-    files = [{"path": "/" + e["name"][len("build/sysroot/"):], "sha256": sha256_bytes(e["data"]), "mode": "%o" % e["mode"], "bytes": len(e["data"])}
-             for e in entries if e["type"] == "f" and e["name"].startswith("build/sysroot/")]
+    files = version_files(entries)
+    update = update_kit(entries, raw, manifest, project, component, commit, tag, "v" + update_version, out)
     packages = sorted(set(manifest.get("packages", {}).get("common", []) + manifest.get("packages", {}).get("amd64", [])))
     unit = manifest["unit"]
-    footprint = [f["path"] for f in files] + ["/lib/systemd/system/" + unit, "/usr/lib/systemd/system/" + unit, "/etc/systemd/system/multi-user.target.wants/" + unit,
+    footprint = [f["path"] for f in files] + [f["path"] for k in ("old", "new", "bad") for f in update[k]["files"]] + ["/lib/systemd/system/" + unit, "/usr/lib/systemd/system/" + unit, "/etc/systemd/system/multi-user.target.wants/" + unit,
                                                 "/etc/casaos/modules/%s.json" % name, "/var/lib/casaos/modules/%s.files" % name, "/var/lib/casaos/modules/%s.dirs" % name,
                                                 "/var/lib/casaos/modules/%s.version" % name]
     seen, uniq = set(), []
@@ -426,7 +487,7 @@ def cmd_kit(module_dir, out, version, commit):
     info = {"version": version, "tag": tag, "name": name, "title": manifest["title"], "component": component, "unit": unit, "route": manifest["gateway_route"],
             "min_recasaos": manifest["min_recasaos"], "os": manifest["os"], "packages": packages, "commit": commit,
             "archive": {"sha256": sha, "bytes": len(good), "url": asset_url(component, tag, "linux-amd64-casaos-%s-%s.tar.gz" % (project, tag))},
-            "conf": "virt-management.conf", "conf_path": "/etc/casaos/" + os.path.basename(sample[0]["path"])[:-len(".sample")], "files": files, "footprint": uniq, "variants": variants}
+            "conf": "virt-management.conf", "conf_path": "/etc/casaos/" + os.path.basename(sample[0]["path"])[:-len(".sample")], "files": files, "footprint": uniq, "variants": variants, "update": update}
     info["conf_sha256"] = sha256_bytes(conf.encode())
     info["manifest_sha256"] = sha256_bytes(raw)
     write(os.path.join(out, "kit.json"), (json.dumps(info, indent=2) + "\n").encode())
@@ -530,15 +591,15 @@ def cmd_plan_packages(path):
     print(" ".join(names))
 
 
-def cmd_kitcmd(module_dir, out, version, commit):
+def cmd_kitcmd(module_dir, out, version, commit, update_version):
     try:
-        cmd_kit(module_dir, out, version, commit)
+        cmd_kit(module_dir, out, version, commit, update_version)
     except Refused as err:
         sys.stderr.write("the kit could not be made: %s\n" % err)
         sys.exit(1)
 
 
-COMMANDS = {"get": (cmd_get, 2), "jobrow": (cmd_jobrow, 6), "snapsplit": (cmd_snapsplit, 2), "version_ge": (cmd_version_ge, 2), "kit": (cmd_kitcmd, 4), "plan_packages": (cmd_plan_packages, 1)}
+COMMANDS = {"get": (cmd_get, 2), "jobrow": (cmd_jobrow, 6), "snapsplit": (cmd_snapsplit, 2), "version_ge": (cmd_version_ge, 2), "kit": (cmd_kitcmd, 5), "plan_packages": (cmd_plan_packages, 1)}
 if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS or len(sys.argv) - 2 != COMMANDS[sys.argv[1]][1]:
     sys.stderr.write("usage: mp.py get|jobrow|snapsplit|version_ge|kit|plan_packages ...\n")
     sys.exit(2)
@@ -578,6 +639,9 @@ variant_files() {
     good) VCAT=catalogue.json; VARC=archive.tar.gz ;;
     corrupt) VCAT=catalogue.json; VARC=corrupt.tar.gz ;;
     dotdot | systemctl | varlib | usrshare | etcmod) VCAT="catalogue-$1.json"; VARC="$1.tar.gz" ;;
+    uold) VCAT=catalogue-upd-old.json; VARC=upd-old.tar.gz ;;
+    unew) VCAT=catalogue-upd-new.json; VARC=upd-new.tar.gz ;;
+    ubad) VCAT=catalogue-upd-bad.json; VARC=upd-bad.tar.gz ;;
     *) return 1 ;;
     esac
 }
@@ -623,6 +687,8 @@ snap() {
     printf 'unit_known %s\n' "$(num systemctl list-unit-files "$UNIT" --no-legend)"
     printf 'unit_active %s\n' "$(val systemctl is-active "$UNIT")"
     printf 'unit_enabled %s\n' "$(val systemctl is-enabled "$UNIT")"
+    printf 'unit_pid %s\n' "$(val systemctl show -p MainPID --value "$UNIT")"
+    printf 'unit_since %s\n' "$(val systemctl show -p ActiveEnterTimestampMonotonic --value "$UNIT")"
     printf 'job_unit %s\n' "$(val systemctl is-active "$JOBUNIT")"
     printf 'conf %s\n' "$(yn test -f "$CONF")"
     printf 'vm_dir %s\n' "$(yn test -d /DATA/VM)"
@@ -637,6 +703,11 @@ snap() {
     printf 'system_state %s\n' "$(val systemctl is-system-running)"
     sec pkgs
     for p in $(cat "$KIT/packages.list"); do
+        a="$(dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null | tr -d ' ')"
+        printf 'pkg %s %s\n' "$p" "${a:-none}"
+    done
+    # the package the update adds is asked about like the module's own
+    for p in $(cat "$KIT/upd-packages.list" 2>/dev/null); do
         a="$(dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null | tr -d ' ')"
         printf 'pkg %s %s\n' "$p" "${a:-none}"
     done
@@ -700,6 +771,37 @@ conf_write() {
 }
 
 conf_remove() { rm -f "$CONF"; yn test -e "$CONF"; }
+
+# the sample of the module's configuration that both versions carry, edited by the administrator (a file of the new version that is there and is not the module's own refuses an update);
+# the undo puts the bytes back
+SAMPLE=/etc/casaos/virt-management.conf.sample
+sample_edit_on() {
+    cp -p "$SAMPLE" "$MP/sample.orig" && printf '# edited by the administrator\n' >>"$SAMPLE" && echo "edited $(sha256sum <"$SAMPLE" | cut -d' ' -f1)"
+}
+sample_edit_off() {
+    if [ -e "$MP/sample.orig" ]; then cat "$MP/sample.orig" >"$SAMPLE" && rm -f "$MP/sample.orig"; fi
+    echo "off sha=$(sha256sum <"$SAMPLE" 2>/dev/null | cut -d' ' -f1)"
+}
+
+# a drop-in of the module's unit, the proof's own: failstart makes the start fail while the file that only the new version has is there (the old version starts), slowstop and slowstart make
+# the steps stop and start of an update last long enough for a kill to land in them
+DROPDIR="/etc/systemd/system/$UNIT.d"
+dropin_on() {
+    mkdir -p "$DROPDIR" || return 1
+    case "$1" in
+    failstart) printf '[Service]\nRestart=no\nExecStartPre=/bin/sh -c "test ! -e /etc/casaos/mp-next.conf.sample"\n' >"$DROPDIR/mp.conf" ;;
+    slowstop) printf '[Service]\nExecStop=/bin/sleep 6\n' >"$DROPDIR/mp.conf" ;;
+    slowstart) printf '[Service]\nExecStartPre=/bin/sleep 6\n' >"$DROPDIR/mp.conf" ;;
+    *) echo "unknown drop-in: $1" >&2; return 2 ;;
+    esac
+    systemctl daemon-reload && echo "on $1"
+}
+dropin_off() {
+    rm -f "$DROPDIR/mp.conf"
+    rmdir "$DROPDIR" 2>/dev/null
+    systemctl daemon-reload
+    echo "off file=$(yn test -e "$DROPDIR/mp.conf") dir=$(yn test -e "$DROPDIR")"
+}
 
 witness_on() { mkdir -p /DATA/VM && echo witness >/DATA/VM/.mp-witness && echo ok; }
 witness_off() { rm -f /DATA/VM/.mp-witness; echo off; }
@@ -849,7 +951,7 @@ watch_run() {
     seen="$(begin_line "$step")"
     case "$mode" in
     kill)
-        pid="$(pgrep -o -f '^/usr/bin/casaos module (install|remove) ')"
+        pid="$(pgrep -o -f '^/usr/bin/casaos module (install|remove|update) ')"
         if [ -z "$pid" ]; then echo "no process of the assistant to signal"; return 0; fi
         kill -s "$arg" "$pid" 2>/dev/null
         printf 'signalled pid=%s signal=%s rc=%s\n' "$pid" "$arg" "$?"
@@ -943,7 +1045,8 @@ unit_props() {
 }
 
 api_env_on() {
-    systemctl set-environment CASAOS_MODULE_TEST=1 "CASAOS_MODULE_CATALOGUE=$KIT/catalogue.json" "CASAOS_MODULE_ARCHIVE_FILE=$KIT/archive.tar.gz" || return 1
+    variant_files "${1:-good}" || return 2
+    systemctl set-environment CASAOS_MODULE_TEST=1 "CASAOS_MODULE_CATALOGUE=$KIT/$VCAT" "CASAOS_MODULE_ARCHIVE_FILE=$KIT/$VARC" || return 1
     systemctl restart casaos.service || return 1
     echo restarted
 }
@@ -999,6 +1102,10 @@ footprint) footprint ;;
 snap) snap "${1:-}" ;;
 conf_write) conf_write ;;
 conf_remove) conf_remove ;;
+sample_edit_on) sample_edit_on ;;
+sample_edit_off) sample_edit_off ;;
+dropin_on) dropin_on "$@" ;;
+dropin_off) dropin_off ;;
 witness_on) witness_on ;;
 witness_off) witness_off ;;
 lock_start) lock_start ;;
@@ -1033,7 +1140,7 @@ dummy_stop) dummy_stop ;;
 glob_show) glob_show ;;
 unit_props) unit_props ;;
 job_unit) systemctl is-active "$JOBUNIT" 2>/dev/null || true ;;
-api_env_on) api_env_on ;;
+api_env_on) api_env_on "$@" ;;
 api_env_off) api_env_off ;;
 api_env_state) api_env_state ;;
 pkg_files) pkg_files "$@" ;;
@@ -1193,7 +1300,7 @@ gx() {
 modrun() {
     local name="$1" variant="$2" user="$3" limit=300 retry=1
     shift 3
-    case "$1" in install | remove) limit="${MOD_LIMIT:-2400}"; retry=0 ;; esac
+    case "$1" in install | remove | update) limit="${MOD_LIMIT:-2400}"; retry=0 ;; esac
     SSH_LIMIT="${limit}" GX_RETRY="${retry}" gx "${name}" mod "${variant}" "${user}" "$@"
 }
 
@@ -1365,27 +1472,33 @@ ensure_clean() {
 }
 
 # the api phase: the three test variables in the environment of systemd's manager, the core restarted so that its own process has them too, and what was done read back
+# api_on [variant] [tag]: the test variables for the catalogue of the variant (the good one by default), recorded as <tag>-on and <tag>-state
+API_VARIANT=""
 api_on() {
-    gx api-on api_env_on
+    local v="${1:-}" t="${2:-api}"
+    gx "${t}-on" api_env_on ${v:+"${v}"}
     if [ "${GX_RC}" != 0 ]; then
-        harness_invalid api "the test variables could not be put in the environment of the manager: $(tr -d '\r' <"${OUT}/api-on.err" | tr '\n' ' ' | cut -c1-200)"
+        harness_invalid api "the test variables could not be put in the environment of the manager: $(tr -d '\r' <"${OUT}/${t}-on.err" | tr '\n' ' ' | cut -c1-200)"
         return 1
     fi
     wait_up "${WAIT_CORE:-240}" || { harness_invalid api "the core does not answer after its restart"; return 1; }
     login || { harness_invalid api "the box's user could not log in after the restart of the core"; return 1; }
-    gx api-state api_env_state
+    gx "${t}-state" api_env_state
+    API_VARIANT="${v:-good}"
     return 0
 }
 
 api_off() {
-    gx api-off api_env_off
+    local t="${1:-api}"
+    gx "${t}-off" api_env_off
     if [ "${GX_RC}" != 0 ]; then
-        harness_invalid api "the test variables could not be taken out of the environment of the manager: $(tr -d '\r' <"${OUT}/api-off.err" | tr '\n' ' ' | cut -c1-200)"
+        harness_invalid api "the test variables could not be taken out of the environment of the manager: $(tr -d '\r' <"${OUT}/${t}-off.err" | tr '\n' ' ' | cut -c1-200)"
         return 1
     fi
     wait_up "${WAIT_CORE:-240}" || { harness_invalid api "the core does not answer after its restart"; return 1; }
     login || true
-    gx api-off-state api_env_state
+    gx "${t}-off-state" api_env_state
+    API_VARIANT=""
     return 0
 }
 
@@ -1894,6 +2007,303 @@ case_m11() {
     marker case_M11_done
 }
 
+# ---- the update ------------------------------------------------------------------------------------------------------------------------------
+# The update cases need a core that has `casaos module update`: the version of the core is compared with MODULE_UPDATE_MIN_CORE before the word is ever given (an old core given `module`
+# starts as a server), and a core that has not got it ends the group there, which the report turns into an INVALID RUN of the update cases that says so; the cases before it have run.
+# The old version is the proof's own (0.1.1: the archive of M4 plus a second sample), the new one 0.1.2 (another second sample, a unit file that is not the same, one package more).
+
+U_STATE=""          # what the box has of the module for these cases: old (installed by hand, with the administrator's configuration), new, or "" (not known)
+UPD_PKGS=""
+
+# api_switch <variant> <tag>: the core runs with the test catalogue of the variant in its environment (restarted when it has another)
+api_switch() {
+    if [ -n "${API_ON:-}" ] && [ "${API_VARIANT:-}" = "$1" ]; then return 0; fi
+    api_on "$1" "$2" || return 1
+    API_ON=1
+}
+
+# u_old <tag>: the old version of the module, installed by hand over a box that has none, the administrator's own configuration in place (what the recordings of <tag>-* start from); status 1,
+# and the run invalid, when it could not be had
+u_old() {
+    local t="$1"
+    [ "${U_STATE}" = old ] && return 0
+    U_STATE=""
+    ensure_clean "${t}-pre" || return 1
+    gx "${t}-conf" conf_write
+    modrun "${t}-old" uold root install "${MODULE}" --yes
+    if [ "$(cat "${OUT}/${t}-old.rc")" != 0 ]; then
+        harness_invalid "${t}" "the old version of the module could not be installed to start from"
+        return 1
+    fi
+    U_STATE=old
+}
+
+# u_new <tag>: the new version, by an update by hand of the old one
+u_new() {
+    local t="$1"
+    [ "${U_STATE}" = new ] && return 0
+    u_old "${t}-pre" || return 1
+    modrun "${t}-update" unew root update "${MODULE}" --yes
+    if [ "$(cat "${OUT}/${t}-update.rc")" != 0 ]; then
+        harness_invalid "${t}" "the module could not be updated to start from the new version"
+        U_STATE=""
+        return 1
+    fi
+    U_STATE=new
+}
+
+case_u1() {
+    marker case_U1_start
+    if u_old u1; then
+        modrun u1-list-old uold root list
+        modrun u1-list-new unew root list
+        modrun u1-list-nobody unew nobody list
+    fi
+    marker case_U1_done
+}
+
+case_u2() {
+    marker case_U2_start
+    if u_old u2; then
+        snap u2-before || return 1
+        # shellcheck disable=SC2086
+        gx u2-aptsim aptsim ${UPD_PKGS}
+        modrun u2-plan unew root plan "${MODULE}" --update
+        modrun u2-plan-nobody unew nobody plan "${MODULE}" --update
+        modrun u2-plan-same uold root plan "${MODULE}" --update
+        snap u2-after || return 1
+        # shellcheck disable=SC2086
+        gx u2-aptsim-after aptsim ${UPD_PKGS}
+        snap u2-after-sim || return 1
+    fi
+    marker case_U2_done
+}
+
+case_u3() {
+    local pid
+    marker case_U3_start
+    if u_old u3; then
+        modrun u3-plan unew root plan "${MODULE}" --update
+        pid="$(py get "${OUT}/u3-plan.out" plan_id)"
+        printf '%s\n' "${pid}" >"${OUT}/u3-plan-id"
+        snap u3-before || return 1
+        modrun u3-update unew root update "${MODULE}" --yes --plan-id "${pid}"
+        gx u3-log modlog
+        snap u3-after || return 1
+        modrun u3-status unew root status "${MODULE}"
+        modrun u3-list unew root list
+        host_call u3-host 120 || true
+        CALL_NOAUTH=1 call u3-host-noauth GET "${MODULE_ROUTE}/host" "" 30
+        # now that the module is at the catalogue's tag, and then with a catalogue older than it
+        modrun u3-same-plan unew root plan "${MODULE}" --update
+        modrun u3-down-plan uold root plan "${MODULE}" --update
+        U_STATE=new
+    fi
+    marker case_U3_done
+}
+
+# the update through the API: the plan of an install on a box that has none (its id must not do for an update), the old version, the plan of the update, the ids that are refused, the job
+case_u4() {
+    local ipid upid
+    marker case_U4_start
+    U_STATE=""
+    if ensure_clean u4-pre && api_switch unew u4-api; then
+        call u4-plan-install POST "${LIST_PATH}/${MODULE}/plan" "" 120
+        ipid="$(py get "${OUT}/u4-plan-install.json" data.plan_id)"
+        if u_old u4; then
+            call u4-plan POST "${LIST_PATH}/${MODULE}/plan" '{"mode":"update"}' 120
+            upid="$(py get "${OUT}/u4-plan.json" data.plan_id)"
+            printf '%s\n' "${upid}" >"${OUT}/u4-plan-id"
+            call u4-stale POST "${LIST_PATH}/${MODULE}/install" '{"plan_id":"m1-00000000000000000000000000000000","mode":"update"}' 120
+            call u4-wrongmode POST "${LIST_PATH}/${MODULE}/install" "{\"plan_id\":\"${ipid}\",\"mode\":\"update\"}" 120
+            call u4-badmode POST "${LIST_PATH}/${MODULE}/install" "{\"plan_id\":\"${upid}\",\"mode\":\"upgrade\"}" 60
+            snap u4-before || return 1
+            call u4-start POST "${LIST_PATH}/${MODULE}/install" "{\"plan_id\":\"${upid}\",\"mode\":\"update\"}" 120
+            if [ "${CALL_CODE}" = 202 ]; then
+                PROPS_TAG=u4-run
+                wait_job u4-job "${WAIT_JOB}" "${TERMINAL_STATES}" || true
+                PROPS_TAG=""
+                gx u4-log modlog
+                gx u4-journal journal
+            fi
+            snap u4-after || return 1
+            call u4-status GET "${LIST_PATH}/${MODULE}/status" "" 60
+            call u4-list GET "${LIST_PATH}" "" 60
+            host_call u4-host 120 || true
+            U_STATE=""
+        fi
+    fi
+    marker case_U4_done
+}
+
+# a file of the new version that is there, and is not the module's, refuses the update: the sample both versions carry, edited by the administrator
+case_u5() {
+    marker case_U5_start
+    if u_old u5; then
+        pend sample sample_edit_off
+        gx u5-dirt sample_edit_on
+        snap u5-before || return 1
+        modrun u5-update unew root update "${MODULE}" --yes
+        gx u5-log modlog
+        snap u5-after || return 1
+        gx u5-undo sample_edit_off
+        undone sample u5-undo '^off sha='
+        if [ ! -e "${WORK}/pending-sample" ]; then U_STATE=old; else U_STATE=""; fi
+    fi
+    marker case_U5_done
+}
+
+# u6_run <id> <variant> <drop-in or ->: an update that fails after it has changed the box, and what the box is after it
+u6_run() {
+    local id="$1" variant="$2" dirt="$3" p="u6-$1"
+    marker "case_U6_${id}_start"
+    U_STATE=""
+    if u_old "${p}"; then
+        if [ "${dirt}" != - ]; then
+            pend dropin dropin_off
+            gx "${p}-dirt" dropin_on "${dirt}"
+        fi
+        snap "${p}-before" || return 1
+        modrun "${p}-update" "${variant}" root update "${MODULE}" --yes
+        gx "${p}-log" modlog
+        snap "${p}-after" || return 1
+        if [ "${dirt}" != - ]; then
+            gx "${p}-undo" dropin_off
+            undone dropin "${p}-undo" '^off file=no dir=no'
+        fi
+    fi
+    marker "case_U6_${id}_done"
+}
+
+case_u6() {
+    marker case_U6_start
+    u6_run start unew failstart || return 1
+    u6_run unit ubad - || return 1
+    marker case_U6_done
+}
+
+# u7_case <id> <kill|stop> <step> <signal or none> <drop-in or -> <seconds for the job to end>: the update is started through the core, a watcher on the guest sees the step begin in the log and
+# kills the assistant or stops the unit, and the job is followed to its end; then the assistant is asked, with the catalogue of the old version, to recover (it puts the old version back,
+# whatever the kill left, and finds nothing to update), and with the catalogue of the new one to update
+u7_case() {
+    local id="$1" mode="$2" step="$3" arg="$4" dirt="$5" within="$6" p pid started
+    want_sub "${U7_ONLY:-}" "${id}" || return 0
+    p="u7-$(printf '%s' "${id}" | tr '_' '-')"
+    marker "case_U7_${id}_start"
+    U_STATE=""
+    if u_old "${p}" && api_switch unew "${p}-api"; then
+        snap "${p}-before" || return 1
+        call "${p}-plan" POST "${LIST_PATH}/${MODULE}/plan" '{"mode":"update"}' 120
+        pid="$(py get "${OUT}/${p}-plan.json" data.plan_id)"
+        if [ "${dirt}" != - ]; then
+            pend dropin dropin_off
+            gx "${p}-dirt" dropin_on "${dirt}"
+        fi
+        gx "${p}-watch" watch_start "${mode}" "${step}" "${arg}"
+        call "${p}-start" POST "${LIST_PATH}/${MODULE}/install" "{\"plan_id\":\"${pid}\",\"mode\":\"update\"}" 120
+        started="${CALL_CODE}"
+        if [ "${started}" = 202 ]; then
+            wait_job "${p}-job" "${within}" "${TERMINAL_STATES}" || true
+            wait_watch "${p}" 120
+        fi
+        if [ "${dirt}" != - ]; then
+            gx "${p}-undo" dropin_off
+            undone dropin "${p}-undo" '^off file=no dir=no'
+        fi
+        if [ "${started}" = 202 ]; then
+            gx "${p}-wait" wait_clean "${WAIT_CLEAN:-700}"
+            gx "${p}-log" modlog
+            gx "${p}-journal" journal
+            snap "${p}-dead" || return 1
+            call "${p}-status" GET "${LIST_PATH}/${MODULE}/status" "" 60
+        fi
+        modrun "${p}-recover" uold root update "${MODULE}" --yes
+        gx "${p}-recover-log" modlog
+        snap "${p}-recovered" || return 1
+        modrun "${p}-update" unew root update "${MODULE}" --yes
+        snap "${p}-new" || return 1
+    fi
+    U_STATE=""
+    marker "case_U7_${id}_done"
+}
+
+case_u7() {
+    marker case_U7_start
+    # (the steps that last milliseconds are shorter than any watcher: the report says so when a signal did not land in the step it was meant for; stop and start are made long by a drop-in)
+    u7_case kill_backup kill backup KILL - "${WAIT_KILLED}" || return 1
+    u7_case kill_stop kill stop KILL slowstop "${WAIT_KILLED}" || return 1
+    u7_case kill_swap kill swap KILL - "${WAIT_KILLED}" || return 1
+    u7_case kill_units kill units KILL - "${WAIT_KILLED}" || return 1
+    u7_case kill_start kill start KILL slowstart "${WAIT_KILLED}" || return 1
+    u7_case stop_swap stop swap none - "${WAIT_KILLED_APT}" || return 1
+    u7_case stop_start stop start none slowstart "${WAIT_KILLED_APT}" || return 1
+    marker case_U7_done
+}
+
+# U9: the guest restarts with the new version installed
+case_u9() {
+    marker case_U9_start
+    if [ -n "${API_ON:-}" ]; then api_off u9-api || true; API_ON=""; API_VARIANT=""; fi
+    if u_new u9; then
+        snap u9-before || return 1
+        if reboot_cycle u9-reboot; then
+            wait_route u9-status "${WAIT_ROUTE:-240}" || true
+            snap u9-after || return 1
+            host_call u9-host 120 || true
+        else
+            echo "the guest did not come back, or the core did not answer" >"${OUT}/u9-reboot.failed"
+            gx u9-diag diag
+        fi
+        U_STATE=new
+    fi
+    marker case_U9_done
+}
+
+# U8, the last: the module is taken off, the proof's own files go, and the box is compared with what it was before the update cases
+case_u8() {
+    marker case_U8_start
+    if [ -n "${API_ON:-}" ]; then api_off u8-api || true; API_ON=""; API_VARIANT=""; fi
+    if ensure_clean u8-pre; then
+        gx u8-conf conf_remove
+        # shellcheck disable=SC2086
+        gx u8-owned pkg_files ${UPD_PKGS}
+        gx u8-unseated unseat_owned
+        snap u8-end full || return 1
+    fi
+    U_STATE=""
+    marker case_U8_done
+}
+
+case_u() {
+    marker case_U_start
+    gx u-version casaos_v
+    printf '%s\n' "${UPD_MIN_CORE}" >"${OUT}/u-min"
+    py version_ge "$(tr -d '\r\n' <"${OUT}/u-version.out")" "${UPD_MIN_CORE}"
+    printf '%s\n' "$?" >"${OUT}/u-cmp"
+    if [ "$(cat "${OUT}/u-cmp")" != 0 ]; then
+        marker case_U_done
+        return 0
+    fi
+    UPD_PKGS="$(tr '\n' ' ' <"${KIT}/upd-packages.list")"
+    if ensure_clean u-pre; then
+        # the package the update adds is not on the box, so that apt has work to do when the module is updated
+        # shellcheck disable=SC2086
+        gx u-unseat pkg_unseat ${UPD_PKGS}
+        snap u-start full || return 1
+        want_sub "${U_ONLY:-}" u1 && { case_u1 || return 1; }
+        want_sub "${U_ONLY:-}" u2 && { case_u2 || return 1; }
+        want_sub "${U_ONLY:-}" u3 && { case_u3 || return 1; }
+        want_sub "${U_ONLY:-}" u9 && { case_u9 || return 1; }
+        want_sub "${U_ONLY:-}" u4 && { case_u4 || return 1; }
+        want_sub "${U_ONLY:-}" u5 && { case_u5 || return 1; }
+        want_sub "${U_ONLY:-}" u6 && { case_u6 || return 1; }
+        want_sub "${U_ONLY:-}" u7 && { case_u7 || return 1; }
+        want_sub "${U_ONLY:-}" u8 && { case_u8 || return 1; }
+        want_sub "${U_ONLY:-}" u8 || ensure_clean u-end || true
+    fi
+    marker case_U_done
+}
+
 # ---- the runner's side of the run ------------------------------------------------------------------------------------------------
 
 want_case() {
@@ -1974,6 +2384,7 @@ runner_run() {
     run_case m9 case_m9
     run_case m10 case_m10
     run_case m11 case_m11
+    run_case u case_u
     date -u +%FT%TZ >"${OUT}/finished"
     log "done"
     return 0
@@ -2023,7 +2434,7 @@ runner_build_kit() {
         go mod tidy
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.commit=${commit} -X main.date=${built} -s -w" -o build/sysroot/usr/bin/casaos-virt-management .
     ) || { echo "the module could not be built" >&2; exit 1; }
-    python3 "${WORK}/mp.py" kit "${module_dir}" "${out}" "${PROOF_VERSION}" "${commit}" || exit 1
+    python3 "${WORK}/mp.py" kit "${module_dir}" "${out}" "${PROOF_VERSION}" "${commit}" "${PROOF_UPDATE_VERSION}" || exit 1
     "${module_dir}/build/sysroot/usr/bin/casaos-virt-management" -v >"${out}/binary-version" 2>&1 || true
     echo "the kit is in ${out}: $(python3 "${WORK}/mp.py" get "${out}/kit.json" archive.sha256)"
 }

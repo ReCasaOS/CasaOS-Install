@@ -258,6 +258,7 @@ BASE_NAMES = ["/etc", "/etc/apt", "/etc/casaos", "/etc/casaos/gateway.ini", "/us
               "/run/systemd/transient", "/run/systemd/system"]
 BASE_ETC = {"/etc/hostname": "h1", "/etc/passwd": "p1", "/etc/group": "g1", "/etc/casaos/gateway.ini": "gw1", "/etc/os-release": "os1", "/etc/apt/sources.list": "s1", "/etc/resolv.conf": "r1"}
 ROLLBACK = ("stop", "files", "manifest", "reload")
+UROLLBACK = ("restore", "units", "start")
 HOSTILE = ("dotdot", "systemctl", "varlib", "usrshare", "etcmod")
 
 
@@ -284,6 +285,8 @@ class Run:
         self.unpack_begun, self.packages_done, self.apt_started, self.work = False, False, False, False
         self.last_sign = w.t
         self.phases = []
+        self.info = w.info_of(variant)
+        self.stop_begun = False
 
     # ---- what a run says
     def say(self, line, tool=False):
@@ -303,18 +306,24 @@ class Run:
     def kept(self):
         if not self.packages_done:
             return "unknown"
+        if self.kind == "update":
+            return " ".join(sorted(self.added)) or "none"
         return " ".join(sorted(self.w.kit["packages"])) or "none"
 
     # ---- the run
     def start(self):
         w = self.w
         w.cur_run = self
-        w.log_lines = []
+        w.log_lines = w.log_lines[:1] if self.via == "unit" else []
         w.state_dir, w.state_mtime, w.log_exists, w.log_mtime = True, w.t, True, w.t
         self.timer = None
         if self.kind == "install":
             self.begin_install()
+        elif self.kind == "update":
+            self.begin_update()
         else:
+            w.tmp = [x for x in w.tmp if x.startswith("backup-")]
+            self.recover()
             self.begin_remove()
 
     def refuse(self, code):
@@ -325,7 +334,7 @@ class Run:
     def exit(self, rc):
         self.finished, self.rc = True, rc
         w = self.w
-        w.tmp = []
+        w.tmp = [x for x in w.tmp if x.startswith("backup-") and w.backup is not None]
         if w.cur_run is self:
             w.cur_run = None
 
@@ -360,9 +369,15 @@ class Run:
         if self.finished or self.dead:
             return
         if i >= len(self.phases):
+            if self.kind == "update":
+                self.w.backup = None
+                self.w.tmp = []
             self.marker("done", "done")
             if self.kind == "install":
                 self.say("installed: virt %s" % self.w.kit["tag"])
+                self.result("ok", "done", "-", "-")
+            elif self.kind == "update":
+                self.say("updated: virt %s -> %s" % (self.old_tag, self.info["tag"]))
                 self.result("ok", "done", "-", "-")
             else:
                 self.result("ok", "done", "-", "-")
@@ -394,6 +409,8 @@ class Run:
 
     def fail(self, step, code):
         w = self.w
+        if self.kind == "update":
+            return self.fail_update(step, code)
         self.marker(step, "failed")
         self.say("failed at step %s: %s" % (step, code))
         if self.kind == "install" and self.unpack_begun:
@@ -403,7 +420,7 @@ class Run:
                     w.unit_active, w.unit_enabled = False, False
                     w.fs.pop("/etc/systemd/system/multi-user.target.wants/" + w.kit["unit"], None)
                 if s == "files":
-                    w.remove_module_files()
+                    w.remove_module_files(self.info)
                 if s == "manifest":
                     w.remove_manifest()
                 if s == "reload":
@@ -455,7 +472,7 @@ class Run:
         self.say("| Setting up libvirt-daemon-system ...", tool=True)
 
     def e_packages(self):
-        self.w.apt_install()
+        self.w.apt_install(list(self.added) if self.kind == "update" else None)
         self.packages_done = True
 
     def b_download(self):
@@ -467,19 +484,19 @@ class Run:
         w.tmp = ["archive.tar"]
         if self.variant in HOSTILE:
             return
-        w.write_lists(final=False)
+        w.write_lists(final=False, info=self.info)
 
     def e_unpack(self):
-        self.w.write_module_files()
-        self.w.write_lists(final=True)
+        self.w.write_module_files(self.info)
+        self.w.write_lists(final=True, info=self.info)
 
     def e_manifest(self):
-        self.w.write_manifest()
+        self.w.write_manifest(self.info)
 
     def e_start(self):
         w = self.w
         w.fs["/etc/systemd/system/multi-user.target.wants/" + w.kit["unit"]] = dict(kind="l", mode="-", owner="-", target="/usr/lib/systemd/system/" + w.kit["unit"])
-        w.unit_enabled, w.unit_active = True, True
+        w.start_unit()
         w.at(w.cfg["step_seconds"]["start"] / 2, w.route_up)
 
     def e_route(self):
@@ -516,6 +533,116 @@ class Run:
         if self.w.cfg.get("remove_leaves_file"):
             self.w.fs["/usr/bin/casaos-virt-management"] = dict(kind="f", mode="755", owner="0:0", sha=sha("left"))
 
+    # ---- an update
+    old_tag = ""
+    added = ()
+
+    def recover(self):
+        """what a run that was killed left in the backup folder is put back before the run does anything else (an update, or a remove)"""
+        w = self.w
+        if w.backup is None:
+            return
+        self.say("an update of virt was ended before it was over: the files of the old version are put back from /var/lib/casaos/modules/tmp/backup-virt")
+        if w.backup["state"] != "complete":
+            self.say("the backup of virt was not finished, so nothing of the box had been changed: it is dropped")
+        else:
+            for s in UROLLBACK:
+                self.marker("recover_" + s, "begin")
+                if s == "restore":
+                    w.restore_old()
+                if s == "units":
+                    pass
+                if s == "start":
+                    w.start_unit()
+                self.marker("recover_" + s, "done")
+        w.backup = None
+        w.tmp = [x for x in w.tmp if not x.startswith("backup-")]
+        self.say("recovered: virt is as it was before the update")
+
+    def begin_update(self):
+        w = self.w
+        w.tmp = [x for x in w.tmp if x.startswith("backup-")]
+        self.recover()
+        plan = w.plan("virt", self.variant != "none", self.variant, "root", mode="update")
+        if self.expect_plan and plan.get("plan_id") != self.expect_plan and not plan.get("refused"):
+            return self.refuse("plan_changed")
+        if plan.get("refused"):
+            return self.refuse(plan["refused"])
+        ss = w.cfg["step_seconds"]
+        self.old_tag = w.inst["tag"]
+        self.added = list(plan["update"]["added"])
+        self.work = any(p not in w.installed for p in self.added)
+        slow = lambda step, drop: ss.get(step, 1.0) + (6.0 if w.dropin == drop else 0.0)
+        conflict = "file_exists" if w.unpack_conflict(self.info) else None
+        start_fails = (w.dropin == "failstart" and self.info is w.info_of("unew")) or self.variant == "ubad"
+        bad_step = w.cfg.get("bad_unit_step", "start")
+        self.phases = [("packages", ss["packages_work"] if self.work else ss["packages"], self.b_packages, self.e_packages, None),
+                       ("download", ss["download"], self.b_download, None, None),
+                       ("verify", ss["verify"], None, None, None),
+                       ("unpack", ss["unpack"], self.b_unpack_u, None, conflict),
+                       ("backup", ss.get("backup", 0.3), self.b_backup, self.e_backup, None),
+                       ("stop", slow("stop", "slowstop"), self.b_stop_u, self.e_stop_u, None),
+                       ("swap", ss.get("swap", 0.4), self.b_swap, self.e_swap, None),
+                       ("units", ss["units"], None, None, "units_failed" if start_fails and bad_step == "units" and self.variant == "ubad" else None),
+                       ("start", slow("start", "slowstart"), None, self.e_start_u, "start_failed" if start_fails and not (bad_step == "units" and self.variant == "ubad") else None),
+                       ("route", ss["route"], None, self.e_route, None)]
+        self.next_phase(0)
+
+    def b_unpack_u(self):
+        self.unpack_begun = True
+        self.w.tmp = ["archive.tar", "stage"]
+
+    def b_backup(self):
+        w = self.w
+        w.backup = dict(state="partial", old=w.inst, new=self.info)
+        w.tmp = ["stage", "backup-virt"]
+
+    def e_backup(self):
+        self.w.backup["state"] = "complete"
+
+    def b_stop_u(self):
+        self.stop_begun = True
+
+    def e_stop_u(self):
+        self.w.unit_active, self.w.gw = False, False
+
+    def b_swap(self):
+        # the new files are put down one by one before the lists are written: a run that is killed here leaves a mix
+        self.w.write_module_files(self.info)
+
+    def e_swap(self):
+        w = self.w
+        w.remove_old_only(w.inst, self.info)
+        w.write_lists(final=True, info=self.info)
+        w.write_manifest(self.info)
+
+    def e_start_u(self):
+        self.w.start_unit()
+        self.w.at(self.w.cfg["step_seconds"]["start"] / 2, self.w.route_up)
+
+    def fail_update(self, step, code):
+        w = self.w
+        self.marker(step, "failed")
+        self.say("failed at step %s: %s" % (step, code))
+        if self.stop_begun:
+            for s in UROLLBACK:
+                self.marker("rollback_" + s, "begin")
+                if s == "restore":
+                    w.restore_old()
+                if s == "start":
+                    w.start_unit()
+                self.marker("rollback_" + s, "done")
+            self.say("rolled back")
+        w.backup = None
+        w.tmp = []
+        if step == "packages" and code == "interrupted" and self.apt_started:
+            self.say("apt-get was ended while it worked: dpkg --configure -a is probably needed")
+            if w.cfg.get("dpkg_interrupted") and self.work:
+                w.dpkg_audit = 2
+        self.say("kept_packages: %s" % self.kept())
+        self.timer = w.at(w.cfg["step_seconds"]["rollback"], lambda: (self.result("failed", step, code, "rolled_back"), self.exit(3)))
+
+
 
 class World:
     """the guest and its core, as the runner sees them: the clock moves only when the runner sleeps (tick)"""
@@ -525,9 +652,9 @@ class World:
         with open(os.path.join(kit_dir, "kit.json"), encoding="utf-8") as f:
             self.kit = json.load(f)
         self.leg = leg
-        self.cfg = dict(core_version="v0.4.75", shipped_catalogue=False, orphan_s=12, token_valid_s=10 ** 9, ssh_drops={"watch_start": 1, "api_env_on": 1, "snap": 1}, down_seconds=45,
+        self.cfg = dict(core_version="v0.4.78", shipped_catalogue=False, orphan_s=12, token_valid_s=10 ** 9, ssh_drops={"watch_start": 1, "api_env_on": 1, "snap": 1}, down_seconds=45,
                         step_seconds=dict(packages=6.0, packages_work=30.0, download=1.5, verify=0.1, unpack=0.4, units=1.2, manifest=0.1, start=4.0, route=2.5, rollback=3.0, rem_stop=1.5,
-                                          rem_files=0.3, rem_manifest=0.1, rem_reload=0.8))
+                                          rem_files=0.3, rem_manifest=0.1, rem_reload=0.8, backup=0.3, stop=1.0, swap=0.4))
         self.cfg.update(cfg or {})
         self.t = 0.0
         self.heap, self.seq = [], 0
@@ -569,6 +696,12 @@ class World:
         self.etc_modules_dir, self.etc_modules_mtime = False, 0.0
         self.token_born = 0.0
         self.verbs = []
+        self.inst = None                 # the archive of the version that is installed
+        self.backup = None               # the backup folder of an update: dict(state, old, new)
+        self.dropin = None
+        self.sample_orig = None
+        self.unit_pid, self.unit_since = 100, 0.0
+        self.api_variant = "good"
 
     # ---- the clock
     def at(self, delay, fn):
@@ -601,16 +734,16 @@ class World:
     def unit_path(self):
         return "/usr/lib/systemd/system/" + self.kit["unit"]
 
-    def write_module_files(self):
-        for f in self.kit["files"]:
+    def write_module_files(self, info=None):
+        for f in (info or self.kit)["files"]:
             mode = f["mode"]
             if self.cfg.get("wrong_mode") and f["path"] == self.unit_path():
                 mode = "4777"
             sha_ = f["sha256"] if not (self.cfg.get("wrong_content") and f["path"] == self.unit_path()) else sha("other")
             self.fs[f["path"]] = dict(kind="f", mode=mode, owner="0:0", sha=sha_)
 
-    def write_lists(self, final):
-        files = [(f["path"], f["sha256"]) for f in self.kit["files"]]
+    def write_lists(self, final, info=None):
+        files = [(f["path"], f["sha256"]) for f in (info or self.kit)["files"]]
         files.sort(key=lambda x: x[0] == self.unit_path())     # the unit last
         text = "casaos-module-files 1\n" + "".join("f %s %s\n" % (s, p) for p, s in files)
         self.fs["/var/lib/casaos/modules/virt.files"] = dict(kind="f", mode="644", owner="0:0", sha=sha(text), text=text)
@@ -619,18 +752,21 @@ class World:
             t = "".join(d + "\n" for d in dirs)
             self.fs["/var/lib/casaos/modules/virt.dirs"] = dict(kind="f", mode="644", owner="0:0", sha=sha(t), text=t)
 
-    def write_manifest(self):
+    def write_manifest(self, info=None):
+        info = info or self.kit
+        self.inst = info
         self.etc_modules_dir, self.etc_modules_mtime = True, self.t
-        self.fs["/var/lib/casaos/modules/virt.version"] = dict(kind="f", mode="644", owner="0:0", sha=sha(self.kit["tag"]), text=self.kit["tag"] + "\n")
-        self.fs["/etc/casaos/modules/virt.json"] = dict(kind="f", mode="644", owner="0:0", sha=self.kit["manifest_sha256"])
+        self.fs["/var/lib/casaos/modules/virt.version"] = dict(kind="f", mode="644", owner="0:0", sha=sha(info["tag"]), text=info["tag"] + "\n")
+        self.fs["/etc/casaos/modules/virt.json"] = dict(kind="f", mode="644", owner="0:0", sha=info["manifest_sha256"])
 
-    def remove_module_files(self):
-        for f in self.kit["files"]:
+    def remove_module_files(self, info=None):
+        for f in (info or self.inst or self.kit)["files"]:
             if self.cfg.get("remove_leaves_unit") and f["path"] == self.unit_path():
                 continue
             self.fs.pop(f["path"], None)
 
     def remove_manifest(self):
+        self.inst = None
         self.fs.pop("/etc/casaos/modules/virt.json", None)
         self.fs.pop("/var/lib/casaos/modules/virt.version", None)
 
@@ -646,8 +782,8 @@ class World:
             e = self.apt[key]
             e["sha"], e["mtime"], e["size"] = sha("%s%s" % (key, self.t)), int(self.t) + 5, e["size"] + 7
 
-    def apt_install(self):
-        pk = self.kit["packages"]
+    def apt_install(self, pk=None):
+        pk = pk or self.kit["packages"]
         for p in pk:
             self.installed.add(p)
             self.auto.discard(p)
@@ -673,8 +809,8 @@ class World:
     def dpkg_busy(self):
         return self.lock_held or self.orphan_until > self.t or (self.cur_run is not None and self.cur_run.dpkg_active())
 
-    def apt_sim(self):
-        pk = self.kit["packages"]
+    def apt_sim(self, pk=None):
+        pk = pk or self.kit["packages"]
         held = [p for p in pk if p in self.hold and p not in self.installed]
         if held:
             return dict(failure="held_package", held=held)
@@ -686,7 +822,7 @@ class World:
     # ---- the assistant: what it reads, what it says
     def catalogue(self, env_test, variant):
         if env_test:
-            v = self.kit["variants"].get(variant)
+            v = self.kit["variants"].get(variant) or self.kit.get("update", {}).get("variants", {}).get(variant)
             if v is None:
                 return None
             with open(os.path.join(self.kit_dir, v["archive"]), "rb") as f:
@@ -698,13 +834,128 @@ class World:
     def installed_manifest(self):
         return "/etc/casaos/modules/virt.json" in self.fs
 
-    def plan(self, name, env_test, variant, user, expect=None):
+
+    # ---- the update: the versions of the module, the backup, the unit
+    def info_of(self, variant):
+        """the archive a variant of the catalogue names: the kit's own, or one of the update's"""
+        u = self.kit.get("update", {})
+        return {"uold": u.get("old"), "unew": u.get("new"), "ubad": u.get("bad")}.get(variant) or self.kit
+
+    def start_unit(self):
+        self.unit_active = True
+        self.unit_enabled = True
+        if self.cfg.get("no_restart") and self.unit_pid > 100:
+            return
+        self.unit_pid += 37
+        self.unit_since = self.t + 1.0
+
+    def remove_old_only(self, old, new):
+        """what the new version does not have, and the old one had and still holds, goes"""
+        keep = {f["path"] for f in new["files"]}
+        for f in old["files"]:
+            if f["path"] not in keep and not self.cfg.get("keeps_legacy"):
+                e = self.fs.get(f["path"])
+                if e is not None and e["sha"] == f["sha256"]:
+                    self.fs.pop(f["path"], None)
+
+    def restore_old(self):
+        """the files of the old version put back, those that only the new one has taken away, the lists, the manifest and the version as they were"""
+        b = self.backup
+        old, new = b["old"], b["new"]
+        self.unit_active, self.gw = False, False
+        keep = {f["path"] for f in old["files"]}
+        for f in new["files"]:
+            if f["path"] not in keep and not self.cfg.get("rollback_leaves_new"):
+                self.fs.pop(f["path"], None)
+        self.write_module_files(old)
+        self.write_lists(final=True, info=old)
+        self.write_manifest(old)
+
+    def unpack_conflict(self, info):
+        """whether a file of the new version is on the box and is not what the module's own list says it holds (the administrator changed it, or it is somebody else's)"""
+        recorded = {f["path"]: f["sha256"] for f in (self.inst or {"files": []})["files"]}
+        for f in info["files"]:
+            e = self.fs.get(f["path"])
+            if e is not None and e["sha"] != recorded.get(f["path"]):
+                return True
+        return False
+
+    def sample_path(self):
+        return self.kit["conf_path"] + ".sample"
+
+    def tag_cmp(self, a, b):
+        ta, tb = tuple(int(x) for x in a[1:].split(".")), tuple(int(x) for x in b[1:].split("."))
+        return (ta > tb) - (ta < tb)
+
+    def plan_update(self, name, env_test, variant, user):
+        order = ["catalogue", "os", "arch", "recasaos", "installed", "newer", "foreign_unit", "busy", "dpkg_state", "disk", "apt"]
+        cat = self.catalogue(env_test, variant)
+        empty = dict(to_install=[], to_upgrade=[], download_bytes=0, extra_bytes=0, known=False)
+        if name != "virt" or cat is None:
+            checks = [dict(code="catalogue", ok=False, detail="not_in_catalogue")] + [dict(code=c, ok=False, detail="not_checked") for c in order[1:]]
+            return dict(name=name, tag="", tier="", checks=checks, refused="catalogue", packages=empty, archive=dict(url=""), plan_id="", mode="update", update=dict(installed="", latest="", added=[], dropped=[]))
+        i, k = self.info_of(variant), self.kit
+        installed = self.inst if self.installed_manifest() else None
+        checks = [dict(code="catalogue", ok=True, detail=""), dict(code="os", ok="%s:%s" % (self.osid, self.osver) in k["os"], detail=""), dict(code="arch", ok=True, detail=""),
+                  dict(code="recasaos", ok=True, detail="")]
+        refusal = {}
+        if installed is None:
+            checks += [dict(code="installed", ok=False, detail="not_installed"), dict(code="newer", ok=False, detail="not_checked")]
+            refusal["code"] = "not_installed"
+            inst_tag = ""
+        else:
+            inst_tag = self.version() or installed["tag"]
+            checks.append(dict(code="installed", ok=True, detail=""))
+            c = self.tag_cmp(inst_tag, i["tag"])
+            detail = "up_to_date" if c == 0 else "downgrade" if c > 0 else ""
+            checks.append(dict(code="newer", ok=c < 0, detail=detail))
+            if c >= 0:
+                refusal["code"] = detail
+        foreign = self.dirt_unit
+        checks.append(dict(code="foreign_unit", ok=not foreign, detail="not_owned /etc/systemd/system/%s" % k["unit"] if foreign else ""))
+        if self.osflag:
+            checks.append(dict(code="busy", ok=False, detail="os_upgrade"))
+        elif user != "root":
+            checks.append(dict(code="busy", ok=False, detail="not_checked: needs root, the install checks it as root"))
+        elif self.dpkg_busy():
+            checks.append(dict(code="busy", ok=False, detail="package_manager"))
+        else:
+            checks.append(dict(code="busy", ok=True, detail=""))
+        checks.append(dict(code="dpkg_state", ok=True, detail=""))
+        added = [p for p in i["packages"] if installed is None or p not in installed["packages"]]
+        dropped = [p for p in (installed["packages"] if installed else []) if p not in i["packages"]]
+        for ck in checks:
+            if not ck["ok"] and not ck["detail"].startswith("not_checked"):
+                refusal.setdefault("code", ck["code"])
+        standing = all(c["ok"] or c["detail"].startswith("not_checked") for c in checks)
+        pk = dict(empty)
+        if standing:
+            sim = self.apt_sim(added) if added else dict(failure=None, new=[], upgrade=[], manual=[], download=0, extra=0, uris=0)
+            if sim["failure"]:
+                checks += [dict(code="disk", ok=False, detail="not_checked"), dict(code="apt", ok=False, detail="held %s" % " ".join(sim["held"]))]
+                refusal.setdefault("code", "held_package")
+            else:
+                checks += [dict(code="disk", ok=True, detail=""), dict(code="apt", ok=True, detail="")]
+                pk = dict(to_install=sim["new"], to_upgrade=sim["upgrade"], download_bytes=sim["download"], extra_bytes=sim["extra"], known=True)
+        else:
+            checks += [dict(code="disk", ok=False, detail="not_checked"), dict(code="apt", ok=False, detail="not_checked")]
+        refused = refusal.get("code")
+        plan_id = ""
+        if not refused:
+            plan_id = "m1-" + sha(json.dumps(["update", k["name"], inst_tag, i["tag"], cat["sha"], pk["to_install"], self.osid, self.osver]))[:32]
+        return dict(name=name, tag=i["tag"], tier="community", checks=checks, refused=refused, packages=pk, archive=dict(url=i["archive"]["url"]), plan_id=plan_id, mode="update",
+                    update=dict(installed=inst_tag, latest=i["tag"], added=added, dropped=dropped))
+
+    def plan(self, name, env_test, variant, user, expect=None, mode=None):
+        if mode == "update":
+            return self.plan_update(name, env_test, variant, user)
         cat = self.catalogue(env_test, variant)
         order = ["catalogue", "os", "arch", "recasaos", "already_installed", "foreign_unit", "busy", "dpkg_state", "disk", "apt"]
         if name != "virt" or cat is None:
             checks = [dict(code="catalogue", ok=False, detail="not_in_catalogue")] + [dict(code=c, ok=False, detail="not_checked") for c in order[1:]]
             return dict(name=name, tag="", tier="", checks=checks, refused="catalogue", packages=dict(to_install=[], to_upgrade=[], download_bytes=0, extra_bytes=0, known=False), archive=dict(url=""), plan_id="")
         k = self.kit
+        i = self.info_of(variant)
         checks = [dict(code="catalogue", ok=True, detail="")]
         checks.append(dict(code="os", ok="%s:%s" % (self.osid, self.osver) in k["os"], detail=""))
         checks.append(dict(code="arch", ok=True, detail=""))
@@ -734,7 +985,7 @@ class World:
             refusal.setdefault("code", "held_package")
         elif standing:
             if self.tmpfs:
-                checks.append(dict(code="disk", ok=False, detail="need %d bytes on /var/lib/casaos/modules/tmp, 1000000 free" % (sim["extra"] + 3 * k["archive"]["bytes"])))
+                checks.append(dict(code="disk", ok=False, detail="need %d bytes on /var/lib/casaos/modules/tmp, 1000000 free" % (sim["extra"] + 3 * i["archive"]["bytes"])))
                 refusal.setdefault("code", "disk_short")
             else:
                 checks.append(dict(code="disk", ok=True, detail=""))
@@ -750,16 +1001,20 @@ class World:
         refused = refusal.get("code")
         plan_id = ""
         if not refused:
-            plan_id = "m1-" + sha(json.dumps([k["name"], k["tag"], cat["sha"], pk["to_install"], self.osid, self.osver]))[:32]
-        return dict(name=name, tag=k["tag"], tier="community", checks=checks, refused=refused, packages=pk, archive=dict(url=k["archive"]["url"]), plan_id=plan_id)
+            plan_id = "m1-" + sha(json.dumps([k["name"], i["tag"], cat["sha"], pk["to_install"], self.osid, self.osver]))[:32]
+        return dict(name=name, tag=i["tag"], tier="community", checks=checks, refused=refused, packages=pk, archive=dict(url=i["archive"]["url"]), plan_id=plan_id)
 
     def list_json(self, env_test, variant):
         cat = self.catalogue(env_test, variant)
         out = dict(catalogue=dict(ok=True) if cat else dict(ok=False, error="none"), modules=[])
         if cat:
             k = self.kit
-            out["modules"].append(dict(name="virt", title=k["title"], description="", tier="community", tag=k["tag"], catalogue=True,
-                                      installed=dict(version=self.version()) if self.installed_manifest() else None, system=dict(supported=True, reasons=[])))
+            i = self.info_of(variant)
+            entry = dict(name="virt", title=k["title"], description="", tier="community", tag=i["tag"], catalogue=True,
+                         installed=dict(version=self.version()) if self.installed_manifest() else None, system=dict(supported=True, reasons=[]))
+            if entry["installed"] and entry["installed"]["version"]:
+                entry["update"] = dict(available=self.tag_cmp(entry["installed"]["version"], i["tag"]) < 0, installed=entry["installed"]["version"], latest=i["tag"])
+            out["modules"].append(entry)
         elif self.installed_manifest():
             out["modules"].append(dict(name="virt", title=self.kit["title"], description="", tier="", tag="", catalogue=False, installed=dict(version=self.version()), system=dict(supported=False, reasons=["catalogue"])))
         return out
@@ -780,12 +1035,12 @@ class World:
         if verb == "list":
             return 0, json.dumps(self.list_json(env_test, variant)) + "\n"
         if verb == "plan":
-            return 0, json.dumps(self.plan(args[1], env_test, variant, user)) + "\n"
+            return 0, json.dumps(self.plan(args[1], env_test, variant, user, mode="update" if "--update" in args else None)) + "\n"
         if verb == "status":
             if len(args) == 1:
                 return 0, json.dumps(dict(modules=[self.status_json("virt")] if self.installed_manifest() else [])) + "\n"
             return 0, json.dumps(self.status_json(args[1])) + "\n"
-        if verb in ("install", "remove"):
+        if verb in ("install", "remove", "update"):
             if user != "root":
                 return 2, "refused: not_root\nCASAOS_MODULE_RESULT - virt refused - not_root - %s\n" % iso(self.t)
             self.state_dir, self.state_mtime = True, max(self.state_mtime, self.t)
@@ -809,13 +1064,15 @@ class World:
         return "inactive"
 
     def reduce_job(self):
-        job = dict(name="virt", state="idle", step="", code="", undo="", kept_packages=None, started_at="", ended_at="", log_tail=[])
+        job = dict(name="virt", kind="", state="idle", step="", code="", undo="", kept_packages=None, started_at="", ended_at="", log_tail=[])
         steps, results, kept, sentences = [], [], None, []
         nonce = None
         for ln in self.log_lines:
             m = re.match(r"^CASAOS_MODULE_(QUEUED|STEP|RESULT) (\S+) ", ln)
             if m:
                 nonce = nonce or m.group(2)
+                if m.group(1) == "QUEUED" and ln.count(" ") == 4:
+                    job["kind"] = ln.split()[3]
                 if m.group(1) == "STEP":
                     steps.append(ln.split())
                 elif m.group(1) == "RESULT":
@@ -928,9 +1185,9 @@ class World:
 
     def launch_unit(self, verb, plan_id):
         nonce = uuid.uuid4().hex
-        self.log_lines = ["CASAOS_MODULE_QUEUED %s virt %s" % (nonce, iso(self.t))]
+        self.log_lines = ["CASAOS_MODULE_QUEUED %s virt %s %s" % (nonce, verb, iso(self.t))]
         self.last_sign_seen = self.t
-        run = Run(self, verb, "good" if self.manager_env else "none", nonce, "unit")
+        run = Run(self, verb, self.api_variant if self.manager_env else "none", nonce, "unit")
         run.expect_plan = plan_id
         self.journal.append("Started /usr/bin/casaos module %s virt --yes." % verb)
         self.cur_run = run
@@ -983,20 +1240,29 @@ class World:
                 return 404, {"success": 404, "message": "not found"}
             parts = path[len("/v1/sys/modules"):].strip("/").split("/")
             if parts == [""]:
-                return self.answer(200, self.list_json(self.core_env > 0, "good")) if method == "GET" else (405, {})
+                return self.answer(200, self.list_json(self.core_env > 0, self.api_variant)) if method == "GET" else (405, {})
             name, action = parts[0], (parts[1] if len(parts) > 1 else "")
             if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", name):
                 return self.refuse("bad_request", "a field of the request is not valid: name", {"field": "name"}, status=400)
             if action == "status" and method == "GET":
                 return self.answer(200, self.job_status())
             if action == "plan" and method == "POST":
+                try:
+                    preq = json.loads(body) if body else {}
+                except ValueError:
+                    return self.refuse("bad_request", "a field of the request is not valid: body", {"field": "body"}, status=400)
+                pmode = preq.get("mode") if isinstance(preq, dict) else None
+                if "mode" in preq and pmode not in ("install", "update"):
+                    return self.refuse("bad_request", "a field of the request is not valid: mode", {"field": "mode"}, status=400)
                 self.tick(2.0)
-                return self.answer(200, self.plan(name, self.core_env > 0, "good", "root"))
+                return self.answer(200, self.plan(name, self.core_env > 0, self.api_variant, "root", mode="update" if pmode == "update" else None))
             if action in ("install", "remove") and method == "POST":
                 try:
                     req = json.loads(body) if body else {}
                 except ValueError:
                     return self.refuse("bad_request", "a field of the request is not valid: body", {"field": "body"}, status=400)
+                if action == "install" and "mode" in req and req["mode"] not in ("install", "update"):
+                    return self.refuse("bad_request", "a field of the request is not valid: mode", {"field": "mode"}, status=400)
                 if action == "install" and not re.fullmatch(r"m1-[0-9a-f]{32}", str(req.get("plan_id", ""))):
                     return self.refuse("bad_request", "a field of the request is not valid: plan_id", {"field": "plan_id"}, status=400)
                 reason = None if self.cfg.get("busy_ignored") else self.busy_reason()
@@ -1008,12 +1274,13 @@ class World:
                     self.launch_unit("remove", None)
                     self.tick(self.cfg.get("start_takes_s", 0.0))
                     return self.answer(202, self.job_status())
-                plan = self.plan(name, self.core_env > 0, "good", "root")
+                verb_ = "update" if req.get("mode") == "update" else "install"
+                plan = self.plan(name, self.core_env > 0, self.api_variant, "root", mode="update" if verb_ == "update" else None)
                 if plan["refused"]:
-                    return self.refuse(plan["refused"], "The module cannot be installed: %s." % plan["refused"], {"checks": plan["checks"]})
+                    return self.refuse(plan["refused"], "The module cannot be %s: %s." % ("updated" if verb_ == "update" else "installed", plan["refused"]), {"checks": plan["checks"]})
                 if plan["plan_id"] != req["plan_id"]:
                     return self.refuse("plan_changed", "The plan is no longer the one that was read", {})
-                self.launch_unit("install", req["plan_id"])
+                self.launch_unit(verb_, req["plan_id"])
                 self.tick(self.cfg.get("start_takes_s", 0.0))
                 return self.answer(202, self.job_status())
             return 404, {"success": 404, "message": "not found"}
@@ -1056,6 +1323,8 @@ class World:
             n.add("/var/lib/casaos/os-upgrade/busy")
         if self.dirt_unit:
             n.add("/etc/systemd/system/" + self.kit["unit"])
+        if self.dropin:
+            n |= {"/etc/systemd/system/%s.d" % self.kit["unit"], "/etc/systemd/system/%s.d/mp.conf" % self.kit["unit"]}
         if self.vm_dir:
             n.add("/DATA/VM")
         if self.witness:
@@ -1090,10 +1359,13 @@ class World:
              "osflag_dir " + ("yes" if self.osflag_dir else "no"), "dpkg_lock " + ("held" if self.dpkg_busy() else "free"), "dpkg_audit %d" % self.dpkg_audit,
              "tmp_exists yes", "tmp_entries %d" % len(self.tmp), "tmp_mount " + ("yes" if self.tmpfs else "no"), "unit_known %d" % (1 if known else 0),
              "unit_active " + ("active" if self.unit_active else "inactive"), "unit_enabled " + ("enabled" if self.unit_enabled else ("disabled" if known else "none")),
+             "unit_pid %d" % (self.unit_pid if self.unit_active else 0), "unit_since %d" % (int(self.unit_since * 1000) + 1 if self.unit_active else 0),
              "job_unit " + self.unit_state(), "conf " + ("yes" if k["conf_path"] in self.fs else "no"), "vm_dir " + ("yes" if self.vm_dir else "no"), "witness " + ("yes" if self.witness else "no"),
              "manager_env %d" % self.manager_env, "core_env %d" % self.core_env, "system_state running", "@@ pkgs"]
         for p in k["packages"]:
             o.append("pkg %s %s" % (p, ("hi" if p in self.hold else "ii") if p in self.installed else "none"))
+        for p in k.get("update", {}).get("added", []):
+            o.append("pkg %s %s" % (p, "ii" if p in self.installed else "none"))
         o += ["auto " + p for p in k["packages"] if p in self.auto and p in self.installed]
         o.append("@@ files")
         for p in self.footprint_paths() + ([k["conf_path"]] if k["conf_path"] in self.fs else []):
@@ -1149,14 +1421,16 @@ class World:
                     etc[p] = e["sha"]
                 elif p.startswith("/etc/") and e["kind"] == "l":
                     etc[p] = "link:" + e["target"]
+            if self.dropin:
+                etc["/etc/systemd/system/%s.d/mp.conf" % self.kit["unit"]] = sha("dropin " + self.dropin)
             if self.snap_n % 2 == 1:
                 etc["/etc/resolv.conf"] = "r2"
             o += ["%s\t%s" % (p, h) for p, h in sorted(etc.items())]
         o.append("@@ end")
         return "\n".join(o) + "\n"
 
-    def aptsim(self):
-        sim = self.apt_sim()
+    def aptsim(self, pk=None):
+        sim = self.apt_sim(pk)
         o = ["rc 0"]
         if sim["failure"]:
             o += ["held " + p for p in sim["held"]]
@@ -1167,7 +1441,8 @@ class World:
             o += ["need Need to get 1.2 MB of archives.", "need After this operation, 3.4 MB of additional disk space will be used."]
         return "\n".join(o) + "\n"
 
-    def core_restart(self, env):
+    def core_restart(self, env, variant="good"):
+        self.api_variant = variant
         self.manager_env = 3 if env else 0
         self.core_env = 0 if (not env or self.cfg.get("api_env_missing")) else 3
         self.core_down_until = self.t + 8.0
@@ -1190,7 +1465,7 @@ class World:
             self.at(self.cfg["down_seconds"] + 22.0, self.after_boot_unit)
 
     def after_boot_unit(self):
-        self.unit_active = True
+        self.start_unit()
         self.at(5.0, self.route_up)
 
     def ssh(self, cmd):
@@ -1219,7 +1494,7 @@ class World:
         if verb == "casaos_v":
             return 0, self.cfg["core_version"] + "\n"
         if verb == "mod":
-            if a[0] != "none" and a[0] not in k["variants"]:
+            if a[0] != "none" and a[0] not in k["variants"] and a[0] not in k["update"]["variants"]:
                 return 2, ""
             rc, out = self.hand(a[0], a[1], a[2:])
             return rc, out
@@ -1306,7 +1581,24 @@ class World:
             self.apt["/var/lib/apt/extended_states"].update(sha=sha("auto-" + a[0]), mtime=int(self.t))
             return 0, "manual auto=\n"
         if verb == "aptsim":
-            return 0, self.aptsim()
+            return 0, self.aptsim(a or None)
+        if verb == "sample_edit_on":
+            e = self.fs[self.sample_path()]
+            self.sample_orig = e["sha"]
+            e["sha"] = sha("edited " + self.sample_orig)
+            return 0, "edited %s\n" % e["sha"]
+        if verb == "sample_edit_off":
+            e = self.fs.get(self.sample_path())
+            if e is not None and self.sample_orig:
+                e["sha"], self.sample_orig = self.sample_orig, None
+            return 0, "off sha=%s\n" % (e["sha"] if e else "")
+        if verb == "dropin_on":
+            self.dropin = a[0]
+            return 0, "on %s\n" % a[0]
+        if verb == "dropin_off":
+            stays = bool(self.cfg.get("dropin_stays"))
+            self.dropin = self.dropin if stays else None
+            return 0, "off file=%s dir=%s\n" % (("yes", "yes") if stays else ("no", "no"))
         if verb == "watch_start":
             self.watch = dict(mode=a[0], step=a[1], arg=a[2], fired=False, done=False, out=[])
             return 0, "started\n"
@@ -1344,7 +1636,7 @@ class World:
         if verb == "job_unit":
             return 0, self.unit_state() + "\n"
         if verb == "api_env_on":
-            self.core_restart(True)
+            self.core_restart(True, a[0] if a else "good")
             return 0, "restarted\n"
         if verb == "api_env_off":
             self.core_restart(False)
@@ -1891,6 +2183,12 @@ def static_checks():
     for cid in ["M%d" % i for i in range(1, 12) if i not in (8, 9)]:
         check("the script writes the markers of %s" % cid, ("marker case_%s_start" % cid) in script and ("marker case_%s_done" % cid) in script, "")
     check("the script writes the markers of the cases of M8 and M9 (one pair, by id)", 'marker "case_${id}_start"' in script and 'marker "case_M9_${id}_start"' in script, "")
+    check("the script writes the markers of the update group and of U1 to U9", all(("marker case_%s_start" % c) in script and ("marker case_%s_done" % c) in script for c in ("U", "U1", "U2", "U3", "U4", "U5", "U6", "U7", "U8", "U9")), "")
+    check("the script writes the markers of the cases of U6 and U7 (one pair, by id)", 'marker "case_U6_${id}_start"' in script and 'marker "case_U7_${id}_start"' in script, "")
+    body = re.search(r"\ncase_u\(\) \{\n(.*?)\n\}\n", script, re.S)
+    check("the update group compares the version of the core with the first that has `casaos module update` before it asks the guest to run the word `module`, and ends there when the core is older",
+          body is not None and body.group(1).index("version_ge") < body.group(1).index("ensure_clean") and "UPD_MIN_CORE" in body.group(1) and "u-cmp" in body.group(1) and "modrun" not in body.group(1)[:body.group(1).index("version_ge")], "")
+    check("the update group runs after M11", script.index("run_case m11 case_m11") < script.index("run_case u case_u"), "")
     check("the script never runs `casaos module` before it has the version of the core (M1 is the first case and aborts on an old core)",
           script.index("run_case m1 case_m1") < script.index("run_case m2 case_m2") and "abort \"M1:" in script, "")
     check("the script runs the cases in order", [script.index("run_case m%d " % i) for i in range(1, 12)] == sorted(script.index("run_case m%d " % i) for i in range(1, 12)), "")
@@ -1899,13 +2197,14 @@ def static_checks():
           not [w for w in words if re.search(r"(?i)\b%s\b" % re.escape(w), script)], str([w for w in words if re.search(r"(?i)\b%s\b" % re.escape(w), script)]))
 
 
-def build_kit_broken(mutate):
+def build_kit_broken(mutate, env_extra=None):
     """build-kit on a module tree that `mutate` has spoiled: (exit status, what it said)"""
     root = tmproot("mp-kitb-")
     mod = make_module(root)
     mutate(mod)
     bindir = make_bin(root)
     env = dict(ENV, PATH=os.pathsep.join([bindir] + tool_dirs() + [ENV.get("PATH", "")]), GO_CALLS=posix(os.path.join(root, "go.calls")), WORK=posix(os.path.join(root, "work")))
+    env.update(env_extra or {})
     p = subprocess.run([BASH, posix(SCRIPT), "build-kit", posix(mod), posix(os.path.join(root, "kit"))], env=env, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
     shutil.rmtree(root, ignore_errors=True)
     return p.returncode, p.stdout.decode("utf-8", "replace")
@@ -1962,6 +2261,49 @@ def kit_checks(kit, calls, mod, proc):
            "/etc/systemd/system/multi-user.target.wants/casaos-virt-management.service", "/etc/casaos/modules/virt.json", "/var/lib/casaos/modules/virt.files", "/var/lib/casaos/modules/virt.dirs",
            "/var/lib/casaos/modules/virt.version"} <= set(read_out(kit, "footprint.list").split()), "")
     check("the manifest's sha256 is that of module.json", info["manifest_sha256"] == sha(MODULE_JSON), "")
+
+    # the update: an old and a new archive of the same module
+    up = info["update"]
+    base_paths = {f["path"]: f["sha256"] for f in info["files"]}
+    pick = {k: {f["path"]: f["sha256"] for f in up[k]["files"]} for k in ("old", "new", "bad")}
+    check("the update kit names the proof's version as the old one and the next as the new one", up["old"]["tag"] == "v0.1.1" and up["new"]["tag"] == "v0.1.2" and up["bad"]["tag"] == "v0.1.2" and up["added"] == ["hello"], str({k: up[k]["tag"] for k in ("old", "new", "bad")}))
+    check("the old archive is the module's plus a second sample, which the new one does not have", pick["old"] == dict(base_paths, **{"/etc/casaos/mp-legacy.conf.sample": pick["old"].get("/etc/casaos/mp-legacy.conf.sample")}) and "/etc/casaos/mp-legacy.conf.sample" in pick["old"]
+          and "/etc/casaos/mp-legacy.conf.sample" not in pick["new"], str(sorted(pick["old"])))
+    check("the new archive adds a sample under /etc/casaos, drops the old one's, and has another unit file (the program and the first sample are the same)",
+          "/etc/casaos/mp-next.conf.sample" in pick["new"] and "/etc/casaos/mp-next.conf.sample" not in pick["old"]
+          and pick["new"]["/usr/bin/casaos-virt-management"] == base_paths["/usr/bin/casaos-virt-management"] and pick["new"]["/etc/casaos/virt-management.conf.sample"] == base_paths["/etc/casaos/virt-management.conf.sample"]
+          and pick["new"]["/usr/lib/systemd/system/casaos-virt-management.service"] != base_paths["/usr/lib/systemd/system/casaos-virt-management.service"], str(sorted(pick["new"])))
+    check("the unit file that cannot be loaded is the new one's with an `ExecStart=` that is not an absolute path, and nothing else differs",
+          {p: h for p, h in pick["bad"].items() if pick["new"].get(p) != h} == {"/usr/lib/systemd/system/casaos-virt-management.service": pick["bad"]["/usr/lib/systemd/system/casaos-virt-management.service"]}
+          and pick["bad"]["/usr/lib/systemd/system/casaos-virt-management.service"] != pick["new"]["/usr/lib/systemd/system/casaos-virt-management.service"], "")
+    for key in ("old", "new", "bad"):
+        u = up[key]
+        raw = open(os.path.join(kit, u["archive_file"]), "rb").read()
+        aname = "linux-amd64-casaos-virt-management-%s.tar.gz" % u["tag"]
+        check("the %s archive of the update is accepted by the rules of the core's unpack" % key, go_scan(raw, info["unit"]) is None, str(go_scan(raw, info["unit"])))
+        check("the %s archive is named for a release at its own tag, and its sha256 is its file's" % key, u["archive"]["url"] == "https://github.com/ReCasaOS/CasaOS-VirtManagement/releases/download/%s/%s" % (u["tag"], aname)
+              and u["archive"]["sha256"] == sha(raw) and u["archive"]["bytes"] == len(raw), "")
+        cat_text = read_out(kit, u["catalogue"])
+        check("the test catalogue of the %s archive is accepted by the rules of the core's reader, tier community, with the archive's sha256" % key, go_catalogue(cat_text, sha(raw), aname)
+              and json.loads(cat_text)["modules"][0]["tier"] == "community" and json.loads(cat_text)["modules"][0]["tag"] == u["tag"], cat_text[:200])
+        tf2 = tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz")
+        mj = tf2.extractfile("module.json").read()
+        check("the manifest in the catalogue of the %s archive is its module.json, whole, and its sha256 is kit.json's" % key, json.loads(cat_text)["modules"][0]["manifest"] == json.loads(mj) and sha(mj) == u["manifest_sha256"], "")
+        check("every entry of the %s archive is root's, and the program is 0755" % key, all(m.uid == 0 and m.gid == 0 for m in tf2) and {m.name: m.mode for m in tf2 if m.isreg()}["build/sysroot/usr/bin/casaos-virt-management"] == 0o755, "")
+    new_man = json.loads(tarfile.open(fileobj=io.BytesIO(open(os.path.join(kit, up["new"]["archive_file"]), "rb").read()), mode="r:gz").extractfile("module.json").read())
+    old_man = json.loads(tarfile.open(fileobj=io.BytesIO(open(os.path.join(kit, up["old"]["archive_file"]), "rb").read()), mode="r:gz").extractfile("module.json").read())
+    check("the new manifest names one package more than the old one, which is on every leg's mirror, and nothing else differs", old_man == json.loads(MODULE_JSON) and new_man["packages"]["common"] == old_man["packages"]["common"] + ["hello"]
+          and {k: v for k, v in new_man.items() if k != "packages"} == {k: v for k, v in old_man.items() if k != "packages"} and up["new"]["packages"] == sorted(set(up["old"]["packages"]) | {"hello"}), str(new_man["packages"]))
+    check("the package the update adds is listed for the guest", read_out(kit, "upd-packages.list").split() == ["hello"], "")
+    fp = set(read_out(kit, "footprint.list").split())
+    check("the footprint of the kit holds the samples of both versions (the guest's snapshots see them)", {"/etc/casaos/mp-legacy.conf.sample", "/etc/casaos/mp-next.conf.sample"} <= fp, "")
+    check("the variants of the update name an archive and a catalogue each", sorted(up["variants"]) == ["ubad", "unew", "uold"] and all(os.path.exists(os.path.join(kit, v["archive"])) and os.path.exists(os.path.join(kit, v["catalogue"])) for v in up["variants"].values()), "")
+    rcode, said = build_kit_broken(lambda m: open(os.path.join(m, "module.json"), "w").write(MODULE_JSON.replace('"qemu-utils", ', '"qemu-utils", "hello", ')))
+    check("build-kit refuses a module that already names the package the update is to add", rcode != 0 and "hello" in said, said[-200:])
+    rcode, said = build_kit_broken(lambda m: open(os.path.join(m, "build/sysroot/usr/lib/systemd/system/casaos-virt-management.service"), "w").write("[Service]\nType=simple\n"))
+    check("build-kit refuses a unit file that has no `ExecStart=` line to spoil", rcode != 0 and "ExecStart" in said, said[-200:])
+    rcode, said = build_kit_broken(lambda m: None, {"PROOF_UPDATE_VERSION": "0.1.1"})
+    check("build-kit refuses an update version that is not later than the proof's", rcode != 0 and "not later" in said, said[-200:])
     # a module that cannot make a kit says so, and exits
     rcode, said = build_kit_broken(lambda m: os.remove(os.path.join(m, "LICENSE")))
     check("build-kit refuses a module that has no LICENSE", rcode != 0 and "LICENSE" in said, said[-200:])
@@ -1981,7 +2323,11 @@ EXPECTED = ["M1 the release carries the assistant", "M2 list", "M2 plan", "M2 st
             "M8 held_package", "M8 a package marked automatic"] + [
     "M9 SIGKILL at the step %s" % s for s in ("packages", "download", "verify", "unpack", "units", "manifest", "start", "route")] + [
     "M9 systemctl stop during the step packages", "M9 systemctl stop during the step start", "M9 SIGTERM at the step start", "M10 the restart", "M10 remove after the restart",
-    "M11 /etc/casaos", "M11 dpkg", "M11 /etc", "M11 the rest of the file system"]
+    "M11 /etc/casaos", "M11 dpkg", "M11 /etc", "M11 the rest of the file system"] + [
+    "U1 list", "U2 plan --update", "U2 plan writes nothing", "U2 plan refused up_to_date", "U2 plan refused downgrade", "U3 update markers", "U3 files and state", "U3 status, route and host",
+    "U4 plans and refusals", "U4 the job", "U5 file_exists", "U6 a start that fails", "U6 a unit file that cannot be loaded"] + [
+    "U7 SIGKILL at the step %s" % s for s in ("backup", "stop", "swap", "units", "start")] + [
+    "U7 systemctl stop during the step swap", "U7 systemctl stop during the step start", "U8 /etc/casaos", "U8 dpkg", "U8 /etc", "U8 the rest of the file system", "U9 the restart"]
 # the kills whose signal lands in the step they name on the fake (the steps of a tidy fake last long enough for the watcher): all of them
 KILL = {s: "M9 SIGKILL at the step %s" % s for s in ("packages", "download", "verify", "unpack", "units", "manifest", "start", "route")}
 
@@ -2035,7 +2381,7 @@ def core_mutations():
     m("M1: a core that is not the one the release pins", invalid_run("is not the one the release pins"), lambda d: write_out(d, "m1-version.out", "v0.4.80\n"))
     m("M1: a version that is not one", invalid_run("is not a release of the core"), lambda d: write_out(d, "m1-version.out", "casaos: command not found\n"))
 
-    m("M1: a pin written with quotes is the pin", passes("M1 the release carries the assistant"), lambda d: write_out(d, "guest/pins", 'CASAOS_TAG="v0.4.75"\n'))
+    m("M1: a pin written with quotes is the pin", passes("M1 the release carries the assistant"), lambda d: write_out(d, "guest/pins", 'CASAOS_TAG="v0.4.78"\n'))
     m("M3: a download_bytes that holds what apt has cached is not a fault", passes("M3 plan packages"), lambda d: gjson(d, "m3-plan-root", lambda x: x["packages"].update(download_bytes=x["packages"]["download_bytes"] * 2)))
 
     # M2
@@ -2332,6 +2678,225 @@ def end_mutations():
 def replace_line_fn(d, name, old, new):
     replace_line(d, name, old, new)
 
+def jdoc_text(d, name):
+    """the standard output of a guest verb that is one JSON object, as it is"""
+    return json.loads(read_out(d, name + ".out"))
+
+
+def fact_of(d, tag, key):
+    for ln in lines_of(d, "snap-%s.facts" % tag):
+        if ln.startswith(key + " "):
+            return ln.split(" ", 1)[1].strip()
+    raise AssertionError("snap-%s.facts has no %s" % (tag, key))
+
+
+def all_but_last_state(rows, state, step="done"):
+    return rows[:-1] + [rows[-1][:COL["state"]] + [state, step] + rows[-1][COL["state"] + 2:]]
+
+
+def update_mutations():
+    M = []
+
+    def m(label, expect, fn):
+        M.append((label, fn, expect))
+
+    UW = "/usr/lib/systemd/system/casaos-virt-management.service"
+    NEXT = "/etc/casaos/mp-next.conf.sample"
+    LEG = "/etc/casaos/mp-legacy.conf.sample"
+    CONF = "/etc/casaos/virt-management.conf"
+    SAMPLE = "/etc/casaos/virt-management.conf.sample"
+    FP = "\tf\t755\t0:0\tabc"
+    U3U = "u3-update.out"
+    K = lambda s: "u7-kill-%s" % s
+    TK = lambda s: "U7 SIGKILL at the step %s" % s
+
+    def unseat_fact(d, tag):
+        fact(d, tag, "unit_pid", fact_of(d, "u3-before", "unit_pid"))
+
+    # the group
+    m("U: a core that has the assistant and not the update", invalid_run("older than v0.4.78"), lambda d: (write_out(d, "u-cmp", "1\n"), write_out(d, "u-version.out", "v0.4.77\n")))
+    m("U: a kit that has no update", invalid_run("no update section"), lambda d: write_out(d, "kit.json", json.dumps({k: v for k, v in json.loads(read_out(d, "kit.json")).items() if k != "update"})))
+    m("U: a case that began and did not end", invalid_run("U3 (update by hand) began and did not end"), lambda d: drop_marker(d, "case_U3_done"))
+    m("U: a call of the API that got no answer", invalid_run("u4-start"), lambda d: write_out(d, "u4-start.curl", "7\n"))
+
+    # U1
+    m("U1: the old catalogue says an update is available", fails("U1 list", "with the catalogue at the installed tag says update"), lambda d: gjson(d, "u1-list-old", lambda x: x["modules"][0]["update"].update(available=True)))
+    m("U1: the newer catalogue says none is", fails("U1 list", "with a newer tag in the catalogue says update"), lambda d: gjson(d, "u1-list-new", lambda x: x["modules"][0]["update"].update(available=False)))
+    m("U1: the update has a field more", fails("U1 list", "says update"), lambda d: gjson(d, "u1-list-new", lambda x: x["modules"][0]["update"].update(note="x")))
+    m("U1: the update is not there", fails("U1 list", "says update"), lambda d: gjson(d, "u1-list-old", lambda x: x["modules"][0].pop("update")))
+    m("U1: the latest tag is the installed one", fails("U1 list", "says update"), lambda d: gjson(d, "u1-list-new", lambda x: x["modules"][0]["update"].update(latest="v0.1.1")))
+    m("U1: the list prints two lines", fails("U1 list", "prints one JSON object"), lambda d: write_out(d, "u1-list-old.out", read_out(d, "u1-list-old.out") + "banner\n"))
+    m("U1: the list as nobody ends with status 3", fails("U1 list", "ends with status 0"), lambda d: rc(d, "u1-list-nobody", 3))
+    m("U1: the installed version is not the old one", fails("U1 list", "shows the module installed at v0.1.1"), lambda d: gjson(d, "u1-list-new", lambda x: x["modules"][0]["installed"].update(version="v9.9.9")))
+    m("U1: a module that is not installed has an update", fails("U1 list", "no `update`"), lambda d: gjson(d, "m3-list-root", lambda x: x["modules"][0].update(update={"available": False, "installed": "v0.1.1", "latest": "v0.1.1"})))
+
+    # U2
+    m("U2: the checks are in another order", fails("U2 plan --update", "in this order"), lambda d: gjson(d, "u2-plan", lambda x: x["checks"].insert(4, x["checks"].pop(5))))
+    m("U2: a check is not ok", fails("U2 plan --update", "every check is ok"), lambda d: gjson(d, "u2-plan", lambda x: x["checks"][5].update(ok=False)))
+    m("U2: the plan does not say its mode", fails("U2 plan --update", "its mode is update"), lambda d: gjson(d, "u2-plan", lambda x: x.pop("mode")))
+    m("U2: the package the manifest adds is not said", fails("U2 plan --update", "update says the two tags"), lambda d: gjson(d, "u2-plan", lambda x: x["update"].update(added=[])))
+    m("U2: to_install is not what apt says", fails("U2 plan --update", "to_install is what"), lambda d: gjson(d, "u2-plan", lambda x: x["packages"].update(to_install=[])))
+    m("U2: a package apt would upgrade", fails("U2 plan --update", "to_upgrade is what"), lambda d: gjson(d, "u2-plan", lambda x: x["packages"].update(to_upgrade=["libc6"])))
+    m("U2: the plan_id is not one", fails("U2 plan --update", "plan_id is m1-"), lambda d: gjson(d, "u2-plan", lambda x: x.update(plan_id="p1-1")))
+    m("U2: the plan is of another tag", fails("U2 plan --update", "the plan is of the module"), lambda d: gjson(d, "u2-plan", lambda x: x.update(tag="v0.1.1")))
+    m("U2: the archive is the old one", fails("U2 plan --update", "the archive is the new one"), lambda d: gjson(d, "u2-plan", lambda x: x["archive"].update(url="https://github.com/x/y")))
+    m("U2: the plan as nobody has busy ok", fails("U2 plan --update", "plan as nobody is made"), lambda d: gjson(d, "u2-plan-nobody", lambda x: x["checks"][7].update(ok=True, detail="")))
+    m("U2: the plan as nobody has another id", fails("U2 plan --update", "has the root's plan_id"), lambda d: gjson(d, "u2-plan-nobody", lambda x: x.update(plan_id="m1-" + "4" * 32)))
+    m("U2: the id of an install is the id of the update", fails("U2 plan --update", "not the id of the plan of an install", also=("M3 plan as nobody",)),
+      lambda d: gjson(d, "m3-plan-root", lambda x: x.update(plan_id=jdoc_text(d, "u2-plan")["plan_id"])))
+    m("U2: extended_states is written by the plan", fails("U2 plan writes nothing", "extended_states is as it was after the plans"), lambda d: edit_lines(d, "snap-u2-after.aptstate", lambda ls: [l + "x" if l.startswith("/var/lib/apt/extended_states") else l for l in ls]))
+    m("U2: the sandbox of the plan is left in /var/tmp", fails("U2 plan writes nothing", "/var/tmp holds what it held"), lambda d: add_line(d, "snap-u2-after.names", "/var/tmp/casaos-plan-1"))
+    m("U2: a backup folder appears", fails("U2 plan writes nothing", "no backup folder"), lambda d: add_line(d, "snap-u2-after.tmp", "backup-virt"))
+    m("U2: the unit is touched", fails("U2 plan writes nothing", "the unit of the module was not touched"), lambda d: fact(d, "u2-after", "unit_pid", "999"))
+    m("U2: a file of the module changes", fails("U2 plan writes nothing", "is what it was"), lambda d: subst(d, "snap-u2-after.files", UW + "\tf\t644\t0:0\t", UW + "\tf\t644\t0:0\t0"))
+    m("U2: a name of the file system appears", fails("U2 plan writes nothing", "no name of the file system changed"), lambda d: add_line(d, "snap-u2-after.names", "/etc/casaos/stray"))
+    m("U2: apt could not be asked", invalid_run("apt could not be asked what installing hello"), lambda d: write_out(d, "u2-aptsim.out", "rc 100\n"))
+    m("U2: the plan at the installed tag is refused another code", fails("U2 plan refused up_to_date", "refused up_to_date"), lambda d: gjson(d, "u2-plan-same", lambda x: x.update(refused="os")))
+    m("U2: the plan at the installed tag has an id", fails("U2 plan refused up_to_date", "no plan_id"), lambda d: gjson(d, "u2-plan-same", lambda x: x.update(plan_id="m1-" + "3" * 32)))
+    m("U2: the plan at the installed tag says another thing of newer", fails("U2 plan refused up_to_date", "the check installed is ok"), lambda d: gjson(d, "u2-plan-same", lambda x: x["checks"][5].update(detail="downgrade")))
+    m("U2: the plan of a downgrade is not refused", fails("U2 plan refused downgrade", "refused downgrade"), lambda d: gjson(d, "u3-down-plan", lambda x: x.update(refused=None)))
+    m("U2: the plan of a downgrade says the installed tag is the old one", fails("U2 plan refused downgrade", "no plan_id, and update says"), lambda d: gjson(d, "u3-down-plan", lambda x: x["update"].update(installed="v0.1.1")))
+    m("U2: the plan at the tag just installed is not up_to_date", fails("U2 plan refused downgrade", "refused up_to_date"), lambda d: gjson(d, "u3-same-plan", lambda x: x.update(refused=None)))
+
+    # U3
+    m("U3: the update ends with status 3", fails("U3 update markers", "ends with status 0"), lambda d: rc(d, U3U[:-4], 3))
+    m("U3: two steps are out of order", fails("U3 update markers", "the steps go in order"), lambda d: swap_lines(d, U3U, "CASAOS_MODULE_STEP - virt backup begin", "CASAOS_MODULE_STEP - virt stop begin"))
+    m("U3: a step has no end", fails("U3 update markers", "the steps go in order"), lambda d: drop_line(d, U3U, "CASAOS_MODULE_STEP - virt swap done"))
+    m("U3: the result is not ok", fails("U3 update markers", "one RESULT line, ok"), lambda d: subst(d, U3U, "virt ok done - -", "virt failed done - -"))
+    m("U3: the run does not say what it updated", fails("U3 update markers", "the run says what it updated"), lambda d: drop_line(d, U3U, "updated: virt"))
+    m("U3: a marker with a nonce of the core", fails("U3 update markers", "the nonce is -"), lambda d: subst(d, U3U, "CASAOS_MODULE_STEP - virt route begin", "CASAOS_MODULE_STEP " + "a" * 32 + " virt route begin"))
+    m("U3: the update was not given the plan_id", fails("U3 update markers", "--plan-id"), lambda d: write_out(d, "u3-plan-id", "\n"))
+    m("U3: the log is not the output", fails("U3 update markers", "the log holds the lines of the standard output"), lambda d: drop_line(d, "u3-log.out", "updated: virt"))
+    m("U3: the new sample has another mode", fails("U3 files and state", "the mode of /etc/casaos/mp-next.conf.sample"), lambda d: subst(d, "snap-u3-after.files", "mp-next.conf.sample\tf\t644", "mp-next.conf.sample\tf\t666"))
+    m("U3: the unit file is the old one", fails("U3 files and state", "the content of " + UW), lambda d: subst(d, "snap-u3-after.files", UW + "\tf\t644\t0:0\t", UW + "\tf\t644\t0:0\t0"))
+    m("U3: the sample the new version drops is still there", fails("U3 files and state", "is not on the box"), lambda d: add_line(d, "snap-u3-after.files", LEG + "\tf\t644\t0:0\tabc"))
+    m("U3: the sample the new version adds is not there", fails("U3 files and state", "mp-next.conf.sample is a file"), lambda d: drop_line(d, "snap-u3-after.files", NEXT + "\t"))
+    m("U3: the administrator's configuration is rewritten", fails("U3 files and state", "byte for byte"), lambda d: subst(d, "snap-u3-after.files", CONF + "\tf\t644\t0:0\t", CONF + "\tf\t644\t0:0\t0"))
+    m("U3: the list of files lacks the new sample", fails("U3 files and state", "the list names exactly the files"), lambda d: edit_lines(d, "snap-u3-after.lists_files", lambda ls: [l for l in ls if "mp-next" not in l]))
+    m("U3: the list of files still names the dropped sample", fails("U3 files and state", "the list names exactly the files"), lambda d: edit_lines(d, "snap-u3-after.lists_files", lambda ls: ls[:1] + ["f %s %s" % ("0" * 64, LEG)] + ls[1:]))
+    m("U3: the version file says the old tag", fails("U3 files and state", "the version file says v0.1.2"), lambda d: write_out(d, "snap-u3-after.lists_version", "v0.1.1\n"))
+    m("U3: the manifest is the old one", fails("U3 files and state", "the manifest is the module.json"), lambda d: subst(d, "snap-u3-after.files", "/etc/casaos/modules/virt.json\tf\t644\t0:0\t", "/etc/casaos/modules/virt.json\tf\t644\t0:0\t0"))
+    m("U3: the unit is not active", fails("U3 files and state", "the unit is enabled and active"), lambda d: fact(d, "u3-after", "unit_active", "inactive"))
+    m("U3: the package is not installed", fails("U3 files and state", "package that the new manifest adds is installed", also=()), lambda d: dpkg_line(d, "u3-after", "hello", "none"))
+    m("U3: the service was not restarted", fails("U3 files and state", "the service was restarted"), lambda d: unseat_fact(d, "u3-after"))
+    m("U3: a backup folder is left", fails("U3 files and state", "no backup folder is left"), lambda d: (add_line(d, "snap-u3-after.tmp", "backup-virt"), fact(d, "u3-after", "tmp_entries", "1")))
+    m("U3: the box was not the old version before", fails("U3 files and state", "before the update: the version file says v0.1.1"), lambda d: write_out(d, "snap-u3-before.lists_version", "v0.1.2\n"))
+    m("U3: the status says the route does not answer", fails("U3 status, route and host", "status says installed at the new version"), lambda d: gjson(d, "u3-status", lambda x: x["route"].update(answers=False)))
+    m("U3: the list still shows an update", fails("U3 status, route and host", "list shows the module at the new version"), lambda d: gjson(d, "u3-list", lambda x: x["modules"][0]["update"].update(available=True)))
+    m("U3: the host does not answer", fails("U3 status, route and host", "answers 200"), lambda d: code(d, "u3-host", 404))
+    m("U3: the route without a token is a 404", fails("U3 status, route and host", "refused by the module, not 404"), lambda d: code(d, "u3-host-noauth", 404))
+
+    # U4
+    m("U4: the test variables did not reach the core", invalid_run("U4: the test variables did not reach"), lambda d: write_out(d, "u4-api-state.out", "manager 3\ncore 0\n"))
+    m("U4: a stale plan_id is accepted", fails("U4 plans and refusals", "plan_id that is not the plan's is refused plan_changed"), lambda d: code(d, "u4-stale", 202))
+    m("U4: the plan_id of an install is accepted for an update", fails("U4 plans and refusals", "plan_id of an install is refused plan_changed"), lambda d: code(d, "u4-wrongmode", 202))
+    m("U4: a mode that is neither is accepted", fails("U4 plans and refusals", "a 400 bad_request on the field mode"), lambda d: code(d, "u4-badmode", 200))
+    m("U4: the plan of the update says no mode", fails("U4 plans and refusals", "mode update"), lambda d: jdata(d, "u4-plan", lambda x: x.pop("mode")))
+    m("U4: the plan of the install is refused", fails("U4 plans and refusals", "plan of an install on a box that has none"), lambda d: jdata(d, "u4-plan-install", lambda x: x.update(refused="os")))
+    m("U4: the id of the update is the id of the install", fails("U4 plans and refusals", "not the id of the install"), lambda d: jdata(d, "u4-plan", lambda x: x.update(plan_id=jdoc(d, "u4-plan-install")["data"]["plan_id"])))
+    m("U4: the plan of the update adds nothing", fails("U4 plans and refusals", "its update says"), lambda d: jdata(d, "u4-plan", lambda x: x["update"].update(added=[])))
+    m("U4: the job is not an update (the answer of the start)", fails("U4 the job", "the answer of the start says the job is an update"), lambda d: jdata(d, "u4-start", lambda x: x["job"].update(kind="install")))
+    m("U4: the job is refused", fails("U4 the job", "is accepted"), lambda d: code(d, "u4-start", 409))
+    m("U4: the job never succeeds", fails("U4 the job", "the job ends succeeded"), lambda d: set_last(d, "u4-job", state="failed", code="start_failed"))
+    m("U4: the job goes back a step", fails("U4 the job", "the step only goes forward"), lambda d: rows_edit(d, "u4-job", lambda rows: [r if i != 6 else r[:COL["step"]] + ["packages"] + r[COL["step"] + 1:] for i, r in enumerate(rows)]))
+    m("U4: the queued line says install", fails("U4 the job", "the first line of the log is the core's queued line"), lambda d: subst(d, "u4-log.out", " virt update 2", " virt install 2"))
+    m("U4: the queued line is not there", fails("U4 the job", "the first line of the log is the core's queued line"), lambda d: edit_lines(d, "u4-log.out", lambda ls: ls[1:]))
+    m("U4: the nonce is in the answer of the core", fails("U4 the job", "the nonce is in no answer"), lambda d: write_out(d, "u4-status.json", read_out(d, "u4-status.json") + " " + re.search(r"STEP ([0-9a-f]{32}) virt", read_out(d, "u4-log.out")).group(1)))
+    m("U4: the status of the finished job is not an update", fails("U4 the job", "the status of the finished job"), lambda d: jdata(d, "u4-status", lambda x: x["job"].update(kind="install")))
+    m("U4: the finished job has a code", fails("U4 the job", "the status of the finished job"), lambda d: jdata(d, "u4-status", lambda x: x["job"].update(code="route_timeout")))
+    m("U4: the log_tail has a marker", fails("U4 the job", "log_tail"), lambda d: jdata(d, "u4-status", lambda x: x["job"].update(log_tail=["CASAOS_MODULE_STEP - virt done done 2026-01-01T00:00:00Z"])))
+    m("U4: the box is not the new version", fails("U4 the job", "after the update through the API: the unit is enabled and active"), lambda d: fact(d, "u4-after", "unit_enabled", "disabled"))
+    m("U4: the box was not the old version before", fails("U4 the job", "before the update: the version file says v0.1.1"), lambda d: write_out(d, "snap-u4-before.lists_version", "v0.1.2\n"))
+    m("U4: the host does not answer", fails("U4 the job", "the host answers"), lambda d: code(d, "u4-host", 404))
+    m("U4: the list still shows an update", fails("U4 the job", "says no update is available"), lambda d: jdata(d, "u4-list", lambda x: x["modules"][0]["update"].update(available=True)))
+    m("U4: the job unit was never seen and is not in the journal", fails("U4 the job", "the job ran as"), lambda d: (write_out(d, "u4-journal.out", "nothing\n"), map_rows(d, "u4-job", "running", unit="inactive")))
+
+    # U5
+    m("U5: the update goes through", fails("U5 file_exists", "ends with status 3"), lambda d: rc(d, "u5-update", 0))
+    m("U5: it fails at another step", fails("U5 file_exists", "the steps go up to unpack"), lambda d: subst(d, "u5-update.out", "unpack failed", "backup failed"))
+    m("U5: it fails with another code", fails("U5 file_exists", "the RESULT line says failed unpack file_exists"), lambda d: subst(d, "u5-update.out", "failed unpack file_exists", "failed unpack unpack_path"))
+    m("U5: the package it installed is not said to be kept", fails("U5 file_exists", "the last sentence before the result"), lambda d: drop_line(d, "u5-update.out", "kept_packages"))
+    m("U5: the administrator's file was overwritten", fails("U5 file_exists", "still what the administrator made it"), lambda d: subst(d, "snap-u5-after.files", SAMPLE + "\tf\t644\t0:0\t", SAMPLE + "\tf\t644\t0:0\t0"))
+    m("U5: a file of the new version was put down", fails("U5 file_exists", "was not put down"), lambda d: add_line(d, "snap-u5-after.files", NEXT + "\tf\t644\t0:0\tabc"))
+    m("U5: the unit was restarted", fails("U5 file_exists", "never stopped"), lambda d: fact(d, "u5-after", "unit_pid", "999"))
+    m("U5: a backup folder is left", fails("U5 file_exists", "the area of the install is empty"), lambda d: (add_line(d, "snap-u5-after.tmp", "backup-virt"), fact(d, "u5-after", "tmp_entries", "1")))
+    m("U5: the package was taken off", fails("U5 file_exists", "stays"), lambda d: dpkg_line(d, "u5-after", "hello", "none"))
+    m("U5: the sample was not edited", invalid_run("U5: the sample could not be edited"), lambda d: write_out(d, "u5-dirt.out", "no\n"))
+    m("U5: the sample was not put back", invalid_run("U5: the sample was not put back"), lambda d: write_out(d, "u5-undo.out", "off sha=abc\n"))
+
+    # U6
+    m("U6: the update that must fail goes through", fails("U6 a start that fails", "ends with status 3"), lambda d: rc(d, "u6-start-update", 0))
+    m("U6: the rollback does not run", fails("U6 a start that fails", "then the rollback runs"), lambda d: edit_lines(d, "u6-start-update.out", lambda ls: [l for l in ls if "rollback_units" not in l]))
+    m("U6: the result does not say rolled_back", fails("U6 a start that fails", "the RESULT line says failed start start_failed rolled_back"), lambda d: subst(d, "u6-start-update.out", "start_failed rolled_back", "start_failed -"))
+    m("U6: the run does not say it rolled back", fails("U6 a start that fails", "says it rolled back only when"), lambda d: drop_line(d, "u6-start-update.out", "rolled back"))
+    m("U6: the file of the new version is left", fails("U6 a start that fails", "is not on the box"), lambda d: add_line(d, "snap-u6-start-after.files", NEXT + "\tf\t644\t0:0\tabc"))
+    m("U6: a file of the old version is another", fails("U6 a start that fails", "is what it was"), lambda d: subst(d, "snap-u6-start-after.files", UW + "\tf\t644\t0:0\t", UW + "\tf\t644\t0:0\t0"))
+    m("U6: the list of files is not the old one", fails("U6 a start that fails", "the lists of files and of directories and the version are what they were"), lambda d: edit_lines(d, "snap-u6-start-after.lists_files", lambda ls: ls[:-1]))
+    m("U6: the old unit is not active", fails("U6 a start that fails", "the old unit is enabled and active again"), lambda d: fact(d, "u6-start-after", "unit_active", "inactive"))
+    m("U6: the backup folder is left", fails("U6 a start that fails", "no backup folder is left"), lambda d: (add_line(d, "snap-u6-start-after.tmp", "backup-virt"), fact(d, "u6-start-after", "tmp_entries", "1")))
+    m("U6: the drop-in could not be taken away", invalid_run("U6: the drop-in"), lambda d: write_out(d, "u6-start-undo.out", "off file=yes dir=yes\n"))
+    m("U6: the unit file is refused at a step the contract does not name", fails("U6 a unit file that cannot be loaded", "the step units or the step start"), lambda d: subst(d, "u6-unit-update.out", "failed start start_failed", "failed unpack start_failed"))
+    m("U6: the unit file that cannot be loaded leaves the new files", fails("U6 a unit file that cannot be loaded", "is not on the box"), lambda d: add_line(d, "snap-u6-unit-after.files", NEXT + "\tf\t644\t0:0\tabc"))
+    m("U6: the unit file that cannot be loaded: the packages are not said to be kept", fails("U6 a unit file that cannot be loaded", "the last sentence before the result"), lambda d: drop_line(d, "u6-unit-update.out", "kept_packages"))
+    m("U6: the log has other steps than the output", fails("U6 a unit file that cannot be loaded", "the log has the same steps"), lambda d: edit_lines(d, "u6-unit-log.out", lambda ls: [l for l in ls if "rollback_start" not in l]))
+
+    # U7
+    m("U7 kill: the job reads succeeded", fails(TK("units"), "never reads succeeded"), lambda d: rows_edit(d, K("units") + "-job", lambda rows: rows + [rows[-1][:COL["state"]] + ["succeeded"] + rows[-1][COL["state"] + 1:]]))
+    m("U7 kill: the job reads failed, not interrupted", fails(TK("units"), "reads interrupted in the end"), lambda d: set_last(d, K("units") + "-job", state="failed"))
+    m("U7 kill: the job stays running", fails(TK("units"), "reaches a final state"), lambda d: (set_last(d, K("units") + "-job", state="running"), write_out(d, K("units") + "-job.timeout", "240\n")))
+    m("U7 kill: the step of the interrupted job is another", fails(TK("units"), "the step of the last marker"), lambda d: set_last(d, K("units") + "-job", step="route"))
+    m("U7 kill: the log says the end", fails(TK("units"), "no RESULT line"), lambda d: add_line(d, K("units") + "-log.out", "CASAOS_MODULE_RESULT %s virt ok done - - 2026-09-21T14:00:00Z" % re.search(r"STEP ([0-9a-f]{32}) virt", read_out(d, K("units") + "-log.out")).group(1)))
+    m("U7 kill: the box is not quiet", fails(TK("units"), "no assistant, apt or dpkg is at work"), lambda d: (write_out(d, K("units") + "-wait.out", "not clean after 700 s: unit\n"), rc(d, K("units") + "-wait", 1)))
+    m("U7 kill: dpkg is left interrupted", fails(TK("units"), "dpkg --audit finds nothing once the box is quiet"), lambda d: fact(d, K("units") + "-dead", "dpkg_audit", "2"))
+    m("U7 kill: the status is not that of an update", fails(TK("units"), "the status of the job says it is an update"), lambda d: jdata(d, K("units") + "-status", lambda x: x["job"].update(kind="install")))
+    m("U7 kill: the recovery goes on to update", fails(TK("units"), "ends with status 2"), lambda d: rc(d, K("units") + "-recover", 0))
+    m("U7 kill: the recovery puts nothing back", fails(TK("units"), "puts the files back before it does anything else"), lambda d: edit_lines(d, K("units") + "-recover.out", lambda ls: [l for l in ls if "recover_units" not in l]))
+    m("U7 kill: the recovery is refused for another reason", fails(TK("units"), "the RESULT line says refused - up_to_date"), lambda d: subst(d, K("units") + "-recover.out", "refused - up_to_date", "refused - downgrade"))
+    m("U7 kill: the recovered box has a file of the new version", fails(TK("units"), "is not on the box"), lambda d: add_line(d, "snap-" + K("units") + "-recovered.files", NEXT + "\tf\t644\t0:0\tabc"))
+    m("U7 kill: the recovered box has another version file", fails(TK("units"), "after the recovery: the version file says v0.1.1"), lambda d: write_out(d, "snap-" + K("units") + "-recovered.lists_version", "v0.1.2\n"))
+    m("U7 kill: the recovered box is not what it was", fails(TK("units"), "after the recovery: every file"), lambda d: subst(d, "snap-" + K("units") + "-recovered.files", CONF + "\tf\t644\t0:0\t", CONF + "\tf\t644\t0:0\t0"))
+    m("U7 kill: the recovered unit is not active", fails(TK("units"), "after the recovery"), lambda d: fact(d, K("units") + "-recovered", "unit_active", "inactive"))
+    m("U7 kill: the update after the recovery fails", fails(TK("units"), "the update that follows goes through"), lambda d: rc(d, K("units") + "-update", 3))
+    m("U7 kill: the update after the recovery leaves the old version", fails(TK("units"), "after the update that follows: the version file says v0.1.2"), lambda d: write_out(d, "snap-" + K("units") + "-new.lists_version", "v0.1.1\n"))
+    m("U7 kill: the update after the recovery leaves half of each", fails(TK("units"), "after the update that follows"), lambda d: add_line(d, "snap-" + K("units") + "-new.files", LEG + "\tf\t644\t0:0\tabc"))
+    m("U7 kill at stop: the backup folder is not there", fails(TK("stop"), "the backup folder is there"), lambda d: (write_out(d, "snap-" + K("stop") + "-dead.tmp", ""), edit_lines(d, "snap-" + K("stop") + "-dead.names", lambda ls: [l for l in ls if "backup-virt" not in l])))
+    m("U7 kill: the signal could not be sent", invalid_run("the signal could not be sent"), lambda d: subst(d, K("units") + "-watch-result.out", "rc=0", "rc=1"))
+    m("U7 kill: no process to signal", invalid_run("no process of the assistant"), lambda d: write_out(d, K("units") + "-watch-result.out", "no process of the assistant to signal\n"))
+    m("U7 kill: the step is too short to be seen", not_testable(TK("swap"), "shorter than that"), lambda d: (write_out(d, K("swap") + "-watch-result.out", "never saw the step swap begin\n"), rows_edit(d, K("swap") + "-job", lambda rows: all_but_last_state(rows, "succeeded"))))
+    m("U7 kill: the update had ended", not_testable(TK("start"), "had ended"), lambda d: edit_lines(d, K("start") + "-watch-result.out", lambda ls: [("after=CASAOS_MODULE_RESULT %s virt ok done - - 2026-09-21T14:00:00Z" % ("0" * 32)) if l.startswith("after=") else l for l in ls]))
+    m("U7 kill: the signal landed after the step", not_testable(TK("units"), "the log ended at"), lambda d: edit_lines(d, K("units") + "-watch-result.out", lambda ls: [l.replace("virt units begin", "virt start begin") if l.startswith("after=") else l for l in ls]))
+    m("U7 kill: the update failed before the step", invalid_run("without reaching the step"), lambda d: (write_out(d, K("swap") + "-watch-result.out", "never saw the step swap begin\n"), set_last(d, K("swap") + "-job", state="failed", code="packages_failed")))
+    S = "u7-stop-swap"
+    m("U7 stop: systemctl stop failed", fails("U7 systemctl stop during the step swap", "ends with status 0"), lambda d: subst(d, S + "-watch-result.out", "stopped rc=0", "stopped rc=5"))
+    m("U7 stop: the unit took the whole of its 420 s", fails("U7 systemctl stop during the step swap", "before systemd's 420 s ran out"), lambda d: edit_lines(d, S + "-watch-result.out", lambda ls: [re.sub(r"seconds=\d+", "seconds=420", l) for l in ls]))
+    m("U7 stop: the job is not rolled back", fails("U7 systemctl stop during the step swap", "failed with the code interrupted, rolled back"), lambda d: set_last(d, S + "-job", undo="-"))
+    m("U7 stop: the box is not the old version after the rollback", fails("U7 systemctl stop during the step swap", "after the rollback: every file"), lambda d: add_line(d, "snap-" + S + "-dead.files", NEXT + "\tf\t644\t0:0\tabc"))
+    m("U7 stop: there was a backup to recover", fails("U7 systemctl stop during the step swap", "nothing to recover"), lambda d: write_out(d, S + "-recover.out", "an update of virt was ended before it was over: the files of the old version are put back from /x\n" + read_out(d, S + "-recover.out")))
+    m("U7 stop: it was stopped after the step", not_testable("U7 systemctl stop during the step swap", "further on"), lambda d: set_last(d, S + "-job", step="start"))
+
+    # U8
+    m("U8: a file of /etc/casaos changed", fails("U8 /etc/casaos", "no file of /etc/casaos"), lambda d: subst(d, "snap-u8-end.etccasaos", "/etc/casaos/gateway.ini\tgw1", "/etc/casaos/gateway.ini\tgw9"))
+    m("U8: a sample of the module is left in /etc/casaos", fails("U8 /etc/casaos", "no file of /etc/casaos"), lambda d: add_line(d, "snap-u8-end.etccasaos", NEXT + "\tabc"))
+    m("U8: a package was removed", fails("U8 dpkg", "no package was removed"), lambda d: drop_line(d, "snap-u8-end.dpkg", "libc6\t"))
+    m("U8: a package nobody planned was installed", fails("U8 dpkg", "that are new"), lambda d: add_line(d, "snap-u8-end.dpkg", "nmap\t7.0\tii "))
+    m("U8: a file of /etc that nothing explains", fails("U8 /etc", "every file of /etc"), lambda d: add_line(d, "snap-u8-end.etc", "/etc/cron.d/evil\tabc"))
+    m("U8: the drop-in of the proof is left", fails("U8 /etc", "every file of /etc"), lambda d: add_line(d, "snap-u8-end.etc", "/etc/systemd/system/casaos-virt-management.service.d/mp.conf\tabc"))
+    m("U8: a name that nothing explains", fails("U8 the rest of the file system", "every name that is new or gone"), lambda d: add_line(d, "snap-u8-end.names", "/usr/bin/stray-program"))
+    m("U8: the sandbox of a plan is left in /var/tmp", fails("U8 the rest of the file system", "/var/tmp holds what it held"), lambda d: add_line(d, "snap-u8-end.names", "/var/tmp/casaos-plan-1"))
+    m("U8: dpkg lists no file of the package", invalid_run("dpkg lists no file of the package the update adds"), lambda d: write_out(d, "u8-owned.out", ""))
+    m("U8: the module's packages were not on the box before", not_testable("U8 invariance", "were not on the box before"), lambda d: dpkg_line(d, "u-start", "ovmf", "none"))
+
+    # U9
+    m("U9: the restart was not seen", invalid_run("U9: the guest did not come back"), lambda d: write_out(d, "u9-reboot.failed", "the guest did not come back, or the core did not answer\n"))
+    m("U9: the module was not the new version before the restart", invalid_run("U9: the module was not at the new version"), lambda d: write_out(d, "snap-u9-before.lists_version", "v0.1.1\n"))
+    m("U9: the same boot id", fails("U9 the restart", "another boot id"), lambda d: write_out(d, "boot-u9-reboot.tsv", "".join("%s\t%s\t%s\n" % (r.split("\t")[0], r.split("\t")[1], read_out(d, "u9-reboot.boot-old").strip()) for r in read_out(d, "boot-u9-reboot.tsv").splitlines())))
+    m("U9: the unit is not active after the restart", fails("U9 the restart", "enabled and active again"), lambda d: fact(d, "u9-after", "unit_active", "inactive"))
+    m("U9: the route does not answer", fails("U9 the restart", "status after the restart"), lambda d: gjson(d, "u9-status", lambda x: x["route"].update(answers=False)))
+    m("U9: the host does not answer", fails("U9 the restart", "the host answers"), lambda d: code(d, "u9-host", 404))
+    m("U9: the version after the restart is the old one", fails("U9 the restart", "after the restart: the version file says v0.1.2"), lambda d: write_out(d, "snap-u9-after.lists_version", "v0.1.1\n"))
+    m("U9: the test variables survive the restart", fails("U9 the restart", "neither the environment of the manager nor the core's"), lambda d: fact(d, "u9-after", "manager_env", "3"))
+    return M
+
 
 def run_mutations(label, base_out, leg, mutations):
     rc_, text = report(base_out, leg)
@@ -2375,12 +2940,16 @@ def healthy_checks(label, out, w, proc, leg):
     want |= {"case_M8_%s_%s" % (s, e) for s in ("checksum", "dotdot", "systemctl", "varlib", "usrshare", "etcmod", "foreign", "busy_dpkg", "busy_osu", "disk", "symlink", "held", "manual") for e in ("start", "done")}
     want |= {"case_M9_%s_%s" % (s, e) for s in ("kill_packages", "kill_download", "kill_verify", "kill_unpack", "kill_units", "kill_manifest", "kill_start", "kill_route", "stop_packages", "stop_start", "term_start")
              for e in ("start", "done")}
+    want |= {"case_%s_%s" % (s, e) for s in ("U", "U1", "U2", "U3", "U4", "U5", "U6", "U8", "U9", "U6_start", "U6_unit", "U7", "U7_kill_backup", "U7_kill_stop", "U7_kill_swap", "U7_kill_units", "U7_kill_start", "U7_stop_swap", "U7_stop_start")
+             for e in ("start", "done")}
     check("%s: the timeline has the markers of every case" % label, want <= marks, str(sorted(want - marks)))
     check("%s: the first thing asked of the guest after its name is the version of the core (nothing runs `module` before it)" % label, w.verbs[:2] == ["hostname", "casaos_v"], str(w.verbs[:4]))
     check("%s: the test variables are out of the environment of the manager and of the core at the end" % label, w.manager_env == 0 and w.core_env == 0, "%s %s" % (w.manager_env, w.core_env))
     check("%s: every piece of dirt is undone at the end" % label, not (w.lock_held or w.osflag or w.tmpfs or w.dirt_unit or w.symlink or w.hold or w.dummies or w.dpkg_busy()), "")
     check("%s: the box ends as it began: nothing of the module, its packages installed" % label, not w.footprint_paths() and set(w.kit["packages"]) <= w.installed, str(w.footprint_paths()))
     check("%s: the token and the password never reach the recordings" % label, not any(("tok-" in read_out(out, f) or "Aa1-test" in read_out(out, f)) for f in os.listdir(out) if os.path.isfile(os.path.join(out, f)) and f.endswith((".req", ".out", ".err", ".tsv", ".txt", ".log"))), "")
+    check("%s: the box ends as the update cases leave it: no drop-in, no edited sample, no backup folder, none of the module's samples" % label,
+          w.dropin is None and w.sample_orig is None and w.backup is None and w.fs.get(w.sample_path()) is None, str((w.dropin, w.sample_orig, w.backup)))
     check("%s: no pending undo is left" % label, not [f for f in os.listdir(os.path.join(os.path.dirname(out), "work")) if f.startswith("pending-")], "")
 
 
@@ -2408,15 +2977,23 @@ def main():
         rc_, text = report(base, leg)
         check("a healthy %s leg passes, every case by name" % leg, rc_ == 0 and head(text) == "PASS" and all(verdict_line(text, n) and verdict_line(text, n)[0] == "PASS" for n in EXPECTED), text[:2500])
         check("a healthy %s leg prints the first real-guest numbers" % leg, all(k in text for k in ("The first real-guest numbers", "time of the plan", "install by hand, seconds per step", "remove through the API",
-                                                                                                   "install through the API", "restart:", "the box quiet after", "systemctl stop during")), text[-1500:])
+                                                                                                   "install through the API", "restart:", "the box quiet after", "systemctl stop during",
+                                                                                                   "update by hand, seconds per step", "update through the API")), text[-1500:])
         check("a healthy %s leg has no verdict that is not testable" % leg, "NOT TESTABLE" not in text, text[-800:])
-    run_mutations("d12", base_d12, "d12", core_mutations() + core_mutations_api() + dirty_mutations() + kill_mutations() + end_mutations())
+    run_mutations("d12", base_d12, "d12", core_mutations() + core_mutations_api() + dirty_mutations() + kill_mutations() + end_mutations() + update_mutations())
     if os.environ.get("REPORT_ONLY") or os.environ.get("BASE_ONLY"):
         return
     scenarios(kit)
     if not keep:
         for d in (os.path.dirname(base_d12), os.path.dirname(base_u24), os.path.dirname(base_u22), os.path.dirname(kit)):
             shutil.rmtree(d, ignore_errors=True)
+
+
+def scenario_verdict(label, kit, cases, cfg, name, status, needle, env_extra=None):
+    """a scenario whose box is left in a state that the run goes on from badly (so that the run is also INVALID): only the verdict of the case is held"""
+    out, w, text = scenario(label, kit, cases, cfg, [], env_extra=env_extra)
+    vl = verdict_line(text, name)
+    check("%s: %s is a %s with %r" % (label, name, status, needle), vl is not None and vl[0] == status and needle in vl[1], str(vl))
 
 
 def scenarios(kit):
@@ -2451,6 +3028,16 @@ def scenarios(kit):
              {"step_seconds": quick, "start_takes_s": 3.0}, [passes("M6 the job"), not_testable("M7 job unit properties", "never seen active")])
     scenario("scenario: a lock that cannot be given back", kit, "m3,m4,m8", {"lock_stays": True}, invalid_run("the lock was not given back"), env_extra={"M8_ONLY": "busy_dpkg"})
     scenario("scenario: units that stand for jobs that cannot be stopped", kit, "m3,m4,m5,m6,m7", {"dummies_stay": True}, invalid_run("could not be stopped"))
+    out, w, _ = scenario("scenario: a core that has the assistant and not the update: the update cases are an INVALID RUN that says so, the cases before have been judged", kit, "m1,u", {"core_version": "v0.4.77"},
+                         [invalid_run("older than v0.4.78"), passes("M1 the release carries the assistant")], keep=True)
+    check("scenario: the guest was never asked to run `casaos module` (not even a list) on a core that has no update", "mod" not in w.verbs and "pkg_unseat" not in w.verbs, str(w.verbs))
+    shutil.rmtree(os.path.dirname(out), ignore_errors=True)
+    scenario("scenario: the update cases without the control of M2: the invariance cannot be told from what the box changes by itself", kit, "m1,u", {}, not_testable("U8 invariance", "the control of M2"), env_extra={"U_ONLY": "u1,u8"})
+    scenario("scenario: a drop-in that cannot be taken away again", kit, "m1,u", {"dropin_stays": True}, invalid_run("U6: the drop-in"), env_extra={"U_ONLY": "u6"})
+    scenario_verdict("scenario: a rollback that leaves the files of the new version", kit, "m1,u", {"rollback_leaves_new": True}, "U6 a start that fails", "FAIL", "is not on the box", env_extra={"U_ONLY": "u6"})
+    scenario_verdict("scenario: an update that drops no file of the old version", kit, "m1,u", {"keeps_legacy": True}, "U3 files and state", "FAIL", "is not on the box", env_extra={"U_ONLY": "u3"})
+    scenario("scenario: an update that does not start the service again", kit, "m1,u", {"no_restart": True}, fails("U3 files and state", "the service was restarted"), env_extra={"U_ONLY": "u3"})
+    scenario("scenario: a kill that lands after the step of an update", kit, "m1,u", {"kill_lands_late": True}, not_testable("U7 SIGKILL at the step units", "the log ended at"), env_extra={"U_ONLY": "u7", "U7_ONLY": "kill_units"})
 
 
 if __name__ == "__main__":

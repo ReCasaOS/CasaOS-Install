@@ -1,7 +1,7 @@
 name: module-proof
 
-# Proof that the module assistant of ReCasaOS (`casaos module list|plan|install|remove|status`), the Modules API of the core (/v1/sys/modules) and the transient unit the core starts for an
-# install and a remove, install, run and take off a real module on a real machine that boots, restarts and is made dirty on purpose. The module is the virtual machine module
+# Proof that the module assistant of ReCasaOS (`casaos module list|plan|install|update|remove|status`), the Modules API of the core (/v1/sys/modules) and the transient unit the core starts for an
+# install, an update and a remove, install, run, update and take off a real module on a real machine that boots, restarts and is made dirty on purpose. The module is the virtual machine module
 # (ReCasaOS/CasaOS-VirtManagement), built here from a git ref of its repository the way its own release builds it (its goreleaser configuration: the hooks, then CGO_ENABLED=0 for linux/amd64
 # with the same ldflags), put in an archive of the shape of its release (build/sysroot/..., module.json, LICENSE, NOTICE; the name linux-amd64-casaos-virt-management-v0.1.1.tar.gz), and named
 # by a TEST catalogue: the manifest of the archive in it as it is, a url of the release form, tier community. libvirt answers through its test driver (URI = test:///default in
@@ -31,12 +31,21 @@ name: module-proof
 #       is quiet, `casaos module remove` finishes what was started and a fresh install goes through
 #   M10 the guest restarts with the module installed: its unit is enabled and active again, the route answers, the remove works
 #   M11 the invariance: /etc, /var/lib/dpkg and the rest differ only by the module's packages, the files they own and what the assistant keeps
+#   U1..U9 the update of an installed module (`casaos module update`, the plan with --update, and the Modules API with mode "update"), from an old version of the module to a new one built from
+#       the same ref (the kit holds both archives: the new one adds a second sample under /etc/casaos, drops the old one's, has another unit file and names one package more, `hello`, and each
+#       has a test catalogue): what the list says of a newer tag, the plan (the checks in order, the packages against apt, nothing written, up_to_date and downgrade refused), the update by
+#       hand and through the API (the markers, the files with their modes, the dropped sample gone, the administrator's own configuration byte for byte, the lists, the manifest, the version,
+#       the unit enabled and started again, the route and the host answering, no backup folder left, a stale or an install plan_id refused plan_changed), a file the administrator changed
+#       refusing it (file_exists, the box unchanged), a start that fails and a unit file that cannot be loaded (rolled back: the old version byte for byte), the assistant killed at the steps
+#       backup, stop, swap, units and start and the job unit stopped during swap (the next run puts the old version back, whole, and the update goes through after it), the invariance, and a
+#       restart of the guest after the update
 #
 #   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64            u22  Ubuntu 22.04 amd64
 # `legs` chooses the cells (scripts/module-proof-legs.json): all of them or one.
 #
 # It needs a release whose core has the assistant (the first core that has `casaos module`): `tag` is the installer release under test, and a release whose core is older is an INVALID RUN
-# that says so before anything else runs. `module_ref` is the git ref of the module's repository that is built (main by default). The guest needs the network: the mirrors of the system,
+# that says so before anything else runs. The update cases need a core that has `casaos module update` as well (MODULE_UPDATE_MIN_CORE of scripts/module-proof.sh): the version the release
+# pins is compared before the word is ever given, and a release whose core is older has the cases M1 to M11 judged and the update cases an INVALID RUN that says so. `module_ref` is the git ref of the module's repository that is built (main by default). The guest needs the network: the mirrors of the system,
 # and the module's packages. It publishes nothing and changes nothing outside the guests. By hand only.
 
 on:
@@ -153,6 +162,7 @@ jobs:
           set -euo pipefail
           bash scripts/module-proof.sh build-kit module kit
           echo "module: ${MODULE_REF} at $(git -C module rev-parse HEAD)" | tee -a "${GITHUB_STEP_SUMMARY}"
+          python3 -c "import json; u = json.load(open('kit/kit.json'))['update']; print('update kit: %s (%s) to %s (%s)' % (u['old']['tag'], u['old']['archive']['sha256'][:12], u['new']['tag'], u['new']['archive']['sha256'][:12]))" | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Fetch the published installer
         run: |
