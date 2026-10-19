@@ -1802,6 +1802,21 @@ try:
                 c.check(f["path"] not in s.files and f["path"] not in s.names, "%s: %s (only the %s version has it) is not on the box" % (label, f["path"], "new" if which == "old" else "old"), "absent", "present")
         c.check(not s.tmp and not [n for n in s.names if "/modules/tmp/backup-" in n], "%s: no backup folder is left (the area of the install holds nothing)" % label, "empty", few(s.tmp))
 
+    def purged(tag, s=None):
+        """the package that the update adds was taken off before the case <tag> (its guest verb said apt ended well and nothing is installed), and the snapshot s, taken after it, does not have it; False,
+        with the run made invalid, when the purge did not run or left it"""
+        g = gxc(tag + "-purge", "the package of the update is taken off before the case")
+        if g is None:
+            return False
+        left = [ln.split("=", 1)[1].strip() for ln in g.lines if ln.startswith("still_installed=")]
+        if "rc=0" not in g.lines or not left or left[0]:
+            invalid("%s: the package that the update adds could not be taken off before the case (%s): the case would not start from the state it is judged from" % (tag, cell(g.out + g.err, 100)))
+            return False
+        if s is not None and any(s.pkgs.get(p, "").startswith(("ii", "hi")) for p in ADDED):
+            invalid("%s: the snapshot taken after the purge has the package that the update adds installed" % tag)
+            return False
+        return True
+
     def same_module(c, a, b, label):
         """what the module and the administrator have on the box is, byte for byte, what it was: every file of the footprint (path, mode, owner, content), the lists, the manifest, the version"""
         c.check(a.files == b.files, "%s: every file of the module and of the administrator is what it was (path, mode, owner, content)" % label, "the same",
@@ -1884,6 +1899,7 @@ try:
             return
         plan, po = pr.obj() or {}, pn.obj() or {}
         c = Case("U2 plan --update")
+        c.check(not any(before.pkgs.get(p, "").startswith(("ii", "hi")) for p in ADDED), "the package that the new manifest adds is not on the box when the plan is asked", "not installed", few("%s=%s" % (p, before.pkgs.get(p)) for p in ADDED))
         c.check(pr.rc == 0 and pr.one_object(), "plan --update prints one JSON object and ends with status 0", "one object, exit 0", "%s, %s" % (pr.shown(), cell(pr.out, 80)))
         cks = plan_checks(plan)
         c.check([x[0] for x in cks] == list(UPD_CHECKS), "the checks are %s, in this order" % ", ".join(UPD_CHECKS), ", ".join(UPD_CHECKS), few(x[0] for x in cks))
@@ -2009,6 +2025,8 @@ try:
         if words.get("manager") != "3" or words.get("core") != "3":
             invalid("U4: the test variables did not reach the manager and the core (manager %s, core %s of 3): the API cases prove nothing" % (words.get("manager"), words.get("core")))
             return
+        if not purged("u4", before):
+            return
         c = Case("U4 plans and refusals")
         c.check(pi.code == 200 and isinstance(pi.data, dict) and pi.data.get("refused") is None and PLAN_ID_RE.match(str(pi.field("plan_id"))) is not None and pi.data.get("mode") in (None, "install"),
                 "the plan of an install on a box that has none is a plan with an id, and says no mode", "HTTP 200, refused null, an id", "%s %s" % (pi.shown(), cell(pi.field("refused"))))
@@ -2072,6 +2090,8 @@ try:
         before, after = snap("u5-before"), snap("u5-after")
         if not all((dirt, upd, log, undo, before, after)):
             return
+        if not purged("u5", before):
+            return
         m_ = re.fullmatch(r"edited ([0-9a-f]{64})", dirt.out.strip())
         sample = kit.get("conf_path", "") + ".sample"
         if m_ is None:
@@ -2109,6 +2129,8 @@ try:
             return
         if variant == "start" and ("on failstart" not in dirt.out or "off file=no dir=no" not in undo.out):
             invalid("U6: the drop-in that makes the start fail could not be put in place and taken away again (%s; %s)" % (cell(dirt.out, 60), cell(undo.out, 60)))
+            return
+        if not purged(p, before):
             return
         res = Markers(upd.out).results
         step = res[0][3] if len(res) == 1 else ""
@@ -2157,6 +2179,8 @@ try:
         rec, upd, reclog = gxc(p + "-recover"), gxc(p + "-update"), gxc(p + "-recover-log")
         st = Call(p + "-status")
         if not all((watch_res, wait, log, journal, before, dead, recd, new, rec, upd, reclog)):
+            return
+        if not purged(p, before):
             return
         rs = rows(p + "-job")
         seq = states_of(rs)
@@ -2285,6 +2309,8 @@ try:
         a, b, e = snap("u-start", "the box before the update cases"), snap("m2-ctl-b", "the control"), snap("u8-end")
         ctl = snap("m2-ctl-a", "the control")
         owned = Gx("u8-owned")
+        if not purged("u8", e):
+            return
         if not all((a, b, e, ctl)) or not owned.answered:
             if owned.answered is False:
                 invalid("U8: the files of the package (u8-owned) are missing: what it owns cannot be told")

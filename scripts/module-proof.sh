@@ -772,6 +772,19 @@ conf_write() {
 
 conf_remove() { rm -f "$CONF"; yn test -e "$CONF"; }
 
+# purge_added: the packages that the new version adds are taken off (an update or a remove never does it), so that the next update has apt work to do; it says how apt ended and what is
+# still installed after it
+purge_added() {
+    # shellcheck disable=SC2046
+    DEBIAN_FRONTEND=noninteractive apt-get -y -q purge $(cat "$KIT/upd-packages.list") >"$MP/pkg.out" 2>&1
+    echo "rc=$?"
+    left=""
+    for p in $(cat "$KIT/upd-packages.list"); do
+        case "$(dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null | tr -d ' ')" in ii | hi) left="$left $p" ;; esac
+    done
+    echo "still_installed=${left# }"
+}
+
 # the sample of the module's configuration that both versions carry, edited by the administrator (a file of the new version that is there and is not the module's own refuses an update);
 # the undo puts the bytes back
 SAMPLE=/etc/casaos/virt-management.conf.sample
@@ -1102,6 +1115,7 @@ footprint) footprint ;;
 snap) snap "${1:-}" ;;
 conf_write) conf_write ;;
 conf_remove) conf_remove ;;
+purge_added) purge_added ;;
 sample_edit_on) sample_edit_on ;;
 sample_edit_off) sample_edit_off ;;
 dropin_on) dropin_on "$@" ;;
@@ -2052,6 +2066,11 @@ u_new() {
     U_STATE=new
 }
 
+# u_purge <tag>: the package that the update adds is off the box, as the case that follows needs it (recorded as <tag>-purge; the report makes the run invalid if it is still there)
+u_purge() {
+    gx "$1-purge" purge_added
+}
+
 case_u1() {
     marker case_U1_start
     if u_old u1; then
@@ -2111,6 +2130,7 @@ case_u4() {
         call u4-plan-install POST "${LIST_PATH}/${MODULE}/plan" "" 120
         ipid="$(py get "${OUT}/u4-plan-install.json" data.plan_id)"
         if u_old u4; then
+            u_purge u4
             call u4-plan POST "${LIST_PATH}/${MODULE}/plan" '{"mode":"update"}' 120
             upid="$(py get "${OUT}/u4-plan.json" data.plan_id)"
             printf '%s\n' "${upid}" >"${OUT}/u4-plan-id"
@@ -2140,6 +2160,7 @@ case_u4() {
 case_u5() {
     marker case_U5_start
     if u_old u5; then
+        u_purge u5
         pend sample sample_edit_off
         gx u5-dirt sample_edit_on
         snap u5-before || return 1
@@ -2159,6 +2180,7 @@ u6_run() {
     marker "case_U6_${id}_start"
     U_STATE=""
     if u_old "${p}"; then
+        u_purge "${p}"
         if [ "${dirt}" != - ]; then
             pend dropin dropin_off
             gx "${p}-dirt" dropin_on "${dirt}"
@@ -2192,6 +2214,7 @@ u7_case() {
     marker "case_U7_${id}_start"
     U_STATE=""
     if u_old "${p}" && api_switch unew "${p}-api"; then
+        u_purge "${p}"
         snap "${p}-before" || return 1
         call "${p}-plan" POST "${LIST_PATH}/${MODULE}/plan" '{"mode":"update"}' 120
         pid="$(py get "${OUT}/${p}-plan.json" data.plan_id)"
@@ -2264,6 +2287,7 @@ case_u8() {
     marker case_U8_start
     if [ -n "${API_ON:-}" ]; then api_off u8-api || true; API_ON=""; API_VARIANT=""; fi
     if ensure_clean u8-pre; then
+        u_purge u8
         gx u8-conf conf_remove
         # shellcheck disable=SC2086
         gx u8-owned pkg_files ${UPD_PKGS}
