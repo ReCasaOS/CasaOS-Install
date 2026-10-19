@@ -922,7 +922,7 @@ class World:
         else:
             checks.append(dict(code="busy", ok=True, detail=""))
         checks.append(dict(code="dpkg_state", ok=True, detail=""))
-        added = [p for p in i["packages"] if installed is None or p not in installed["packages"]]
+        added = [p for p in i["packages"] if (installed is None or p not in installed["packages"]) and p not in self.installed]
         dropped = [p for p in (installed["packages"] if installed else []) if p not in i["packages"]]
         for ck in checks:
             if not ck["ok"] and not ck["detail"].startswith("not_checked"):
@@ -1582,6 +1582,12 @@ class World:
             return 0, "manual auto=\n"
         if verb == "aptsim":
             return 0, self.aptsim(a or None)
+        if verb == "purge_added":
+            for p in k["update"]["added"]:
+                if not self.cfg.get("purge_fails"):
+                    self.installed.discard(p)
+            self.apt_changed("x")
+            return 0, "rc=0\nstill_installed=%s\n" % " ".join(p for p in k["update"]["added"] if p in self.installed)
         if verb == "sample_edit_on":
             e = self.fs[self.sample_path()]
             self.sample_orig = e["sha"]
@@ -2777,6 +2783,16 @@ def update_mutations():
     m("U3: the version file says the old tag", fails("U3 files and state", "the version file says v0.1.2"), lambda d: write_out(d, "snap-u3-after.lists_version", "v0.1.1\n"))
     m("U3: the manifest is the old one", fails("U3 files and state", "the manifest is the module.json"), lambda d: subst(d, "snap-u3-after.files", "/etc/casaos/modules/virt.json\tf\t644\t0:0\t", "/etc/casaos/modules/virt.json\tf\t644\t0:0\t0"))
     m("U3: the unit is not active", fails("U3 files and state", "the unit is enabled and active"), lambda d: fact(d, "u3-after", "unit_active", "inactive"))
+    m("U4: the package was on the box before the update", invalid_run("u4: the snapshot taken after the purge"), lambda d: subst(d, "snap-u4-before.pkgs", "pkg hello none", "pkg hello ii"))
+    m("U5: the package was on the box before the update", invalid_run("u5: the snapshot taken after the purge"), lambda d: subst(d, "snap-u5-before.pkgs", "pkg hello none", "pkg hello ii"))
+    m("U6: the package was on the box before the update", invalid_run("u6-start: the snapshot taken after the purge"), lambda d: subst(d, "snap-u6-start-before.pkgs", "pkg hello none", "pkg hello ii"))
+    m("U7: the package was on the box before the update", invalid_run("u7-kill-units: the snapshot taken after the purge"), lambda d: subst(d, "snap-" + K("units") + "-before.pkgs", "pkg hello none", "pkg hello ii"))
+    m("U4: the purge left the package", invalid_run("u4: the package that the update adds could not be taken off"), lambda d: write_out(d, "u4-purge.out", "rc=0\nstill_installed=hello\n"))
+    m("U5: the purge ended badly", invalid_run("u5: the package that the update adds could not be taken off"), lambda d: write_out(d, "u5-purge.out", "rc=100\nstill_installed=\n"))
+    m("U6: the purge did not run", invalid_run("u6-unit-purge"), lambda d: [os.remove(os.path.join(d, f)) for f in os.listdir(d) if f.startswith("u6-unit-purge.")])
+    m("U7: the purge got no answer from ssh", invalid_run("u7-kill-stop-purge"), lambda d: rc(d, K("stop") + "-purge", 255))
+    m("U8: the purge at the end left the package", invalid_run("u8: the package that the update adds could not be taken off"), lambda d: write_out(d, "u8-purge.out", "rc=0\nstill_installed=hello\n"))
+    m("U2: the package was on the box when the plan was asked", fails("U2 plan --update", "not on the box when the plan is asked"), lambda d: subst(d, "snap-u2-before.pkgs", "pkg hello none", "pkg hello ii"))
     m("U3: the package is not installed", fails("U3 files and state", "package that the new manifest adds is installed", also=()), lambda d: dpkg_line(d, "u3-after", "hello", "none"))
     m("U3: the service was not restarted", fails("U3 files and state", "the service was restarted"), lambda d: unseat_fact(d, "u3-after"))
     m("U3: a backup folder is left", fails("U3 files and state", "no backup folder is left"), lambda d: (add_line(d, "snap-u3-after.tmp", "backup-virt"), fact(d, "u3-after", "tmp_entries", "1")))
@@ -2798,7 +2814,7 @@ def update_mutations():
     m("U4: the job is not an update (the answer of the start)", fails("U4 the job", "the answer of the start says the job is an update"), lambda d: jdata(d, "u4-start", lambda x: x["job"].update(kind="install")))
     m("U4: the job is refused", fails("U4 the job", "is accepted"), lambda d: code(d, "u4-start", 409))
     m("U4: the job never succeeds", fails("U4 the job", "the job ends succeeded"), lambda d: set_last(d, "u4-job", state="failed", code="start_failed"))
-    m("U4: the job goes back a step", fails("U4 the job", "the step only goes forward"), lambda d: rows_edit(d, "u4-job", lambda rows: [r if i != 6 else r[:COL["step"]] + ["packages"] + r[COL["step"] + 1:] for i, r in enumerate(rows)]))
+    m("U4: the job goes back a step", fails("U4 the job", "the step only goes forward"), lambda d: rows_edit(d, "u4-job", lambda rows: [r[:COL["step"]] + ["download"] + r[COL["step"] + 1:] if r[COL["step"]] == "units" else r for r in rows]))
     m("U4: the queued line says install", fails("U4 the job", "the first line of the log is the core's queued line"), lambda d: subst(d, "u4-log.out", " virt update 2", " virt install 2"))
     m("U4: the queued line is not there", fails("U4 the job", "the first line of the log is the core's queued line"), lambda d: edit_lines(d, "u4-log.out", lambda ls: ls[1:]))
     m("U4: the nonce is in the answer of the core", fails("U4 the job", "the nonce is in no answer"), lambda d: write_out(d, "u4-status.json", read_out(d, "u4-status.json") + " " + re.search(r"STEP ([0-9a-f]{32}) virt", read_out(d, "u4-log.out")).group(1)))
@@ -3033,6 +3049,7 @@ def scenarios(kit):
     check("scenario: the guest was never asked to run `casaos module` (not even a list) on a core that has no update", "mod" not in w.verbs and "pkg_unseat" not in w.verbs, str(w.verbs))
     shutil.rmtree(os.path.dirname(out), ignore_errors=True)
     scenario("scenario: the update cases without the control of M2: the invariance cannot be told from what the box changes by itself", kit, "m1,u", {}, not_testable("U8 invariance", "the control of M2"), env_extra={"U_ONLY": "u1,u8"})
+    scenario("scenario: a package that cannot be purged before the update cases", kit, "m1,u", {"purge_fails": True}, invalid_run("could not be taken off"), env_extra={"U_ONLY": "u3,u5"})
     scenario("scenario: a drop-in that cannot be taken away again", kit, "m1,u", {"dropin_stays": True}, invalid_run("U6: the drop-in"), env_extra={"U_ONLY": "u6"})
     scenario_verdict("scenario: a rollback that leaves the files of the new version", kit, "m1,u", {"rollback_leaves_new": True}, "U6 a start that fails", "FAIL", "is not on the box", env_extra={"U_ONLY": "u6"})
     scenario_verdict("scenario: an update that drops no file of the old version", kit, "m1,u", {"keeps_legacy": True}, "U3 files and state", "FAIL", "is not on the box", env_extra={"U_ONLY": "u3"})
