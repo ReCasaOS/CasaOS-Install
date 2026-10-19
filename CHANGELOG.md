@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.38] - 2026-10-19
+
+Components: CasaOS-UI `v0.4.93`. Unchanged from v0.5.37: CasaOS `v0.4.77`, module `virt` (CasaOS-VirtManagement) `v0.1.3`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Changed
+
+- **`virt` is now a *core* module**: it has been installed and used to create virtual machines on real machines (Ubuntu 22.04, Debian 12), not only proved on a simulated one.
+
+### Fixed
+
+- The *Modules* window says in words what a half-done package manager means (the new `dpkg_state` check and the `dpkg_broken` failure), in English and French, instead of showing an unknown code.
+
 ## [0.5.37] - 2026-10-19
 
 Components: module `virt` (CasaOS-VirtManagement) `v0.1.3`. Unchanged from v0.5.36: CasaOS `v0.4.77`, CasaOS-UI `v0.4.92`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
