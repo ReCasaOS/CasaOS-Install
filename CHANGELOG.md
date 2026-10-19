@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.39] - 2026-10-19
+
+Components: CasaOS `v0.4.78`, CasaOS-UI `v0.4.94`. Unchanged from v0.5.38: module `virt` (CasaOS-VirtManagement) `v0.1.3`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **An installed module can be updated.** The Modules window says when the catalogue of this release holds a newer version of an installed module (a badge on its card) and offers *Update*; at a console it is `casaos module plan <name> --update` and `casaos module update <name>`. The plan shows what the update adds and changes nothing. The job backs up the files of the module, stops its service, puts the new files in place, starts it again, and puts the old version back if anything fails; a job that is cut short is recovered by the next update, remove or install. A module the owner had stopped stays stopped, the owner's own configuration and `/DATA` are never touched, and a file the owner edited is kept as the owner left it. The contract is in `docs/os-modules.md`.
+
 ## [0.5.38] - 2026-10-19
 
 Components: CasaOS-UI `v0.4.93`. Unchanged from v0.5.37: CasaOS `v0.4.77`, module `virt` (CasaOS-VirtManagement) `v0.1.3`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
