@@ -118,6 +118,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.38
+
+**Virtual machines, proven on real machines**: `virt` moves from *community* to *core*, and the Modules window explains a half-done package manager in words.
+
 ## What is in v0.5.37
 
 **Virtual machines start on the NAT network**: `virt` v0.1.3 installs the `dnsmasq-base` package that the network of the machines needs.
