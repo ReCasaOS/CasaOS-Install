@@ -118,6 +118,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.39
+
+**Updating a module**: an installed module gets an *Update* button when this release holds a newer version of it, with a plan to read first, a backup, and the old version put back on failure.
+
 ## What is in v0.5.38
 
 **Virtual machines, proven on real machines**: `virt` moves from *community* to *core*, and the Modules window explains a half-done package manager in words.
