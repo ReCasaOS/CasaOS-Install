@@ -24,6 +24,7 @@ the core's API, with the guest asked for what only it can say (snapshots of the 
   M9  kills at each step, a stop of the unit, a SIGTERM
   M10 a restart of the guest with the module installed, and the remove after it
   M11 the invariance of everything the module does not own
+  U1..U9 the update of an installed module, from an old version to a new one that differs in a file added, a file dropped, a unit file and a package (only on a core that has `casaos module update`)
 
 A verdict fails with what was expected and what was recorded. What a verdict cannot be silent about: a case that did not run says so (NOT TESTABLE, with the reason the run stopped), a verdict
 that depends on evidence that is missing is no verdict and makes the run INVALID, and any exception of this script, on evidence it did not expect, ends as an INVALID RUN that names it.
@@ -50,6 +51,10 @@ CHECKS = ("catalogue", "os", "arch", "recasaos", "already_installed", "foreign_u
 INSTALL_STEPS = ("packages", "download", "verify", "unpack", "units", "manifest", "start", "route")
 REMOVE_STEPS = ("stop", "files", "manifest", "reload")
 ROLLBACK_STEPS = tuple("rollback_" + s for s in REMOVE_STEPS)
+UPDATE_STEPS = ("packages", "download", "verify", "unpack", "backup", "stop", "swap", "units", "start", "route")
+UPD_ROLLBACK = ("rollback_restore", "rollback_units", "rollback_start")
+UPD_RECOVER = ("recover_restore", "recover_units", "recover_start")
+UPD_CHECKS = ("catalogue", "os", "arch", "recasaos", "installed", "newer", "foreign_unit", "busy", "dpkg_state", "disk", "apt")
 JOB_STATES = ("idle", "running", "succeeded", "refused", "failed", "interrupted")
 PLAN_ID_RE = re.compile(r"^m1-[0-9a-f]{32}$")
 NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -688,6 +693,7 @@ try:
         invalid("the program that was built does not say its version when it is asked (`-v`): %s" % cell(bv, 100))
 
     PKGS = list(kit.get("packages", []))
+    UPD = kit.get("update")
     UNIT = kit.get("unit", "")
     TAGV = kit.get("tag", "")
     NOISE_NAME = re.compile(r"/session-[0-9a-z]+\.scope|^/var/tmp/systemd-private-")   # (those of the services are named by the boot, which M10 changes)
@@ -886,10 +892,13 @@ try:
 
     # ---- the module as an install leaves it -----------------------------------------------------------------------------------------------
 
-    def judge_installed(c, s, label):
-        """the files exactly as the archive says, with their modes and owners, the lists, the manifest, the version, the unit enabled and active, the packages, the area of the install empty"""
+    def judge_installed(c, s, label, info=None):
+        """the files exactly as the archive says, with their modes and owners, the lists, the manifest, the version, the unit enabled and active, the packages, the area of the install empty;
+        info is the archive of a version of the update (the kit's own archive when it is not given)"""
         name = kit.get("name", "virt")
-        for f in kit.get("files", []):
+        info = kit if info is None else info
+        tag_, pkgs_ = info.get("tag", ""), info.get("packages", [])
+        for f in info.get("files", []):
             e = s.files.get(f["path"])
             c.check(e is not None and e[0] == "f", "%s: %s is a file" % (label, f["path"]), "a file", cell(e))
             if e is not None and e[0] == "f":
@@ -902,15 +911,15 @@ try:
         c.check(entries is not None, "%s: the list of the files is whole (its header, then one `f <sha256> <path>` to a line)" % label, "casaos-module-files 1 and its entries", cell(s.lists_files, 100))
         if entries is not None:
             got = {p: w for k, w, p in entries if k == "f"}
-            want = {f["path"]: f["sha256"] for f in kit.get("files", [])}
+            want = {f["path"]: f["sha256"] for f in info.get("files", [])}
             c.check(len(entries) == len(got) and got == want, "%s: the list names exactly the files of the archive, with their sha256" % label, few(sorted(want)), few(sorted(got)))
             c.check(bool(entries) and entries[-1][2].endswith("/" + UNIT), "%s: the unit is last in the list" % label, "the unit", cell(entries[-1][2] if entries else "none"))
         dirs = [ln for ln in s.lists_dirs.split("\n") if ln]
         okd = all(d.startswith("/") and d == os.path.normpath(d) for d in dirs) and len(dirs) == len(set(dirs))
         c.check(okd, "%s: the list of the directories (%d) holds absolute, clean paths, none twice" % (label, len(dirs)), "paths", few(dirs))
-        c.check(s.lists_version == TAGV + "\n", "%s: the version file says %s" % (label, TAGV), TAGV, cell(s.lists_version))
+        c.check(s.lists_version == tag_ + "\n", "%s: the version file says %s" % (label, tag_), tag_, cell(s.lists_version))
         mf = s.files.get("/etc/casaos/modules/%s.json" % name)
-        c.check(mf is not None and mf[0] == "f" and mf[1] == "644" and mf[2] == "0:0" and mf[3] == kit.get("manifest_sha256"), "%s: the manifest is the module.json of the archive, root's, 0644" % label,
+        c.check(mf is not None and mf[0] == "f" and mf[1] == "644" and mf[2] == "0:0" and mf[3] == info.get("manifest_sha256"), "%s: the manifest is the module.json of the archive, root's, 0644" % label,
                 "module.json", cell(mf))
         for ext in ("files", "version"):
             e = s.files.get("/var/lib/casaos/modules/%s.%s" % (name, ext))
@@ -918,7 +927,7 @@ try:
         conf = s.files.get(kit.get("conf_path", ""))
         c.check(conf is not None and conf[3] == kit.get("conf_sha256"), "%s: the configuration of the administrator (libvirt's test driver) was not touched" % label, cell(kit.get("conf_sha256", "")[:16]), cell(conf))
         c.check(s.get("unit_enabled") == "enabled" and s.get("unit_active") == "active", "%s: the unit is enabled and active" % label, "enabled, active", "%s, %s" % (s.get("unit_enabled"), s.get("unit_active")))
-        c.check(bool(PKGS) and all(s.pkgs.get(p, "").startswith("ii") for p in PKGS), "%s: the packages of the manifest are installed" % label, few(PKGS), few("%s=%s" % (p, s.pkgs.get(p)) for p in PKGS if not s.pkgs.get(p, "").startswith("ii")))
+        c.check(bool(pkgs_) and all(s.pkgs.get(p, "").startswith("ii") for p in pkgs_), "%s: the packages of the manifest are installed" % label, few(pkgs_), few("%s=%s" % (p, s.pkgs.get(p)) for p in pkgs_ if not s.pkgs.get(p, "").startswith("ii")))
         c.check(s.get("tmp_entries") == "0", "%s: the area of the install is empty" % label, "0", s.get("tmp_entries"))
         c.check(s.get("dpkg_audit") == "0", "%s: dpkg --audit finds nothing" % label, "0", s.get("dpkg_audit"))
 
@@ -1715,19 +1724,23 @@ try:
         own |= set(x for x in Gx("m11-unseated").out.split("\n") if x.startswith("/"))
         # dpkg lists the files of a merged /usr by the old names (/bin/machinectl), the walk of the file system by the real ones
         own |= {"/usr" + x for x in own if re.match(r"^/(bin|sbin|lib|lib32|lib64|libx32)/", x)}
+        invariance("M11", a, a, b, e, planned, own, unseated)
+
+    def invariance(prefix, a, ca, cb, e, planned, own, unseated):
+        """what the cases did to the box (a before them, e after), but for what the box changes by itself (ca against cb, a control): /etc/casaos, the packages, /etc, the rest of the file system"""
         # /etc/casaos: nothing changes but what the control shows changing by itself
-        c = Case("M11 /etc/casaos")
-        noise_ec = {p for p in set(a.etccasaos) | set(b.etccasaos) if a.etccasaos.get(p) != b.etccasaos.get(p)}
+        c = Case(prefix + " /etc/casaos")
+        noise_ec = {p for p in set(ca.etccasaos) | set(cb.etccasaos) if ca.etccasaos.get(p) != cb.etccasaos.get(p)}
         diff = {p for p in set(a.etccasaos) | set(e.etccasaos) if a.etccasaos.get(p) != e.etccasaos.get(p)} - noise_ec
         c.check(not diff, "no file of /etc/casaos is added, changed or gone, once the module is removed", "none", few(sorted(diff)))
         c.note("the control shows %d files of /etc/casaos change by themselves" % len(noise_ec))
         c.done()
-        c = Case("M11 dpkg")
+        c = Case(prefix + " dpkg")
         ia, ie = a.installed(), e.installed()
         removed = sorted(n for n in ia if n not in ie and n not in unseated)
         changed = sorted(n for n in ia if n in ie and ia[n] != ie[n])
         added = sorted(n for n in ie if n not in ia)
-        noise_pk = {n for n in set(a.dpkg) | set(b.dpkg) if a.dpkg.get(n) != b.dpkg.get(n)}
+        noise_pk = {n for n in set(ca.dpkg) | set(cb.dpkg) if ca.dpkg.get(n) != cb.dpkg.get(n)}
         c.check(not removed, "no package was removed", "none", few(removed))
         c.check(set(changed) - noise_pk <= planned, "the packages whose version changed are the ones the plan said it would upgrade", few(sorted(planned & set(changed))) or "none", few(sorted(set(changed) - noise_pk - planned)))
         c.check(set(added) - noise_pk <= planned, "the packages that are new are the ones the plan said it would install", few(sorted(planned)[:6]), few(sorted(set(added) - noise_pk - planned)))
@@ -1736,16 +1749,16 @@ try:
         if unseated & set(ia):
             c.note("the proof's own removals took along: %s" % few(sorted(unseated & set(ia))))
         c.done()
-        c = Case("M11 /etc")
-        noise_hash = {p for p in set(a.etc) | set(b.etc) if a.etc.get(p) != b.etc.get(p)}
+        c = Case(prefix + " /etc")
+        noise_hash = {p for p in set(ca.etc) | set(cb.etc) if ca.etc.get(p) != cb.etc.get(p)}
         moved = {p for p in set(a.etc) | set(e.etc) if a.etc.get(p) != e.etc.get(p)} - noise_hash
         explained = {p for p in moved if p in own or any(re.search(rx, p) for rx in ALLOWED_ETC)}
         c.check(bool(a.etc) and bool(e.etc), "the hash of /etc was taken before and after", "both", "%d and %d files" % (len(a.etc), len(e.etc)))
         c.check(not (moved - explained), "every file of /etc that is new, changed or gone belongs to the packages the install added, or is what their scripts make", "none unexplained", few(sorted(moved - explained)))
         c.note("%d files of /etc differ, %d explained by the packages, %d by the control" % (len(moved), len(explained), len(noise_hash)))
         c.done()
-        c = Case("M11 the rest of the file system")
-        noise = noise_of(a, b)
+        c = Case(prefix + " the rest of the file system")
+        noise = noise_of(ca, cb)
         delta = set(n for n in (a.names ^ e.names) if not NOISE_NAME.search(n)) - noise
         # the core's own state areas change by themselves over hours (the control is minutes long): their names are counted, and not judged; what the module could write there is held by M8
         core_own = {n for n in delta if (n.startswith("/var/lib/casaos/") and not n.startswith("/var/lib/casaos/modules")) or (n.startswith("/var/log/casaos/") and not re.match(r"^/var/log/casaos/(module-virt|virt-management)", n))}
@@ -1760,6 +1773,579 @@ try:
         c.note("the assistant keeps: %s" % few(left, 4))
         c.done()
 
+    # ---- the update: U1 to U9 ---------------------------------------------------------------------------------------------------------------
+
+    def upd_ok():
+        """whether the update cases are to be judged: the kit has the update, and the core of this release has `casaos module update`. A release that has not is an INVALID RUN of these cases,
+        and said once; the others have been judged"""
+        if not isinstance(UPD, dict) or not all(isinstance(UPD.get(k), dict) and UPD[k].get("files") for k in ("old", "new", "bad")):
+            invalid("kit.json has no update section (the old and the new archive): the update cases cannot be judged")
+            return False
+        if "case_U_start" in marks and read("u-cmp").strip() not in ("", "0"):
+            invalid("U1 to U9: the core of this release (%s) is older than %s, the first that has `casaos module update`: the update cases were not run (an older core given the word is not asked)"
+                    % (cell(one(read("u-version.out")) or "?", 40), cell(one(read("u-min")) or "?", 40)))
+            return False
+        return True
+
+    OLD_TAG = UPD["old"]["tag"] if isinstance(UPD, dict) and isinstance(UPD.get("old"), dict) else ""
+    NEW_TAG = UPD["new"]["tag"] if isinstance(UPD, dict) and isinstance(UPD.get("new"), dict) else ""
+    ADDED = list(UPD.get("added", [])) if isinstance(UPD, dict) else []
+
+    def judge_version(c, s, label, which):
+        """the box has the old or the new version of the module whole: every file of that archive with its mode, owner and content, none that only the other has, the lists, the manifest, the
+        version, the unit enabled and active, and no backup folder"""
+        info, other = UPD[which], UPD["new" if which == "old" else "old"]
+        judge_installed(c, s, label, info)
+        mine = {f["path"] for f in info["files"]}
+        for f in other["files"]:
+            if f["path"] not in mine:
+                c.check(f["path"] not in s.files and f["path"] not in s.names, "%s: %s (only the %s version has it) is not on the box" % (label, f["path"], "new" if which == "old" else "old"), "absent", "present")
+        c.check(not s.tmp and not [n for n in s.names if "/modules/tmp/backup-" in n], "%s: no backup folder is left (the area of the install holds nothing)" % label, "empty", few(s.tmp))
+
+    def same_module(c, a, b, label):
+        """what the module and the administrator have on the box is, byte for byte, what it was: every file of the footprint (path, mode, owner, content), the lists, the manifest, the version"""
+        c.check(a.files == b.files, "%s: every file of the module and of the administrator is what it was (path, mode, owner, content)" % label, "the same",
+                few(sorted(set(a.files.items()) ^ set(b.files.items())), 3))
+        c.check(a.lists_files == b.lists_files and a.lists_dirs == b.lists_dirs and a.lists_version == b.lists_version, "%s: the lists of files and of directories and the version are what they were" % label,
+                "the same", "differ")
+
+    UPD_SCOPE = ("/etc/casaos", "/etc/systemd", "/usr/bin", "/usr/lib/systemd", "/var/lib/casaos/modules", "/var/log/casaos/module-", "/usr/share/casaos", "/DATA", "/var/tmp")
+
+    def module_names_delta(a, b):
+        """the names of the file system that differ between two snapshots, where the module and the assistant write (the rest of the box has its own doings, which M2 and M11 measure)"""
+        return {n for n in (a.names ^ b.names) if not NOISE_NAME.search(n) and n.startswith(UPD_SCOPE)}
+
+    def upd_sequence(through, failed=None, rollback=()):
+        """the (step, phase) pairs of an update that goes through `through` steps (all of them when None), or that fails at `failed` and rolls back with the steps `rollback`"""
+        want = []
+        stop_at = UPDATE_STEPS.index(failed) if failed else len(UPDATE_STEPS)
+        for s in UPDATE_STEPS[:stop_at]:
+            want += [(s, "begin"), (s, "done")]
+        if failed:
+            want += [(failed, "begin"), (failed, "failed")]
+            for s in rollback:
+                want += [(s, "begin"), (s, "done")]
+        return want
+
+    def seq_text(seq):
+        return " ".join("%s:%s" % x for x in seq) or "no step line"
+
+    def judge_failed_update(c, inst, step, code, rollback, label):
+        """an update that fails at a step: the steps up to it, the rollback when the unit had been stopped, the RESULT, the sentences"""
+        m = Markers(inst.out)
+        c.check(inst.rc == 3, "%s: the update ends with status 3 (failed, rolled back)" % label, "exit 3", "%s %s" % (inst.shown(), cell(inst.out[-120:])))
+        c.check(not m.bad, "%s: every marker line has the shape of the grammar" % label, "none other", few(m.bad, 3))
+        want = upd_sequence(None, step, UPD_ROLLBACK if rollback else ())
+        c.check(m.sequence() == want, "%s: the steps go up to %s and fail there%s" % (label, step, ", then the rollback runs restore, units and start" if rollback else ", and nothing is rolled back (nothing of the box was changed)"),
+                seq_text(want), seq_text(m.sequence()))
+        result_is(c, m, label, "failed", step, code, "rolled_back")
+        c.check("failed at step %s: %s" % (step, code) in m.lines, "%s: the run says where it failed and why" % label, "failed at step %s: %s" % (step, code), few(m.sentences(), 4))
+        c.check(("rolled back" in m.lines) == bool(rollback), "%s: the run says it rolled back only when it had changed the box" % label, "rolled back" if rollback else "no such line", few(m.sentences(), 5))
+        c.check("kept_packages: %s" % " ".join(sorted(ADDED)) in m.lines, "%s: the last sentence before the result says that the package it installed is kept" % label, "kept_packages: " + " ".join(sorted(ADDED)),
+                few([x for x in m.sentences() if "kept" in x], 2))
+        return m
+
+    # ---- U1 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u1():
+        if not gate("U1", "list"):
+            return
+        old, new, nob = (gxc(n) for n in ("u1-list-old", "u1-list-new", "u1-list-nobody"))
+        if not all((old, new, nob)):
+            return
+        c = Case("U1 list")
+        for g, who, want in ((old, "root, with the catalogue at the installed tag", {"available": False, "installed": OLD_TAG, "latest": OLD_TAG}),
+                             (new, "root, with a newer tag in the catalogue", {"available": True, "installed": OLD_TAG, "latest": NEW_TAG}),
+                             (nob, "nobody, with a newer tag in the catalogue", {"available": True, "installed": OLD_TAG, "latest": NEW_TAG})):
+            me = module_entry(g.obj() or {})
+            c.check(g.rc == 0 and g.one_object(), "list as %s prints one JSON object and ends with status 0" % who, "one object, exit 0", "%s, %s" % (g.shown(), cell(g.out, 80)))
+            c.check(me is not None and me.get("update") == want, "list as %s says update %s" % (who, json.dumps(want, separators=(",", ":"))), json.dumps(want, separators=(",", ":")),
+                    cell(json.dumps(me.get("update") if me else None, separators=(",", ":"))))
+            c.check(me is not None and jget(me, "installed", "version") == OLD_TAG and me.get("tag") == want["latest"], "list as %s shows the module installed at %s, the catalogue at %s" % (who, OLD_TAG, want["latest"]),
+                    "%s, %s" % (OLD_TAG, want["latest"]), "%s, %s" % (cell(jget(me, "installed", "version") if me else None), cell(me.get("tag") if me else None)))
+        m3 = Gx("m3-list-root")
+        if m3.answered:
+            me = module_entry(m3.obj() or {})
+            c.check(me is None or "update" not in me, "a module that is not installed has no `update` (the list of M3)", "no update field", cell(json.dumps(me.get("update") if me else None)))
+        c.done()
+
+    # ---- U2 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u2():
+        if not gate("U2", "plan --update"):
+            return
+        before, after, sim_after = snap("u2-before"), snap("u2-after"), snap("u2-after-sim")
+        pr, pn, ps, ap, ap2 = (gxc(n) for n in ("u2-plan", "u2-plan-nobody", "u2-plan-same", "u2-aptsim", "u2-aptsim-after"))
+        if not all((before, after, sim_after, pr, pn, ps, ap, ap2)):
+            return
+        sim = parse_aptsim(ap.out)
+        if sim["rc"] != 0 or ap.rc != 0:
+            invalid("U2: apt could not be asked what installing %s would do (rc %s): %s" % (" ".join(ADDED), sim["rc"], cell(ap.out, 200)))
+            return
+        plan, po = pr.obj() or {}, pn.obj() or {}
+        c = Case("U2 plan --update")
+        c.check(pr.rc == 0 and pr.one_object(), "plan --update prints one JSON object and ends with status 0", "one object, exit 0", "%s, %s" % (pr.shown(), cell(pr.out, 80)))
+        cks = plan_checks(plan)
+        c.check([x[0] for x in cks] == list(UPD_CHECKS), "the checks are %s, in this order" % ", ".join(UPD_CHECKS), ", ".join(UPD_CHECKS), few(x[0] for x in cks))
+        c.check(bool(cks) and all(x[1] is True for x in cks), "every check is ok", "all ok", few("%s:%s %s" % (a, b, d) for a, b, d in cks if b is not True))
+        c.check(plan.get("refused") is None, "the plan is not refused", "refused null", cell(plan.get("refused")))
+        c.check(plan.get("mode") == "update", "the plan says its mode is update", "update", cell(plan.get("mode")))
+        c.check(isinstance(plan.get("plan_id"), str) and PLAN_ID_RE.match(plan.get("plan_id")) is not None, "plan_id is m1- and 32 hexadecimal digits", "m1-<32 hex>", cell(plan.get("plan_id")))
+        c.check(plan.get("name") == kit.get("name") and plan.get("tag") == NEW_TAG and plan.get("tier") == "community", "the plan is of the module, at the tag of the catalogue, tier community",
+                "%s %s community" % (kit.get("name"), NEW_TAG), "%s %s %s" % (plan.get("name"), plan.get("tag"), plan.get("tier")))
+        c.check(jget(plan, "archive", "url") == UPD["new"]["archive"]["url"], "the archive is the new one the catalogue names", cell(UPD["new"]["archive"]["url"]), cell(jget(plan, "archive", "url")))
+        c.check(plan.get("update") == {"installed": OLD_TAG, "latest": NEW_TAG, "added": ADDED, "dropped": []}, "update says the two tags, the package the new manifest adds, and none dropped",
+                json.dumps({"installed": OLD_TAG, "latest": NEW_TAG, "added": ADDED, "dropped": []}, separators=(",", ":")), cell(json.dumps(plan.get("update"), separators=(",", ":"))))
+        pk = plan.get("packages") if isinstance(plan.get("packages"), dict) else {}
+        to_install, to_upgrade = pk.get("to_install"), pk.get("to_upgrade")
+        c.check(isinstance(to_install, list) and sorted(to_install) == sorted(sim["new"]), "to_install is what `apt-get -s install --no-install-recommends` says on the guest for the packages added",
+                few(sorted(sim["new"]), 6) or "nothing", few(sorted(to_install or []), 6) or "nothing")
+        c.check(isinstance(to_upgrade, list) and sorted(to_upgrade) == sorted(sim["upgrade"]), "to_upgrade is what apt says", few(sorted(sim["upgrade"]), 6) or "nothing", few(sorted(to_upgrade or []), 6) or "nothing")
+        c.check(pk.get("known") is True and isinstance(pk.get("download_bytes"), int) and isinstance(pk.get("extra_bytes"), int), "apt gave the sizes (known)", "known true", cell(json.dumps(pk)))
+        ok, detail = check_of(po, "busy")
+        c.check(pn.rc == 0 and pn.one_object() and ok is False and detail.startswith("not_checked") and po.get("refused") is None, "the plan as nobody is made, with the check busy marked as not made (it needs root)",
+                "busy not_checked, refused null", "%s, ok %s %s, refused %s" % (pn.shown(), ok, cell(detail, 40), cell(po.get("refused"))))
+        c.check(po.get("plan_id") == plan.get("plan_id") and bool(plan.get("plan_id")) and po.get("update") == plan.get("update"), "the plan as nobody has the root's plan_id and the same update", cell(plan.get("plan_id")), cell(po.get("plan_id")))
+        m3 = Gx("m3-plan-root")
+        if m3.answered:
+            c.check((m3.obj() or {}).get("plan_id") != plan.get("plan_id"), "the id of the plan of an update is not the id of the plan of an install", "different", "the same")
+        c.done()
+        c = Case("U2 plan writes nothing")
+        for key in ("/var/lib/apt/extended_states", "/var/log/apt/history.log", "/var/lib/dpkg/status", "/var/log/apt/eipp.log.xz"):
+            c.check(before.apt.get(key) is not None and before.apt.get(key) == after.apt.get(key), "%s is as it was after the plans" % key, cell(before.apt.get(key)), cell(after.apt.get(key)))
+            c.check(before.apt.get(key) == sim_after.apt.get(key), "%s is as it was after the proof's own simulation, too (so that it proves the plan and not itself)" % key, cell(before.apt.get(key)), cell(sim_after.apt.get(key)))
+        c.check(before.get("dpkg_audit") == "0" and after.get("dpkg_audit") == "0", "dpkg --audit finds nothing", "0", "%s, %s" % (before.get("dpkg_audit"), after.get("dpkg_audit")))
+        c.check(not module_names_delta(before, after), "no name of the file system changed (the box's own doings and the core's state apart)", "none", few(sorted(module_names_delta(before, after))))
+        c.check({n for n in before.names if n.startswith("/var/tmp/")} == {n for n in after.names if n.startswith("/var/tmp/")}, "/var/tmp holds what it held (the sandbox of the plan is gone)", "the same",
+                few(sorted({n for n in before.names ^ after.names if n.startswith("/var/tmp/")})))
+        c.check(before.state == after.state, "the state of the assistant is as it was (names, times, sizes)", "the same", few(sorted(set(before.state.items()) ^ set(after.state.items()))))
+        same_module(c, before, after, "after the plans")
+        c.check(before.tmp == after.tmp == [], "the area of the install holds nothing, no backup folder", "empty", few(before.tmp + after.tmp))
+        c.check(before.get("unit_pid") == after.get("unit_pid") and before.get("unit_since") == after.get("unit_since"), "the unit of the module was not touched (the same process, the same start)",
+                "%s %s" % (before.get("unit_pid"), before.get("unit_since")), "%s %s" % (after.get("unit_pid"), after.get("unit_since")))
+        c.done()
+        c = Case("U2 plan refused up_to_date")
+        po = ps.obj() or {}
+        ok, detail = check_of(po, "newer")
+        okin, _ = check_of(po, "installed")
+        c.check(ps.rc == 0 and ps.one_object() and po.get("refused") == "up_to_date", "the plan of an update with the catalogue at the installed tag is refused up_to_date", "refused up_to_date", "%s, refused %s" % (ps.shown(), cell(po.get("refused"))))
+        c.check(okin is True and ok is False and detail == "up_to_date", "the check installed is ok and the check newer is not, and says up_to_date", "installed ok, newer up_to_date", "installed %s, newer %s %s" % (okin, ok, cell(detail, 40)))
+        c.check(not po.get("plan_id") and po.get("mode") == "update", "a plan that is refused has no plan_id", "none", cell(po.get("plan_id")))
+        c.done()
+        down = Gx("u3-down-plan")
+        if "case_U3_done" in marks and down.answered:
+            c = Case("U2 plan refused downgrade")
+            po = down.obj() or {}
+            ok, detail = check_of(po, "newer")
+            c.check(down.rc == 0 and down.one_object() and po.get("refused") == "downgrade", "the plan of an update with a catalogue older than the installed tag is refused downgrade", "refused downgrade", "%s, refused %s" % (down.shown(), cell(po.get("refused"))))
+            c.check(ok is False and detail == "downgrade", "the check newer is not ok, and says downgrade", "newer downgrade", "newer %s %s" % (ok, cell(detail, 40)))
+            c.check(not po.get("plan_id") and jget(po, "update", "installed") == NEW_TAG and jget(po, "update", "latest") == OLD_TAG, "no plan_id, and update says the installed tag is the new one", "installed %s, latest %s" % (NEW_TAG, OLD_TAG),
+                    cell(json.dumps(po.get("update"), separators=(",", ":"))))
+            same = Gx("u3-same-plan").obj() or {}
+            ok2, detail2 = check_of(same, "newer")
+            c.check(same.get("refused") == "up_to_date" and ok2 is False and detail2 == "up_to_date", "and the plan with the catalogue at the tag that was just installed is refused up_to_date", "refused up_to_date", "refused %s, newer %s" % (cell(same.get("refused")), cell(detail2, 40)))
+            c.done()
+        else:
+            not_testable("U2 plan refused downgrade", "the plan of a downgrade needs the module at the new version, which U3 installs; U3 did not run")
+
+    # ---- U3 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u3():
+        if not gate("U3", "update by hand"):
+            return
+        plan, upd, log, st, lst = (gxc(n) for n in ("u3-plan", "u3-update", "u3-log", "u3-status", "u3-list"))
+        before, after = snap("u3-before"), snap("u3-after")
+        host, noauth = call("u3-host"), call("u3-host-noauth")
+        if not all((plan, upd, log, st, lst, before, after, host, noauth)):
+            return
+        pid = one(read("u3-plan-id"))
+        c = Case("U3 update markers")
+        c.check(PLAN_ID_RE.match(pid) is not None and (plan.obj() or {}).get("plan_id") == pid, "the update was given the plan_id of the plan of the update (--plan-id)", "m1-<32 hex>", pid)
+        c.check(upd.rc == 0, "the update ends with status 0", "exit 0", "%s %s" % (upd.shown(), cell(upd.out[-160:])))
+        m = markers_ok(c, Markers(upd.out), "update", UPDATE_STEPS, "-")
+        ml = markers_ok(c, Markers(log.out), "log", UPDATE_STEPS, "-")
+        c.check([ln for ln in ml.lines if not ln.startswith("| ")] == m.lines, "the log holds the lines of the standard output, and the output of the tools behind `| `", "the same lines", "differs")
+        c.check("updated: %s %s -> %s" % (kit.get("name"), OLD_TAG, NEW_TAG) in m.lines, "the run says what it updated, from and to", "updated: %s %s -> %s" % (kit.get("name"), OLD_TAG, NEW_TAG), few(m.sentences(), 3))
+        c.check(all(ln.startswith("| ") or ln.startswith("CASAOS_MODULE_") or re.fullmatch(r"[\x20-\x7e]*", ln) for ln in ml.lines), "the log is printable ASCII", "printable", "other")
+        steps = step_seconds(m)
+        if steps:
+            number("update by hand, seconds per step", ", ".join("%s %d s" % (a, b) for a, b in steps))
+        c.done()
+        c = Case("U3 files and state")
+        judge_version(c, before, "before the update", "old")
+        judge_version(c, after, "after the update", "new")
+        conf_path = kit.get("conf_path", "")
+        c.check(before.files.get(conf_path) is not None and before.files.get(conf_path) == after.files.get(conf_path), "the administrator's own %s is byte for byte what it was" % conf_path, cell(before.files.get(conf_path)), cell(after.files.get(conf_path)))
+        c.check(UPD["legacy_path"] in before.files and UPD["legacy_path"] not in after.files and UPD["next_path"] not in before.files and UPD["next_path"] in after.files,
+                "the sample that the new version drops is gone, and the sample that it adds is there", "%s gone, %s there" % (UPD["legacy_path"], UPD["next_path"]), "legacy %s, next %s" % (UPD["legacy_path"] in after.files, UPD["next_path"] in after.files))
+        c.check(all(after.pkgs.get(p, "").startswith("ii") for p in ADDED), "the package that the new manifest adds is installed (%s)" % few(ADDED), "ii", few("%s=%s" % (p, after.pkgs.get(p)) for p in ADDED))
+        if any(before.pkgs.get(p, "").startswith("ii") for p in ADDED):
+            c.note("the package was already on the box before the update (the proof could not take it off)")
+        pids = (before.get("unit_pid"), after.get("unit_pid"), before.get("unit_since"), after.get("unit_since"))
+        c.check(all(x not in ("", "none", "0", "-") for x in pids) and pids[0] != pids[1] and pids[2] != pids[3], "the service was restarted: another process and another start time", "both change", "pid %s -> %s, since %s -> %s" % pids)
+        c.done()
+        c = Case("U3 status, route and host")
+        so, lo = st.obj() or {}, lst.obj() or {}
+        c.check(st.rc == 0 and so.get("installed") is True and so.get("version") == NEW_TAG and jget(so, "unit", "active") is True and jget(so, "unit", "enabled") is True and jget(so, "route", "answers") is True,
+                "status says installed at the new version, unit active and enabled, the route answers", "all of them", cell(st.out, 160))
+        me = module_entry(lo)
+        c.check(me is not None and jget(me, "installed", "version") == NEW_TAG and me.get("update") == {"available": False, "installed": NEW_TAG, "latest": NEW_TAG}, "list shows the module at the new version, and no update available",
+                "installed %s, available false" % NEW_TAG, cell(json.dumps(me, separators=(",", ":")) if me else None, 160))
+        c.check(host.code == 200 and host.field("libvirt") == "available", "GET %s/host answers 200 through the gateway, libvirt available (the new service runs)" % kit.get("route"), "HTTP 200 available", "%s %s" % (host.shown(), cell(host.field("libvirt"))))
+        c.check(noauth.code in (401, 403), "the same request without a token is refused by the module, not 404 (the route is registered)", "HTTP 401", noauth.shown())
+        c.done()
+
+    # ---- U4 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u4():
+        if not gate("U4", "update through the API"):
+            return
+        env = gxc("u4-api-state")
+        pi, pu, stale, wrong, bad, start, st, lst, host = (call(n) for n in ("u4-plan-install", "u4-plan", "u4-stale", "u4-wrongmode", "u4-badmode", "u4-start", "u4-status", "u4-list", "u4-host"))
+        before, after = snap("u4-before"), snap("u4-after")
+        if not all((env, pi, pu, stale, wrong, bad, start, st, lst, host, before, after)):
+            return
+        words = dict(w.split() for w in env.lines if len(w.split()) == 2)
+        if words.get("manager") != "3" or words.get("core") != "3":
+            invalid("U4: the test variables did not reach the manager and the core (manager %s, core %s of 3): the API cases prove nothing" % (words.get("manager"), words.get("core")))
+            return
+        c = Case("U4 plans and refusals")
+        c.check(pi.code == 200 and isinstance(pi.data, dict) and pi.data.get("refused") is None and PLAN_ID_RE.match(str(pi.field("plan_id"))) is not None and pi.data.get("mode") in (None, "install"),
+                "the plan of an install on a box that has none is a plan with an id, and says no mode", "HTTP 200, refused null, an id", "%s %s" % (pi.shown(), cell(pi.field("refused"))))
+        pl = pu.data if isinstance(pu.data, dict) else {}
+        c.check(pu.code == 200 and pl.get("mode") == "update" and pl.get("refused") is None and PLAN_ID_RE.match(str(pl.get("plan_id"))) is not None, "POST plan with {\"mode\":\"update\"} is a plan of mode update, not refused, with an id",
+                "HTTP 200, mode update", "%s mode %s refused %s" % (pu.shown(), cell(pl.get("mode")), cell(pl.get("refused"))))
+        c.check([x[0] for x in plan_checks(pl)] == list(UPD_CHECKS) and all(x[1] is True for x in plan_checks(pl)), "its checks are %s, in this order, all ok" % ", ".join(UPD_CHECKS), "all ok", few("%s:%s" % (a, b) for a, b, _ in plan_checks(pl)))
+        c.check(pl.get("update") == {"installed": OLD_TAG, "latest": NEW_TAG, "added": ADDED, "dropped": []}, "its update says the two tags and the package added", "%s -> %s, added %s" % (OLD_TAG, NEW_TAG, few(ADDED)),
+                cell(json.dumps(pl.get("update"), separators=(",", ":"))))
+        c.check(bool(pi.field("plan_id")) and pi.field("plan_id") != pl.get("plan_id"), "the id of the update is not the id of the install", "different", "the same")
+        c.check(stale.code == 409 and stale.error_code == "plan_changed", "an update with a plan_id that is not the plan's is refused plan_changed", "HTTP 409 plan_changed", stale.shown())
+        c.check(wrong.code == 409 and wrong.error_code == "plan_changed", "an update with the plan_id of an install is refused plan_changed", "HTTP 409 plan_changed", wrong.shown())
+        c.check(bad.code == 400 and bad.error_code == "bad_request" and bad.detail.get("field") == "mode", "a mode that is not install or update is a 400 bad_request on the field mode", "HTTP 400 bad_request mode", "%s %s" % (bad.shown(), cell(bad.detail)))
+        c.done()
+        if start.code != 202:
+            c = Case("U4 the job")
+            c.check(False, "POST install with mode update is accepted", "HTTP 202", "%s %s" % (start.shown(), cell(start.detail.get("reason") or start.detail, 100)))
+            c.done()
+            return
+        log, journal = gxc("u4-log"), gxc("u4-journal")
+        if not (log and journal):
+            return
+        c = Case("U4 the job")
+        c.check(jget(start.data, "job", "state") in ("running", "succeeded") and jget(start.data, "job", "kind") == "update", "the answer of the start says the job is an update, and running (or done, for a job so quick that it is over)",
+                "running, kind update", "%s, kind %s" % (cell(jget(start.data, "job", "state")), cell(jget(start.data, "job", "kind"))))
+        rs = judge_job(c, "u4-job", UPDATE_STEPS, "update")
+        ml = markers_ok(c, Markers(log.out), "log", UPDATE_STEPS, "n")
+        first = log.out.split("\n", 1)[0]
+        qm = re.fullmatch(r"CASAOS_MODULE_QUEUED ([0-9a-f]{32}) virt (\w+) %s" % TS, first)
+        c.check(qm is not None and qm.group(2) == "update" and qm.group(1) in ml.nonces(), "the first line of the log is the core's queued line, of kind update, with the nonce of the markers", "CASAOS_MODULE_QUEUED <nonce> virt update <time>", cell(first, 100))
+        c.check(any(r.unit == "active" for r in rs) or "module update" in journal.out, "the job ran as casaos-module-virt.service (the unit was seen active, or the journal has its start)", "the unit", cell(journal.out, 100))
+        n = ml.nonces()
+        blob = read("u4-start.json") + read("u4-status.json")
+        c.check(not (n and n[0] != "-" and n[0] in blob), "the nonce is in no answer of the core", "absent", "present")
+        job = jget(st.data, "job") or {}
+        c.check(st.code == 200 and job.get("state") == "succeeded" and job.get("kind") == "update" and job.get("step") == "done" and job.get("code") == "" and job.get("undo") == "" and job.get("kept_packages") is None,
+                "the status of the finished job: an update, succeeded at done, no code, no undo, no kept packages", "update succeeded done", cell(json.dumps({k: job.get(k) for k in ("kind", "state", "step", "code", "undo", "kept_packages")})))
+        t0, t1 = parse_time(str(job.get("started_at", ""))), parse_time(str(job.get("ended_at", "")))
+        c.check(t0 is not None and t1 is not None and t1 >= t0, "started_at and ended_at are times, in order", "RFC 3339", "%s %s" % (cell(job.get("started_at")), cell(job.get("ended_at"))))
+        tail = job.get("log_tail")
+        c.check(isinstance(tail, list) and len(tail) <= 20 and not any("CASAOS_MODULE_" in str(x) for x in tail), "the log_tail has at most 20 lines and no marker line", "no marker", few(tail or []))
+        judge_version(c, before, "before the update", "old")
+        judge_version(c, after, "after the update through the API", "new")
+        c.check(host.code == 200 and host.field("libvirt") == "available", "the host answers, libvirt available", "HTTP 200 available", host.shown())
+        me = module_entry(lst.data if isinstance(lst.data, dict) else {})
+        c.check(me is not None and me.get("update") == {"available": False, "installed": NEW_TAG, "latest": NEW_TAG}, "the list through the API says no update is available", "available false", cell(json.dumps(me.get("update") if me else None)))
+        c.done()
+        done = [r for r in rs if r.answered() and r.state == "succeeded"]
+        if start.t0 is not None and done:
+            number("update through the API", "%s from POST install to succeeded" % secs(done[0].t0 - start.t0))
+        steps = step_seconds(ml)
+        if steps:
+            number("update through the API, seconds per step", ", ".join("%s %d s" % (a, b) for a, b in steps))
+
+    # ---- U5 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u5():
+        if not gate("U5", "file_exists"):
+            return
+        dirt, upd, log, undo = (gxc(n) for n in ("u5-dirt", "u5-update", "u5-log", "u5-undo"))
+        before, after = snap("u5-before"), snap("u5-after")
+        if not all((dirt, upd, log, undo, before, after)):
+            return
+        m_ = re.fullmatch(r"edited ([0-9a-f]{64})", dirt.out.strip())
+        sample = kit.get("conf_path", "") + ".sample"
+        if m_ is None:
+            invalid("U5: the sample could not be edited (%s)" % cell(dirt.out + dirt.err, 80))
+            return
+        edited = m_.group(1)
+        kit_sample = [f["sha256"] for f in kit.get("files", []) if f["path"] == sample]
+        if not kit_sample or edited == kit_sample[0] or "off sha=%s" % kit_sample[0] not in undo.out:
+            invalid("U5: the sample was not put back as the archive has it (%s)" % cell(undo.out, 80))
+        c = Case("U5 file_exists")
+        m = judge_failed_update(c, upd, "unpack", "file_exists", False, "update")
+        c.check(before.files.get(sample) is not None and before.files[sample][3] == edited and after.files.get(sample) is not None and after.files[sample][3] == edited,
+                "the sample the administrator edited is still what the administrator made it", edited[:16], cell(after.files.get(sample)))
+        same_module(c, before, after, "after the refusal")
+        c.check(UPD["next_path"] not in after.files, "the file that only the new version has was not put down", "absent", "present")
+        c.check(after.get("unit_enabled") == "enabled" and after.get("unit_active") == "active" and before.get("unit_pid") == after.get("unit_pid") and before.get("unit_since") == after.get("unit_since"),
+                "the unit is enabled and active and was never stopped (the same process, the same start)", "%s %s" % (before.get("unit_pid"), before.get("unit_since")), "%s %s" % (after.get("unit_pid"), after.get("unit_since")))
+        c.check(after.get("tmp_entries") == "0" and not after.tmp and not [n for n in after.names if "/modules/tmp/backup-" in n], "the area of the install is empty: no backup folder, nothing staged", "empty", few(after.tmp))
+        c.check(all(after.pkgs.get(p, "").startswith("ii") for p in ADDED), "the package of the packages step stays (a package is never taken off)", "installed", few("%s=%s" % (p, after.pkgs.get(p)) for p in ADDED))
+        c.check(before.get("dpkg_audit") == "0" and after.get("dpkg_audit") == "0", "dpkg --audit finds nothing", "0", after.get("dpkg_audit"))
+        ml = Markers(log.out)
+        c.check([ln for ln in ml.lines if not ln.startswith("| ")] == m.lines, "the log holds the lines of the standard output", "the same", "differs")
+        c.done()
+
+    # ---- U6 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u6_case(cid, title, variant):
+        if not gate("U6_" + cid, title):
+            return
+        p = "u6-" + cid
+        upd, log = gxc(p + "-update"), gxc(p + "-log")
+        before, after = snap(p + "-before"), snap(p + "-after")
+        dirt, undo = Gx(p + "-dirt"), Gx(p + "-undo")
+        if not all((upd, log, before, after)):
+            return
+        if variant == "start" and ("on failstart" not in dirt.out or "off file=no dir=no" not in undo.out):
+            invalid("U6: the drop-in that makes the start fail could not be put in place and taken away again (%s; %s)" % (cell(dirt.out, 60), cell(undo.out, 60)))
+            return
+        res = Markers(upd.out).results
+        step = res[0][3] if len(res) == 1 else ""
+        c = Case(title)
+        if variant == "unit":
+            # the system may refuse the unit file when it is read again, or when it is asked to start it: the update fails at the first of them, rolled back
+            c.check(step in ("units", "start"), "the update fails at the step units or the step start", "units or start", cell(step))
+            code = {"units": "units_failed", "start": "start_failed"}.get(step, "start_failed")
+        else:
+            step, code = "start", "start_failed"
+        judge_failed_update(c, upd, step if step in UPDATE_STEPS else "start", code, True, "update")
+        judge_version(c, before, "before the update", "old")
+        judge_version(c, after, "after the rollback", "old")
+        same_module(c, before, after, "after the rollback")
+        c.check(UPD["next_path"] not in after.files and UPD["legacy_path"] in after.files, "the sample that only the new version has is gone, the one that only the old one has is back", "next gone, legacy there",
+                "next %s, legacy %s" % (UPD["next_path"] in after.files, UPD["legacy_path"] in after.files))
+        c.check(after.get("unit_enabled") == "enabled" and after.get("unit_active") == "active", "the old unit is enabled and active again", "enabled, active", "%s, %s" % (after.get("unit_enabled"), after.get("unit_active")))
+        ml = Markers(log.out)
+        c.check(ml.sequence() == Markers(upd.out).sequence(), "the log has the same steps as the standard output", "the same", seq_text(ml.sequence()))
+        c.done()
+
+    def judge_u6():
+        judge_u6_case("start", "U6 a start that fails", "start")
+        judge_u6_case("unit", "U6 a unit file that cannot be loaded", "unit")
+
+    # ---- U7 ------------------------------------------------------------------------------------------------------------------------------
+
+    U7_CASES = (("kill_backup", "kill", "backup"), ("kill_stop", "kill", "stop"), ("kill_swap", "kill", "swap"), ("kill_units", "kill", "units"), ("kill_start", "kill", "start"),
+                ("stop_swap", "stop", "swap"), ("stop_start", "stop", "start"))
+
+    def judge_u7_case(cid, mode, step):
+        title = {"kill": "U7 SIGKILL at the step %s", "stop": "U7 systemctl stop during the step %s"}[mode] % step
+        if not gate("U7_" + cid, title):
+            return
+        p = "u7-" + cid.replace("_", "-")
+        start, plan = call(p + "-start"), call(p + "-plan")
+        if start is None or plan is None:
+            return
+        if start.code != 202:
+            c = Case(title)
+            c.check(False, "POST install with mode update is accepted", "HTTP 202", "%s %s" % (start.shown(), cell(start.detail.get("reason") or start.detail, 100)))
+            c.done()
+            return
+        watch_res, wait, log, journal = (gxc(p + n) for n in ("-watch-result", "-wait", "-log", "-journal"))
+        before, dead, recd, new = snap(p + "-before"), snap(p + "-dead"), snap(p + "-recovered"), snap(p + "-new")
+        rec, upd, reclog = gxc(p + "-recover"), gxc(p + "-update"), gxc(p + "-recover-log")
+        st = Call(p + "-status")
+        if not all((watch_res, wait, log, journal, before, dead, recd, new, rec, upd, reclog)):
+            return
+        rs = rows(p + "-job")
+        seq = states_of(rs)
+        w = parse_watch(watch_res.out)
+        ml = Markers(log.out)
+        final = last_answered(rs)
+        c = Case(title)
+        if "noproc" in w:
+            if final is not None and final.state == "succeeded":
+                not_testable(title, "the update was over when the watcher went for the assistant (it saw the step begin, and no process was left to signal): the step is shorter than the watcher's look")
+            else:
+                invalid("%s: %s" % (title, w["noproc"]))
+            return
+        if "never" in w:
+            if final is not None and final.state == "succeeded":
+                not_testable(title, "the update went through step %s without the watcher (a look every 20 ms) seeing it begin: the step is shorter than that" % step)
+            else:
+                invalid("%s: the update ended (%s%s) without reaching the step: %s" % (title, final.state if final else "no answer", " " + final.code if final and final.code != "-" else "", w["never"]))
+            return
+        if mode == "stop" and "stopped" not in w:
+            invalid("%s: the watcher did not stop the unit: %s" % (title, cell(watch_res.out, 120)))
+            return
+        if mode == "kill" and w.get("signalled", {}).get("rc") != "0":
+            invalid("%s: the signal could not be sent: %s" % (title, cell(watch_res.out, 120)))
+            return
+        within, why = True, ""
+        if mode == "kill":
+            where = landed_in(w.get("after"))
+            if where is not None and where[0] == "result":
+                not_testable(title, "the update had ended (%s) when the signal reached the assistant" % where[1])
+                return
+            within = where == (step, "begin")
+            why = "the log ended at %s after the signal, not in %s" % (" ".join(where) if where else cell(w.get("after"), 60), step)
+        else:
+            if final is not None and final.state == "succeeded":
+                not_testable(title, "the update was over when the unit was stopped")
+                return
+            within = final is not None and final.state == "failed" and final.step == step
+            why = "the unit was stopped after the step %s: the update was further on (it failed at %s)" % (step, cell(final.step if final else "?", 30))
+        c.check("succeeded" not in seq, "the job never reads succeeded", "never", " > ".join(seq))
+        c.check(not exists(p + "-job.timeout"), "the job reaches a final state in the time given", "final", "still %s after %s s" % (final.state if final else "?", read(p + "-job.timeout").strip()))
+        if mode == "kill":
+            c.check(bool(seq) and seq[-1] == "interrupted", "the job reads interrupted in the end", "interrupted", " > ".join(seq))
+            c.check(final is not None and final.undo == "-" and final.kept == "-", "an interrupted job has no undo and no kept packages", "none", "%s %s" % (final.undo, final.kept) if final else "no answer")
+            lastlog = [g for k, g in ml.order if k == "step"]
+            if lastlog and final is not None:
+                c.check(final.step == lastlog[-1][2], "the step of the interrupted job is the step of the last marker of the log", lastlog[-1][2], final.step)
+            c.check(not ml.results, "the log has no RESULT line (nothing said the end)", "none", few(" ".join(r[2:6]) for r in ml.results))
+            if step != "backup" and within:
+                c.check(any(n.endswith("/modules/tmp/backup-virt") for n in dead.names) and "backup-virt" in dead.tmp, "the backup folder is there: the one copy of the old files that the next run puts back", "backup-virt", few(dead.tmp))
+        else:
+            c.check(bool(seq) and seq[-1] in ("failed", "interrupted"), "the job reads failed or interrupted in the end", "failed or interrupted", " > ".join(seq))
+            if final is not None and final.state == "failed":
+                c.check(final.code == "interrupted" and final.undo == "rolled_back", "failed with the code interrupted, rolled back", "interrupted rolled_back", "%s %s" % (final.code, final.undo))
+            sp = w.get("stopped", {})
+            c.check(sp.get("rc") == "0", "systemctl stop of the unit ends with status 0", "rc=0", cell(sp))
+            secs_ = int(sp["seconds"]) if sp.get("seconds", "").isdigit() else None
+            c.check(secs_ is not None and secs_ < STOP_UNIT_SECONDS, "the unit stopped before systemd's 420 s ran out (the assistant answered the SIGTERM)", "under 420 s", cell(sp.get("seconds")))
+            if secs_ is not None:
+                number("systemctl stop during %s of an update" % step, "%d s until the unit was stopped" % secs_)
+            c.check(w.get("audit") == "0", "dpkg --audit finds nothing a second after the stop", "0", cell(w.get("audit")))
+            if final is not None and final.state == "failed":
+                same_module(c, before, dead, "after the rollback")
+                c.check(dead.get("unit_active") == "active" and not dead.tmp, "the old unit runs again, and no backup folder is left", "active, empty", "%s, %s" % (dead.get("unit_active"), few(dead.tmp)))
+        c.check(wait.rc == 0 and wait.out.startswith("clean after"), "no assistant, apt or dpkg is at work, the job unit is gone and dpkg's lock is free", "clean", cell(wait.out, 100))
+        c.check(dead.get("dpkg_audit") == "0", "dpkg --audit finds nothing once the box is quiet", "0", dead.get("dpkg_audit"))
+        c.check(st.answered and not any("CASAOS_MODULE_" in str(x) for x in (jget(st.data, "job", "log_tail") or [])) and jget(st.data, "job", "kind") == "update",
+                "the status of the job says it is an update, and has no marker line in its log_tail", "kind update, no marker", cell(jget(st.data, "job", "kind")))
+        # what the kill left is put back by the next run of the assistant, whole: the old version, never half of each
+        mr = Markers(rec.out)
+        recov = [x for x in mr.sequence() if x[0].startswith("recover_")]
+        c.check(rec.rc == 2 and [x for x in mr.sequence() if not x[0].startswith("recover_")] == [], "the run that recovers (the catalogue at the old tag) ends with status 2: refused, no step of an update began", "exit 2",
+                "%s %s" % (rec.shown(), seq_text(mr.sequence())))
+        result_is(c, mr, "recovery", "refused", "-", "up_to_date", "-")
+        full = [(s, ph) for s in UPD_RECOVER for ph in ("begin", "done")]
+        if mode == "kill" and step != "backup" and within:
+            c.check(recov == full and "recovered: %s is as it was before the update" % kit.get("name") in mr.lines, "the run puts the files back before it does anything else: recover_restore, recover_units, recover_start, and says it recovered",
+                    seq_text(full), "%s %s" % (seq_text(recov), few(mr.sentences(), 3)))
+        elif mode == "kill":
+            c.check(recov in ([], full), "the run puts the backup back (or drops a backup that was not finished) in whole steps", "none or all three", seq_text(recov))
+        else:
+            c.check(recov == [] and not any(x.startswith("an update of") for x in mr.lines), "there is nothing to recover: the job rolled back", "no recover step", seq_text(recov))
+        judge_version(c, recd, "after the recovery", "old")
+        same_module(c, before, recd, "after the recovery")
+        c.check(recd.get("unit_enabled") == "enabled" and recd.get("unit_active") == "active", "the old unit is enabled and active after the recovery", "enabled, active", "%s, %s" % (recd.get("unit_enabled"), recd.get("unit_active")))
+        # and the update goes through from there
+        mu = Markers(upd.out)
+        c.check(upd.rc == 0, "the update that follows goes through", "exit 0", "%s %s" % (upd.shown(), cell(upd.out[-120:])))
+        full_run = upd_sequence(None) + [("done", "done")]
+        c.check(mu.sequence() == full_run, "it runs the steps of an update, in order", seq_text(full_run), seq_text(mu.sequence()))
+        judge_version(c, new, "after the update that follows", "new")
+        c.note("the kill left the box as the %s version" % version_of(dead))
+        c.note("the signal landed: %s" % (cell(w.get("after") if mode == "kill" else w.get("seen"), 90)))
+        if c.fails:
+            c.done()
+        elif not within:
+            not_testable(title, "%s; what was checked held (%d checks), for the step it did land in" % (why, c.passed))
+        else:
+            c.done()
+
+    def version_of(s):
+        """which version of the module the files of a snapshot are: old, new, mixed or none (by path and content against the two archives)"""
+        got = {p: e[3] for p, e in s.files.items() if e[0] == "f"}
+        have = {}
+        for which in ("old", "new"):
+            want = {f["path"]: f["sha256"] for f in UPD[which]["files"]}
+            have[which] = all(got.get(p) == h for p, h in want.items()) and not (set(got) & {f["path"] for f in UPD["new" if which == "old" else "old"]["files"]} - set(want))
+        return "old" if have["old"] else "new" if have["new"] else "mixed" if got else "no"
+
+    def judge_u7():
+        for cid, mode, step in U7_CASES:
+            judge_u7_case(cid, mode, step)
+        short = [v[1] for v in verdicts if v[0] == "NOT TESTABLE" and v[1].startswith("U7 ") and "shorter" in v[2]]
+        if short:
+            notes.append("U7 %s is NOT TESTABLE on a real guest: the new archive is a local file (no download to slow down), so a step like that lasts milliseconds, shorter than any watcher; the steps stop and start are "
+                         "made long by a drop-in of the proof's own, and the others are not." % "; ".join(v[len("U7 "):] for v in short))
+
+    # ---- U8 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u8():
+        if not gate("U8", "invariance"):
+            return
+        if not exists("snap-m2-ctl-a.facts") or not exists("snap-m2-ctl-b.facts"):
+            not_testable("U8 invariance", "the control of M2 (what the box changes by itself) was not recorded in this run: what the update cases did cannot be told from it")
+            return
+        a, b, e = snap("u-start", "the box before the update cases"), snap("m2-ctl-b", "the control"), snap("u8-end")
+        ctl = snap("m2-ctl-a", "the control")
+        owned = Gx("u8-owned")
+        if not all((a, b, e, ctl)) or not owned.answered:
+            if owned.answered is False:
+                invalid("U8: the files of the package (u8-owned) are missing: what it owns cannot be told")
+            return
+        a_ctl = ctl
+        if not all(a.pkgs.get(p, "").startswith("ii") for p in PKGS):
+            not_testable("U8 invariance", "the module's packages were not on the box before the update cases (M4 installs them): the first install would be counted as the update's doing")
+            return
+        planned = set(ADDED)
+        u2 = Gx("u2-plan").obj() or {}
+        planned |= set(jget(u2, "packages", "to_install") or []) | set(jget(u2, "packages", "to_upgrade") or [])
+        own = set(x for x in owned.out.split("\n") if x.startswith("/"))
+        if not own:
+            invalid("U8: dpkg lists no file of the package the update adds (%s)" % cell(owned.err, 100))
+            return
+        unseated = set()
+        for f in sorted(os.listdir(out_dir)):
+            if f.endswith("-unseat.out"):
+                for ln in read(f).split("\n"):
+                    if ln.startswith("will_remove "):
+                        unseated |= set(ln.split()[1:])
+        own |= set(x for x in Gx("u8-unseated").out.split("\n") if x.startswith("/"))
+        own |= {"/usr" + x for x in own if re.match(r"^/(bin|sbin|lib|lib32|lib64|libx32)/", x)}
+        # (the control is a window of the same length as no other: the file system is compared with itself before the update cases, and what the control shows changing by itself is left out)
+        invariance("U8", a, a_ctl, b, e, planned, own, unseated)
+
+    # ---- U9 ------------------------------------------------------------------------------------------------------------------------------
+
+    def judge_u9():
+        if not gate("U9", "the restart"):
+            return
+        if exists("u9-reboot.failed"):
+            invalid("U9: " + one(read("u9-reboot.failed")))
+            return
+        before, after = snap("u9-before"), snap("u9-after")
+        status = gxc("u9-status")
+        host = call("u9-host")
+        if not all((before, after, status, host)):
+            return
+        if before.get("unit_active") != "active" or before.lists_version != NEW_TAG + "\n":
+            invalid("U9: the module was not at the new version and running before the restart (unit %s, version %s)" % (before.get("unit_active"), cell(before.lists_version.strip())))
+            return
+        c = Case("U9 the restart")
+        old = one(read("u9-reboot.boot-old"))
+        bt = [r for r in table("boot-u9-reboot.tsv") if len(r) == 3]
+        newid = bt[-1][2] if bt else "-"
+        c.check(old not in ("", "-") and newid not in ("", "-") and old != newid, "the guest went away and came back with another boot id", "a boot id other than %s" % old, newid)
+        c.check(after.get("unit_enabled") == "enabled" and after.get("unit_active") == "active", "the unit is enabled and active again after the restart", "enabled, active", "%s, %s" % (after.get("unit_enabled"), after.get("unit_active")))
+        so = status.obj() or {}
+        c.check(so.get("installed") is True and so.get("version") == NEW_TAG and jget(so, "unit", "active") is True and jget(so, "route", "answers") is True, "status after the restart: the new version, active, the route answers", "all of them", cell(status.out, 140))
+        c.check(host.code == 200 and host.field("libvirt") == "available", "the host answers through the gateway, libvirt available", "HTTP 200 available", "%s %s" % (host.shown(), cell(host.field("libvirt"))))
+        judge_version(c, after, "after the restart", "new")
+        c.check(after.get("manager_env") == "0" and after.get("core_env") == "0", "the test variables are in neither the environment of the manager nor the core's", "0 and 0", "manager %s, core %s" % (after.get("manager_env"), after.get("core_env")))
+        c.done()
+
+    def judge_updates():
+        if not upd_ok():
+            return
+        for fn, cid in ((judge_u1, "U1"), (judge_u2, "U2"), (judge_u3, "U3"), (judge_u4, "U4"), (judge_u5, "U5"), (judge_u6, "U6"), (judge_u7, "U7"), (judge_u8, "U8"), (judge_u9, "U9")):
+            run_judge(fn, cid)
+
     # ---- the order of the report -------------------------------------------------------------------------------------------------------
 
     def run_judge(fn, cid=None):
@@ -1772,6 +2358,7 @@ try:
                     (judge_m10, "M10"), (judge_m11, "M11")):
         run_judge(fn, cid)
     run_judge(report_cascade, "the cascade")
+    run_judge(judge_updates, "the update cases")
 
     box = {}
     for ln in read("guest/box-facts").splitlines():
