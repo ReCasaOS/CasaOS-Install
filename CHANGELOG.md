@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.40] - 2026-10-19
+
+Components: CasaOS `v0.4.79`. Unchanged from v0.5.39: CasaOS-UI `v0.4.94`, module `virt` (CasaOS-VirtManagement) `v0.1.3`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Fixed
+
+- The plan of the update of a module no longer refuses every update with `apt_failed`: the planner now reads the line that apt prints for a package that is already installed (`Skipping <package>, it is already installed and upgrade is not set.`). v0.5.39, which carries the update of a module, was never promoted to the latest release because of this; v0.5.40 is the release that carries it.
+
 ## [0.5.39] - 2026-10-19
 
 Components: CasaOS `v0.4.78`, CasaOS-UI `v0.4.94`. Unchanged from v0.5.38: module `virt` (CasaOS-VirtManagement) `v0.1.3`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
