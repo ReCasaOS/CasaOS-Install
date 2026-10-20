@@ -1856,7 +1856,8 @@ try:
         result_is(c, m, label, "failed", step, code, "rolled_back")
         c.check("failed at step %s: %s" % (step, code) in m.lines, "%s: the run says where it failed and why" % label, "failed at step %s: %s" % (step, code), few(m.sentences(), 4))
         c.check(("rolled back" in m.lines) == bool(rollback), "%s: the run says it rolled back only when it had changed the box" % label, "rolled back" if rollback else "no such line", few(m.sentences(), 5))
-        c.check("kept_packages: %s" % " ".join(sorted(ADDED)) in m.lines, "%s: the last sentence before the result says that the package it installed is kept" % label, "kept_packages: " + " ".join(sorted(ADDED)),
+        kept = sorted(set(UPD["new"]["packages"]) | set(ADDED))
+        c.check("kept_packages: %s" % " ".join(kept) in m.lines, "%s: the last sentence before the result says that the packages of the new manifest are kept (all of them, the one it added too)" % label, "kept_packages: " + " ".join(kept),
                 few([x for x in m.sentences() if "kept" in x], 2))
         return m
 
@@ -2322,7 +2323,7 @@ try:
         planned = set(ADDED)
         u2 = Gx("u2-plan").obj() or {}
         planned |= set(jget(u2, "packages", "to_install") or []) | set(jget(u2, "packages", "to_upgrade") or [])
-        own = set(x for x in owned.out.split("\n") if x.startswith("/"))
+        own = set(x for x in owned.out.split("\n") if x.startswith("/")) | set(x for x in Gx("u3-owned").out.split("\n") if x.startswith("/"))
         if not own:
             invalid("U8: dpkg lists no file of the package the update adds (%s)" % cell(owned.err, 100))
             return
