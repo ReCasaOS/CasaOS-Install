@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.41] - 2026-10-20
+
+Components: CasaOS `v0.4.80`, CasaOS-AppManagement `v0.4.70`, CasaOS-UI `v0.4.96`, module `virt` (CasaOS-VirtManagement) `v0.2.0`. Unchanged from v0.5.40: CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
+
+### Added
+
+- **Statistics of the containers, the virtual machines and the machine.** A *Statistics* app in the dashboard shows processor, memory, network, disk and health of every container (including those started by hand), every virtual machine and the machine itself, live and over 7 days, with a list on the left, detailed charts, a common cursor, zoom and a table alternative. History is kept in fixed-size files under `/var/lib/casaos/stats` (about 3 MB per item).
+- **Resource alerts.** Each item has its own alert rules (processor above 90 % for 10 minutes and memory above 90 % for 5 minutes by default, editable from the app); a virtual machine that crashes raises an alert too. Alerts show as a banner and a count on the app icon, as a pop-up notification, and reach the phone through the alert hub under the new `resources` category (on by default).
+- `virt` `v0.2.0`: the statistics and alert routes of the virtual machines. Memory used by a guest needs the balloon driver, and only virtual machines created from this version report it.
+
+### Known limits
+
+- A restart of the core, AppManagement or virt that crosses a minute boundary forgets a processor or memory count in progress: the alert is late by up to the length of its rule.
+- This release is a pre-release: the statistics have been proven by unit tests and, for the dashboard, against a stub of the contract; the proof on real guests (Docker, libvirt) is still to come.
+
 ## [0.5.40] - 2026-10-19
 
 Components: CasaOS `v0.4.79`. Unchanged from v0.5.39: CasaOS-UI `v0.4.94`, module `virt` (CasaOS-VirtManagement) `v0.1.3`, CasaOS-AppManagement `v0.4.69`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.

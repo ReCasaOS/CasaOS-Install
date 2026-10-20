@@ -118,6 +118,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.41
+
+**Statistics and resource alerts**: a *Statistics* app with live and 7-day charts of every container, virtual machine and the machine, per-item alert rules, and a `resources` category in the alert hub. Pre-release until the proof on real guests is green.
+
 ## What is in v0.5.40
 
 **Updating a module works**: the plan of an update reads what apt says about packages that are already installed. v0.5.40 replaces v0.5.39, which carried the same feature with this defect.
