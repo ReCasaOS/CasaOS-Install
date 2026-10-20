@@ -163,7 +163,17 @@ docker_up() { stamp before; systemctl start docker.service; stamp after; printf 
 core_stop() { stamp before; systemctl stop casaos.service; stamp after; printf 'active\t%s\n' "$(systemctl is-active casaos.service)"; }
 core_start() { stamp before; systemctl start casaos.service; stamp after; printf 'active\t%s\n' "$(systemctl is-active casaos.service)"; }
 am_restart() { stamp before; systemctl restart casaos-app-management.service; stamp after; printf 'active\t%s\n' "$(systemctl is-active casaos-app-management.service)"; }
-libvirtd_restart() { stamp before; systemctl restart libvirtd.service; stamp after; printf 'active\t%s\n' "$(systemctl is-active libvirtd.service)"; }
+# an outage long enough to span several 5 s samples (a plain restart takes about a second and may fall between two of them):
+# the service and its sockets are stopped, so socket activation cannot bring libvirtd back, for 25 s
+libvirtd_restart() {
+    stamp before
+    systemctl stop libvirtd.service libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket 2>/dev/null
+    sleep 25
+    systemctl start libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket 2>/dev/null
+    systemctl start libvirtd.service
+    stamp after
+    printf 'active\t%s\n' "$(systemctl is-active libvirtd.service)"
+}
 unit_state() { systemctl is-active "$1"; }
 
 uri_of() { case "$1" in default) echo 'test:///default' ;; empty) echo "test://$SP/empty.xml" ;; *) return 2 ;; esac; }
