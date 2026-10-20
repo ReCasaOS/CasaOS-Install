@@ -2109,6 +2109,8 @@ case_u3() {
         modrun u3-update unew root update "${MODULE}" --yes --plan-id "${pid}"
         gx u3-log modlog
         snap u3-after || return 1
+        # shellcheck disable=SC2086
+        gx u3-owned pkg_files ${UPD_PKGS}
         modrun u3-status unew root status "${MODULE}"
         modrun u3-list unew root list
         host_call u3-host 120 || true
@@ -2287,10 +2289,11 @@ case_u8() {
     marker case_U8_start
     if [ -n "${API_ON:-}" ]; then api_off u8-api || true; API_ON=""; API_VARIANT=""; fi
     if ensure_clean u8-pre; then
-        u_purge u8
-        gx u8-conf conf_remove
+        # what dpkg says the package owns is asked while it is installed (U3 recorded it as well): a purged package owns nothing
         # shellcheck disable=SC2086
         gx u8-owned pkg_files ${UPD_PKGS}
+        u_purge u8
+        gx u8-conf conf_remove
         gx u8-unseated unseat_owned
         snap u8-end full || return 1
     fi

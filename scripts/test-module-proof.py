@@ -307,7 +307,7 @@ class Run:
         if not self.packages_done:
             return "unknown"
         if self.kind == "update":
-            return " ".join(sorted(self.added)) or "none"
+            return " ".join(sorted(set(self.info["packages"]) | set(self.added))) or "none"
         return " ".join(sorted(self.w.kit["packages"])) or "none"
 
     # ---- the run
@@ -1652,7 +1652,7 @@ class World:
         if verb == "escape_state":
             return 0, "".join(p + "\n" for p in self.escaped) + "done\n"
         if verb == "pkg_files":
-            return 0, "".join(("/bin/virsh" if p == "/usr/bin/virsh" else p) + "\n" for p in sorted(set(self.owned_files(a))))
+            return 0, "".join(("/bin/virsh" if p == "/usr/bin/virsh" else p) + "\n" for p in sorted(set(self.owned_files([x for x in a if x in self.installed]))))
         if verb == "modlog":
             return 0, "".join(l + "\n" for l in self.log_lines)
         if verb == "journal":
@@ -2899,7 +2899,10 @@ def update_mutations():
     m("U8: the drop-in of the proof is left", fails("U8 /etc", "every file of /etc"), lambda d: add_line(d, "snap-u8-end.etc", "/etc/systemd/system/casaos-virt-management.service.d/mp.conf\tabc"))
     m("U8: a name that nothing explains", fails("U8 the rest of the file system", "every name that is new or gone"), lambda d: add_line(d, "snap-u8-end.names", "/usr/bin/stray-program"))
     m("U8: the sandbox of a plan is left in /var/tmp", fails("U8 the rest of the file system", "/var/tmp holds what it held"), lambda d: add_line(d, "snap-u8-end.names", "/var/tmp/casaos-plan-1"))
-    m("U8: dpkg lists no file of the package", invalid_run("dpkg lists no file of the package the update adds"), lambda d: write_out(d, "u8-owned.out", ""))
+    m("U8: dpkg lists no file of the package", invalid_run("dpkg lists no file of the package the update adds"), lambda d: (write_out(d, "u8-owned.out", ""), write_out(d, "u3-owned.out", "")))
+    m("U5: the kept packages are only the one the update added", fails("U5 file_exists", "packages of the new manifest are kept"), lambda d: edit_lines(d, "u5-update.out", lambda ls: ["kept_packages: hello" if l.startswith("kept_packages") else l for l in ls]))
+    m("U6: the kept packages are only the one the update added", fails("U6 a start that fails", "packages of the new manifest are kept"), lambda d: edit_lines(d, "u6-start-update.out", lambda ls: ["kept_packages: hello" if l.startswith("kept_packages") else l for l in ls]))
+    m("U8: the file list was asked after the purge (empty at U3 too)", invalid_run("dpkg lists no file of the package the update adds"), lambda d: (write_out(d, "u8-owned.out", "\n"), write_out(d, "u3-owned.out", "\n")))
     m("U8: the module's packages were not on the box before", not_testable("U8 invariance", "were not on the box before"), lambda d: dpkg_line(d, "u-start", "ovmf", "none"))
 
     # U9
