@@ -1,0 +1,220 @@
+name: stats-proof
+
+# Proof of the statistics of a published release on a real machine: the machine's own (the core, /v1/sys/stats), the containers' on a real Docker (AppManagement,
+# /v2/app_management/stats) and the virtual machines' (the virt module from the release's own catalogue, with libvirt's test driver: /v2/virt_management/stats), their history files,
+# their alert rules, alerts that fire and resolve, and the hub that tells them.
+#
+# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way module-proof.yml boots its own, with two forwards: ssh, and the gateway of ReCasaOS.
+# scripts/stats-proof.sh installs the published release with its installer and the virt module with `casaos module install virt`, and then, from the RUNNER (the core, Docker and libvirt
+# are stopped on purpose and the guest restarts: the evidence has to be on the side that survives it), calls the three services through the gateway with the token of a login of the box's
+# own and asks the guest only for what only it can say. scripts/stats-proof-report.py judges what was recorded (PASS, FAIL, UNVERIFIED with its reason, INVALID RUN) and fails the job for a
+# FAIL and for an INVALID RUN alike. Nothing is judged in the guest.
+#
+#   H1-H5 the machine: the routes, the history files of a fixed size, a stop of the core, the alert rules and a CPU hog, the cost
+#   A1-A6 the containers: a busy container, a compose project with and without a CPU limit, stop, SIGTERM and kill, a removed container, Docker stopped, AppManagement restarted, the cost
+#   V1-V6 the VMs: the test driver's VM, a restart of the guest, a driver with no domain, libvirtd restarted, the alert rules, the cost
+#   C1 what reached the hub's channel; C2 no unexpected restart, no panic
+#
+#   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64
+# `legs` chooses the cells (scripts/stats-proof-legs.json): all of them or one. `tag` is the installer release under test (a pre-release when it is a candidate). The guest needs the network:
+# the mirrors of the system, Docker's images, the module's archive and packages. It publishes nothing and changes nothing outside the guests. By hand only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The installer release to install, a tag of this repository (a pre-release when it is a candidate); empty for the latest published release
+        required: false
+        default: v0.5.41
+        type: string
+      legs:
+        description: Which legs to run, all of them or one (d12 is Debian 12, u24 is Ubuntu 24.04)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - d12
+          - u24
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: The legs of this run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    env:
+      LEGS: ${{ inputs.legs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The legs this run proves
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >>"${GITHUB_OUTPUT}"
+          import json
+          import os
+          want = os.environ["LEGS"]
+          chosen = [c for c in json.load(open("scripts/stats-proof-legs.json")) if want == "all" or c["leg"] == want]
+          if not chosen:
+              raise SystemExit("no leg is %r" % want)
+          print("matrix=" + json.dumps({"include": chosen}, separators=(",", ":")))
+          PY
+          echo "legs of this run: ${LEGS}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  vm:
+    name: ${{ matrix.leg }}, ${{ matrix.name }}, ${{ matrix.label }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEBIAN_FRONTEND: noninteractive
+      PYTHONDONTWRITEBYTECODE: "1"
+      TAG: ${{ inputs.tag }}
+      LEG: ${{ matrix.leg }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+      OUT: ${{ github.workspace }}/out
+      SSH_CONFIG: ssh_config
+      GW_PORT: "8080"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # the runner's temporary directory is not a context a job-level `env` may name: it is set here, for the steps that follow
+      - name: Where the runner keeps the token of the box's user
+        run: |
+          set -euo pipefail
+          echo "WORK=${RUNNER_TEMP}/sp-work" >>"${GITHUB_ENV}"
+
+      - name: The proof can say no
+        run: |
+          set -euo pipefail
+          python3 scripts/test-stats-proof.py
+          bash -n scripts/stats-proof.sh
+          bash -n scripts/module-proof.sh
+          bash scripts/stats-proof.sh check
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG}" ]; then
+            TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          fi
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo "TAG=${TAG}" >>"${GITHUB_ENV}"
+          mkdir published
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256 -p components.lock
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+
+      - name: Boot it
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize disk.img 30G
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
+            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8080-:80 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      # The values reach the guest through the environment of the job, which the matrix of this file sets; the tag is checked against the shape of a release tag before it is
+      # used, and reaches nothing but gh and the installer's file name.
+      - name: Prepare the guest
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          INSTALL_SH=published/install.sh COMPONENTS_LOCK_FILE=published/components.lock bash scripts/stats-proof.sh prepare
+
+      - name: Prove it
+        timeout-minutes: ${{ matrix.prove_timeout }}
+        run: |
+          set -euo pipefail
+          bash scripts/stats-proof.sh run "${LEG}"
+
+      # Red for a verdict that fails and for a run that proves nothing alike.
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          if ! { test -s out/timeline.tsv || test -s out/aborted || test -s out/guest/aborted; }; then
+            { echo "the run left no evidence: nothing to report"; cat out/aborted out/guest/aborted 2>/dev/null || true; } | tee -a "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          python3 scripts/stats-proof-report.py out "${LEG}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: What the machine says when it is not well
+        if: always()
+        run: |
+          ssh -F ssh_config vm 'sudo sh /usr/local/lib/sp/guest.sh diag' || true
+          tail -30 serial.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stats-proof-${{ matrix.leg }}
+          path: |
+            out
+            serial.log
+          if-no-files-found: ignore
