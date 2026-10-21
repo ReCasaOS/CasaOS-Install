@@ -2,6 +2,16 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.45] - 2026-10-22
+
+Components: CasaOS-UI `v0.4.100`. Unchanged from v0.5.44: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, module `virt` (CasaOS-VirtManagement) `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Fixed
+
+- **Uploading an image to a module that is too old says so, before sending anything.** The dashboard now asks the virtual machines module with an empty request before it sends a file. A module without the upload route (the dashboard is updated with the system, the module on its own) is reported with "update it in Settings -> Modules" instead of a multi-gigabyte transfer cut with a network error; a name or checksum the module refuses, or a file that already exists, is reported at once too.
+
+This release also publishes v0.5.44 (upload an installation image from the browser), which stayed a pre-release.
+
 ## [0.5.44] - 2026-10-21
 
 Components: CasaOS-UI `v0.4.99`, module `virt` (CasaOS-VirtManagement) `v0.2.2`. Unchanged from v0.5.43: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
