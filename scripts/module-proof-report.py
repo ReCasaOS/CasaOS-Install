@@ -696,6 +696,8 @@ try:
     UPD = kit.get("update")
     UNIT = kit.get("unit", "")
     TAGV = kit.get("tag", "")
+    # /var/tmp of the box minus the private directories systemd makes for the services it starts meanwhile (timedated, ...): they are not the plan's sandbox
+    tmp_kept = lambda n: n.startswith("/var/tmp/") and not n.startswith("/var/tmp/systemd-private-")
     NOISE_NAME = re.compile(r"/session-[0-9a-z]+\.scope|^/var/tmp/systemd-private-")   # (those of the services are named by the boot, which M10 changes)
 
     def gate(cid, title):
@@ -866,8 +868,8 @@ try:
             c.check(before.apt.get(key) == sim_after.apt.get(key), "%s is as it was after the proof's own simulation, too (so that it proves the plan and not itself)" % key,
                     cell(before.apt.get(key)), cell(sim_after.apt.get(key)))
         c.check(before.get("dpkg_audit") == "0" and after.get("dpkg_audit") == "0", "dpkg --audit finds nothing", "0", "%s, %s" % (before.get("dpkg_audit"), after.get("dpkg_audit")))
-        c.check({n for n in before.names if n.startswith("/var/tmp/")} == {n for n in after.names if n.startswith("/var/tmp/")}, "/var/tmp holds what it held (the sandbox of the plan is gone)", "the same",
-                few(sorted({n for n in before.names ^ after.names if n.startswith("/var/tmp/")})))
+        c.check({n for n in before.names if tmp_kept(n)} == {n for n in after.names if tmp_kept(n)}, "/var/tmp holds what it held (the sandbox of the plan is gone)", "the same",
+                few(sorted({n for n in before.names ^ after.names if tmp_kept(n)})))
         c.check(before.state == after.state, "the state of the assistant is as it was", "the same", few(sorted(set(before.state.items()) ^ set(after.state.items()))))
         c.check(not after.footprint(), "the box has nothing of the module after the plans", "none", few(after.footprint()))
         c.done()
@@ -1933,8 +1935,8 @@ try:
             c.check(before.apt.get(key) == sim_after.apt.get(key), "%s is as it was after the proof's own simulation, too (so that it proves the plan and not itself)" % key, cell(before.apt.get(key)), cell(sim_after.apt.get(key)))
         c.check(before.get("dpkg_audit") == "0" and after.get("dpkg_audit") == "0", "dpkg --audit finds nothing", "0", "%s, %s" % (before.get("dpkg_audit"), after.get("dpkg_audit")))
         c.check(not module_names_delta(before, after), "no name of the file system changed (the box's own doings and the core's state apart)", "none", few(sorted(module_names_delta(before, after))))
-        c.check({n for n in before.names if n.startswith("/var/tmp/")} == {n for n in after.names if n.startswith("/var/tmp/")}, "/var/tmp holds what it held (the sandbox of the plan is gone)", "the same",
-                few(sorted({n for n in before.names ^ after.names if n.startswith("/var/tmp/")})))
+        c.check({n for n in before.names if tmp_kept(n)} == {n for n in after.names if tmp_kept(n)}, "/var/tmp holds what it held (the sandbox of the plan is gone)", "the same",
+                few(sorted({n for n in before.names ^ after.names if tmp_kept(n)})))
         c.check(before.state == after.state, "the state of the assistant is as it was (names, times, sizes)", "the same", few(sorted(set(before.state.items()) ^ set(after.state.items()))))
         same_module(c, before, after, "after the plans")
         c.check(before.tmp == after.tmp == [], "the area of the install holds nothing, no backup folder", "empty", few(before.tmp + after.tmp))
