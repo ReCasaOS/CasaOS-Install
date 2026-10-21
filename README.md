@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.46
+
+**Installed modules are updated together with a release**, so a new dashboard never meets an old module again (the case that cut an image upload short). Not yet seen on a real machine; the Modules window still offers the update if a module is left behind.
+
 ## What is in v0.5.45
 
 **Upload an image to the virtual machines module with a clear message when the module is too old**, and it carries v0.5.44's direct upload of an ISO or a disk image when creating a virtual machine. If the upload says the module is too old, update it in Settings -> Modules.
