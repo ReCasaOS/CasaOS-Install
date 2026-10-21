@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.42] - 2026-10-21
+
+Components: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, CasaOS-UI `v0.4.97`, module `virt` (CasaOS-VirtManagement) `v0.2.1`, all on CasaOS-Common `v0.4.30`. Unchanged from v0.5.41: CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Added
+
+- **System apps are marked.** App Store, Files, Virtual Machines and Statistics carry a small gear chip ("System app") on their card in the app grid.
+- **A tile per virtual machine in the app grid.** Each VM of the `virt` module gets a tile (a screen icon with a "VM" chip and a state dot, distinct from containers) right after the Virtual Machines card. A running or paused VM opens its console directly; any other VM opens the Virtual Machines window on it, and nothing is ever started by a click. The tiles are not part of the saved order.
+
+### Fixed
+
+- Statistics list: every container of an app was called `app`; the list now reads `application / service`, with a number for duplicates.
+- Statistics charts: the mouse wheel no longer zooms a chart instead of scrolling the page.
+- A restart of the core, AppManagement or virt that crosses a minute boundary no longer forgets an alert count in progress: the store writes the minute in progress when it closes (Common `v0.4.30`). The minute in progress counts as its minute, so an alert can fire up to a minute earlier after a restart, never twice.
+
 ## [0.5.41] - 2026-10-20
 
 Components: CasaOS `v0.4.80`, CasaOS-AppManagement `v0.4.70`, CasaOS-UI `v0.4.96`, module `virt` (CasaOS-VirtManagement) `v0.2.0`. Unchanged from v0.5.40: CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, Common `v0.4.27`, rclone `v1.75.1`.
