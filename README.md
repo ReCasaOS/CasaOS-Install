@@ -122,6 +122,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.43
+
+**The settings of an app with devices in the long Compose form open again** (Plex with hardware transcoding was the case that crashed the editor).
+
 ## What is in v0.5.42
 
 **System app markers, a tile per virtual machine that opens its console, readable names in the statistics, and alert counts that survive a restart.** The statistics list reads `application / service` instead of `app`; the mouse wheel scrolls the page over a chart instead of zooming it; and a restart of the core, AppManagement or `virt` no longer forgets an alert count in progress (the minute in progress is written when the service stops, and counts as its minute: an alert can fire up to a minute earlier after a restart, never twice).
