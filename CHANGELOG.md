@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.43] - 2026-10-21
+
+Components: CasaOS-UI `v0.4.98`. Unchanged from v0.5.42: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, module `virt` (CasaOS-VirtManagement) `v0.2.1`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The settings of an app whose Compose file lists its devices in the long form no longer crash the editor.** Opening the settings of an app such as Plex with a graphics device (`source`, `target`, `permissions`) failed with `split is not a function`. The editor now reads every shape a Compose file can use for devices and environment variables (strings, numbers, booleans, empty values, objects), and keeps a device's permissions when it saves. A variable written as a bare `KEY` is saved as `KEY=` (an empty value), not as a pass-through from the host.
+
 ## [0.5.42] - 2026-10-21
 
 Components: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, CasaOS-UI `v0.4.97`, module `virt` (CasaOS-VirtManagement) `v0.2.1`, all on CasaOS-Common `v0.4.30`. Unchanged from v0.5.41: CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
