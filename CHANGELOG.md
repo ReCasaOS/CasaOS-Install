@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.44] - 2026-10-21
+
+Components: CasaOS-UI `v0.4.99`, module `virt` (CasaOS-VirtManagement) `v0.2.2`. Unchanged from v0.5.43: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Added
+
+- **Upload an installation image from the browser.** When creating a virtual machine, an *Upload an image* button and a drop zone send an ISO or a disk image (`.iso`, `.qcow2`, `.img`, `.raw`, `.vmdk`, `.vdi`, and `.xz`/`.gz`/`.zip` of them) straight to `/DATA/VM/iso`, with a progress bar (percent, speed, time left), a Cancel button and an optional SHA-256 that the file is checked against. The uploaded image is selected for the new machine. The module checks the name, refuses to overwrite a file, keeps free space for the system, writes to a `.part` file that is renamed only when complete and verified, and bounds both idle time and total time. The limit is 64 GiB by default (`[images] MaxUploadGiB` in the module's configuration).
+
 ## [0.5.43] - 2026-10-21
 
 Components: CasaOS-UI `v0.4.98`. Unchanged from v0.5.42: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, module `virt` (CasaOS-VirtManagement) `v0.2.1`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.

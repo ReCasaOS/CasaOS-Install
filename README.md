@@ -122,6 +122,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.44
+
+**Upload an ISO or a disk image directly when creating a virtual machine**, instead of only giving a URL: progress, cancel, optional checksum, and the image is selected for the new machine. Pre-release until the proofs on real guests are green.
+
 ## What is in v0.5.43
 
 **The settings of an app with devices in the long Compose form open again** (Plex with hardware transcoding was the case that crashed the editor).
