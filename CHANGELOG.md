@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.46] - 2026-10-22
+
+Components: none changed (CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, CasaOS-UI `v0.4.100`, module `virt` `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`).
+
+### Added
+
+- **Installed modules are updated with the release.** When a release is applied (the dashboard's update button, automatic updates, or running the installer again), every module that is installed and has a newer version in the catalogue of the new release is updated too, with the module assistant's own plan, backup and roll-back. A module that cannot be updated keeps running at its old version, and the message says how to retry (the Modules window or `sudo casaos module update <name>`); the installer's exit status never changes. It never installs a module that is not installed and never goes back to an older version. A run by hand can opt out with `--no-module-update` or `RECASAOS_MODULE_UPDATE=0`; the dashboard's update and the automatic updates have no opt-out. On those two paths the update of the modules runs in a unit of its own once the system update has finished, and writes to `/var/log/casaos/upgrade.log`; a reboot while it waits drops the pending module updates, which the Modules window still offers.
+
+### Known limits
+
+- Not yet exercised on a real machine: the shell code is tested with a stand-in for the module assistant and for `systemd-run`. If a module is not updated by a release, update it from the Modules window and tell us.
+
 ## [0.5.45] - 2026-10-22
 
 Components: CasaOS-UI `v0.4.100`. Unchanged from v0.5.44: CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, module `virt` (CasaOS-VirtManagement) `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.

@@ -132,6 +132,11 @@ readonly CASAOS_MODULE_CATALOGUE_SHA256="__CASAOS_MODULE_CATALOGUE_SHA256__"
 # refuses a catalogue for a release whose pinned core is older: an older core given
 # `module` does not know it and starts as a server
 readonly CASAOS_MODULES_MIN_CORE_TAG="__CASAOS_MODULES_MIN_CORE_TAG__"
+# Not a marker: the oldest core that has `casaos module update`, and the `update` field of
+# each installed module in `casaos module list`. It is a tag of the core that exists and
+# will not change (both came in v0.4.78), so it is written here; a core that reports an
+# older version is never asked to update a module.
+readonly CASAOS_MODULE_UPDATE_MIN_CORE_TAG="v0.4.78"
 
 # REQUIREMENTS CONF PATH
 # Udevil
@@ -180,6 +185,13 @@ NO_TELEMETRY=0
 if [[ "${RECASAOS_TELEMETRY:-}" == "0" ]]; then
     NO_TELEMETRY=1
 fi
+# The optional modules that are installed are updated to the versions of this release's
+# catalogue at the end of every run (Update_Installed_Modules). --no-module-update, or
+# RECASAOS_MODULE_UPDATE=0 on the install line, leaves them at the versions they have.
+NO_MODULE_UPDATE=0
+if [[ "${RECASAOS_MODULE_UPDATE:-}" == "0" ]]; then
+    NO_MODULE_UPDATE=1
+fi
 # Debian 11 is out of support and its security repository lists packages it no
 # longer serves. --use-debian-archive, or RECASAOS_DEBIAN_ARCHIVE=1 on the install
 # line, lets the installer point apt at archive.debian.org for that repository
@@ -196,6 +208,8 @@ APT_SOURCES_LIST=/etc/apt/sources.list
 # installed with the core's own assistant once ReCasaOS runs.
 CASA_MODULE_CATALOGUE_DIR=/usr/share/casaos/modules
 CASA_BIN=/usr/bin/casaos
+# where the hand-off of the module updates puts its script (Hand_Off_Module_Updates)
+CASA_RUN_DIR=/run
 MODULES_REQUESTED=""
 MODULE_CATALOGUE_READY=0
 # 1 once this run has put the core of this release in place: only that core is given `module`
@@ -308,8 +322,9 @@ Detach_From_CasaOS_Service() {
         "${CASAOS_INSTALLER_SELF_URL}"
 
     # The detached run gets no arguments: an opt-out goes through the environment.
-    local telemetry_env=()
-    if ((NO_TELEMETRY)); then telemetry_env=(--setenv=RECASAOS_TELEMETRY=0); fi
+    local opt_out_env=()
+    if ((NO_TELEMETRY)); then opt_out_env+=(--setenv=RECASAOS_TELEMETRY=0); fi
+    if ((NO_MODULE_UPDATE)); then opt_out_env+=(--setenv=RECASAOS_MODULE_UPDATE=0); fi
 
     # ... and so it takes no --module either: say so rather than drop the modules in silence.
     if [[ -n "${MODULES_REQUESTED}" ]]; then
@@ -327,7 +342,7 @@ Detach_From_CasaOS_Service() {
         --unit="${update_unit}" \
         --property=Type=exec \
         --setenv=CASAOS_INSTALLER_DETACHED=1 \
-        "${telemetry_env[@]}" \
+        "${opt_out_env[@]}" \
         /bin/bash -o pipefail -c "${detached_command}"; then
         Show 1 "Failed to detach the in-app update from casaos.service"
     fi
@@ -1415,48 +1430,58 @@ Install_Module_Catalogue() {
     Show 0 "Module catalogue installed."
 }
 
-# One module, with the core's assistant: its lines as they come (the steps and
-# the sentences), then, when the install did not end well, the step and the
-# reason from its result line (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed>
-# <step> <code> <undo> <time>). Nothing here changes the exit status of this script.
-Install_One_Module() {
-    local name="$1" work status=0 line kind="" step="" code="" undo="" rname=""
+# `casaos module <install|update> <name> --yes` with the core's assistant: its lines as
+# they come (the steps and the sentences), then what its result line says
+# (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed> <step> <code> <undo> <time>) in
+# MODULE_KIND, MODULE_STEP, MODULE_CODE and MODULE_UNDO, and its exit status in
+# MODULE_STATUS. Status 1, and nothing run, when no temporary directory could be made.
+Run_Module_Job() {
+    local verb="$1" name="$2" work line rname=""
 
-    work="$(mktemp -d)" || {
-        Show 3 "The module ${name} was not installed: no temporary directory could be made."
-        return 0
-    }
-    Show 2 "Installing the module ${name}..."
+    MODULE_STATUS=0 MODULE_KIND="" MODULE_STEP="" MODULE_CODE="" MODULE_UNDO=""
+    work="$(mktemp -d)" || return 1
     GreyStart
     # no input, so that it cannot read the rest of a script piped into bash; the
     # status of the assistant is kept in a file, the pipe's being tee's
-    { Run_Module_Assistant "${CASA_BIN}" module install "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
+    { Run_Module_Assistant "${CASA_BIN}" module "${verb}" "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
     ColorReset
     if [ -s "${work}/status" ]; then
-        read -r status <"${work}/status" || status=1
+        read -r MODULE_STATUS <"${work}/status" || MODULE_STATUS=1
     fi
     # a run has one result line; were there more, the first would be final, as it is for the core
     line="$(grep '^CASAOS_MODULE_RESULT ' "${work}/out" 2>/dev/null | head -n 1)" || line=""
-    ${sudo_cmd} rm -rf "${work}"
+    ${sudo_cmd} rm -rf "${work}" || true
     if [ -n "${line}" ]; then
-        read -r _ _ rname kind step code undo _ <<RESULT_LINE
+        read -r _ _ rname MODULE_KIND MODULE_STEP MODULE_CODE MODULE_UNDO _ <<RESULT_LINE
 ${line}
 RESULT_LINE
-        [ "${rname}" = "${name}" ] || kind=""
-        step="$(printf '%.40s' "${step}" | tr -c 'a-z0-9_-' '?')"
-        code="$(printf '%.60s' "${code}" | tr -c 'a-z0-9_-' '?')"
+        [ "${rname}" = "${name}" ] || MODULE_KIND=""
+        MODULE_STEP="$(printf '%.40s' "${MODULE_STEP}" | tr -c 'a-z0-9_-' '?')"
+        MODULE_CODE="$(printf '%.60s' "${MODULE_CODE}" | tr -c 'a-z0-9_-' '?')"
     fi
+    return 0
+}
 
-    if [ "${kind}" = ok ] && [ "${status}" = 0 ]; then
+# One module, installed, then, when the install did not end well, the step and the
+# reason from its result line. Nothing here changes the exit status of this script.
+Install_One_Module() {
+    local name="$1"
+
+    Show 2 "Installing the module ${name}..."
+    if ! Run_Module_Job install "${name}"; then
+        Show 3 "The module ${name} was not installed: no temporary directory could be made."
+        return 0
+    fi
+    if [ "${MODULE_KIND}" = ok ] && [ "${MODULE_STATUS}" = 0 ]; then
         Show 0 "The module ${name} is installed."
-    elif [ "${kind}" = refused ]; then
-        Show 3 "The module ${name} was not installed: the assistant refused it (${code}). Nothing was changed."
+    elif [ "${MODULE_KIND}" = refused ]; then
+        Show 3 "The module ${name} was not installed: the assistant refused it (${MODULE_CODE}). Nothing was changed."
     else
-        if [ "${kind}" = failed ]; then
-            Show 3 "The module ${name} was not installed: it failed at the step ${step} (${code})."
-            [ "${undo}" != rollback_incomplete ] || Show 3 "What the install had done could not all be undone."
+        if [ "${MODULE_KIND}" = failed ]; then
+            Show 3 "The module ${name} was not installed: it failed at the step ${MODULE_STEP} (${MODULE_CODE})."
+            [ "${MODULE_UNDO}" != rollback_incomplete ] || Show 3 "What the install had done could not all be undone."
         else
-            Show 3 "The module ${name} was not installed: the assistant did not report a success (exit status ${status})."
+            Show 3 "The module ${name} was not installed: the assistant did not report a success (exit status ${MODULE_STATUS})."
         fi
         Show 3 "To clean up what a failed install left, run: sudo casaos module remove ${name}   (the packages it installed stay)"
     fi
@@ -1497,6 +1522,199 @@ Install_Modules() {
     done
 }
 
+# One installed module, updated to the version of the catalogue, and said: updated, nothing
+# to update (the assistant refuses an update to the same version or an older one), or not
+# updated, with the step that failed and whether the old version was put back. Adds the name
+# to MODULES_UPDATED or MODULES_NOT_UPDATED. Nothing here changes the exit status of this script.
+Update_One_Module() {
+    local name="$1" retry
+
+    retry="Retry from the Modules window of the dashboard, or with: sudo casaos module update ${name}"
+    Show 2 "Updating the module ${name}..."
+    if ! Run_Module_Job update "${name}"; then
+        Show 3 "The module ${name} was not updated: no temporary directory could be made. It keeps its old version. ${retry}"
+    elif [ "${MODULE_KIND}" = ok ] && [ "${MODULE_STATUS}" = 0 ]; then
+        Show 0 "The module ${name} is updated."
+        MODULES_UPDATED="${MODULES_UPDATED:+${MODULES_UPDATED} }${name}"
+        return 0
+    else
+        case "${MODULE_KIND}:${MODULE_CODE}" in
+        refused:up_to_date | refused:downgrade)
+            Show 2 "The module ${name} has nothing to update (${MODULE_CODE})."
+            return 0
+            ;;
+        refused:*)
+            Show 3 "The module ${name} was not updated: the assistant refused it (${MODULE_CODE}). Nothing was changed: it keeps its old version. ${retry}"
+            ;;
+        failed:backup_not_dropped)
+            # (the new version is installed; only the backup of the old one is still there)
+            Show 3 "The module ${name} is updated, but the backup of its old version could not be dropped: delete it by hand as the lines above say, or the next install, update or remove of the module puts the old version back."
+            MODULES_UPDATED="${MODULES_UPDATED:+${MODULES_UPDATED} }${name}"
+            return 0
+            ;;
+        failed:*)
+            Show 3 "The module ${name} was not updated: it failed at the step ${MODULE_STEP} (${MODULE_CODE})."
+            case "${MODULE_UNDO}" in
+            rolled_back) Show 3 "Its old version was put back and keeps running." ;;
+            rolled_back_with_left) Show 3 "Its old version was put back, except files that were found changed and left as they were: the lines above name them." ;;
+            rollback_incomplete) Show 3 "Its old version could not all be put back: the lines above say what is left and how to finish." ;;
+            esac
+            Show 3 "${retry}"
+            ;;
+        *)
+            Show 3 "The module ${name} was not updated: the assistant did not report a success (exit status ${MODULE_STATUS}). ${retry}"
+            ;;
+        esac
+    fi
+    MODULES_NOT_UPDATED="${MODULES_NOT_UPDATED:+${MODULES_NOT_UPDATED} }${name}"
+    return 0
+}
+
+# Whether this run is the update that the core started in casaos-update.service: the
+# dashboard's update button and the automatic updates (see Hand_Off_Module_Updates).
+Running_Under_Update_Unit() {
+    [ -r "/proc/$$/cgroup" ] && grep -Eq '(^|/)casaos-update\.service($|/)' "/proc/$$/cgroup"
+}
+
+# While casaos-update.service runs, the assistant refuses to change a module (busy: an update
+# of ReCasaOS is at work), and this run is that unit. The updates go to a unit of their own,
+# casaos-update-modules.service, which waits for casaos-update.service to end (10 minutes at
+# most), then updates each module in a unit of its own, casaos-update-modules-<name>-<time>,
+# with systemd-run --wait --pipe: a stop of that unit (a shutdown) asks the assistant alone to
+# stop (KillMode=mixed, as the core's own module units), and gives it the 420 seconds of its
+# rollback; apt and dpkg are left for the assistant to stop. Each line goes to the log of the
+# update. The units have none of this environment, so none of the CASAOS_MODULE variables.
+# systemd reads ${NAME}, $$ and % in the words of a unit's command as its own, so the script
+# is a file in a root-only directory of CASA_RUN_DIR, which it removes, and no word given to
+# systemd-run holds a $ or a %. The arguments are the names, each one that Valid_Module_Name
+# passed.
+Hand_Off_Module_Updates() {
+    local dir="" plain=0
+    # shellcheck disable=SC2016 # the unit's own script, given its values as arguments
+    local script='trap '\''rm -f -- "$0"; rmdir -- "${0%/*}" 2>/dev/null'\'' EXIT
+        trap '\''exit 143'\'' HUP INT TERM
+        exec >>"$1" 2>&1
+        bin="$2"
+        shift 2
+        n=0
+        while [ "${n}" -lt 300 ]; do
+            case "$(systemctl show casaos-update.service --property=ActiveState --value 2>/dev/null)" in
+            active | activating | deactivating | reloading) n="$(expr "${n}" + 1)"; sleep 2 ;;
+            *) break ;;
+            esac
+        done
+        for name in "$@"; do
+            echo "Updating the module ${name}..."
+            systemd-run --wait --pipe --collect --unit="casaos-update-modules-${name}-$(date +%s)" --property=Type=exec --property=KillMode=mixed --property=TimeoutStopSec=420 -- "${bin}" module update "${name}" --yes </dev/null ||
+                echo "The update of the module ${name} ended with exit status $?: the lines above say whether it is updated, and if not whether its old version was put back. To try again: the Modules window of the dashboard, or sudo casaos module update ${name}"
+        done'
+
+    case "${CASA_RUN_DIR}${CASAOS_UPDATE_LOG}${CASA_BIN}$*" in
+    *'$'* | *'%'*) ;;
+    *) plain=1 ;;
+    esac
+    if [ "${plain}" = 1 ] && command -v systemd-run >/dev/null 2>&1 &&
+        dir="$(${sudo_cmd} mktemp -d "${CASA_RUN_DIR}/casaos-update-modules.XXXXXX")" &&
+        printf '%s\n' "${script}" | ${sudo_cmd} tee "${dir}/run.sh" >/dev/null &&
+        ${sudo_cmd} systemd-run --quiet --collect --unit=casaos-update-modules --property=Type=exec --property=KillMode=mixed --property=TimeoutStopSec=420 \
+            /bin/sh "${dir}/run.sh" "${CASAOS_UPDATE_LOG}" "${CASA_BIN}" "$@"; then
+        Show 2 "The modules $* will be updated once this update has finished, by casaos-update-modules.service: what they say is added to ${CASAOS_UPDATE_LOG}, and the Modules window shows the version each one has."
+    else
+        if [ -n "${dir}" ]; then ${sudo_cmd} rm -rf "${dir}" || true; fi
+        Show 3 "The modules $* were not updated: their update could not be handed to a unit of its own, and the assistant refuses one while this update runs. Each keeps its old version. Once this update has finished, update them from the Modules window of the dashboard, or with: sudo casaos module update <name>"
+    fi
+    return 0
+}
+
+# The optional modules that are installed, each updated to the version of this release's
+# catalogue, once ReCasaOS runs: the dashboard's update button, the automatic updates and a
+# run of the installer by hand all end here, and a module left behind is one built for the
+# core and the dashboard of an earlier release. The modules are those that the assistant's own
+# list says have a later version in the catalogue (it says so only of a module that is
+# installed); nothing is installed and nothing goes back to an earlier version (the assistant
+# refuses that). A module whose update fails is said, the assistant puts its old version back,
+# and the next one is tried: the exit status of this installer is the one ReCasaOS earned. Off
+# with --no-module-update or RECASAOS_MODULE_UPDATE=0. The time of each update is bounded by the
+# assistant's own limits on each of its steps (the download, apt, systemctl, the route, the
+# rollback); no timeout is put around it, which would stop apt beside it.
+Update_Installed_Modules() {
+    local found shown work status=0 name names=""
+
+    MODULES_UPDATED="" MODULES_NOT_UPDATED=""
+    if [ "${NO_MODULE_UPDATE}" = 1 ]; then
+        Show 2 "The installed modules were not updated (--no-module-update or RECASAOS_MODULE_UPDATE=0): each keeps the version it has, and the Modules window offers the update."
+        return 0
+    fi
+    if [ -z "${CASAOS_MODULE_CATALOGUE_SHA256}" ]; then
+        Show 2 "No module was updated: this release carries no module catalogue, so it has no version to update one to."
+        return 0
+    fi
+    if [ "${MODULE_CATALOGUE_READY}" != 1 ]; then
+        Show 3 "No module was updated: the module catalogue could not be installed by this run (see above), so each module keeps the version it has. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    if [ "${CORE_INSTALLED_NOW}" != 1 ]; then
+        Show 3 "No module was updated: this run did not put the core of this release in place, so ${CASA_BIN} is not known to have 'casaos module update'. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    if [ ! -x "${CASA_BIN}" ]; then
+        Show 3 "No module was updated: ${CASA_BIN} is not there. ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+    found="$("${CASA_BIN}" -v </dev/null 2>/dev/null)" || found=""
+    if ! Version_At_Least "${found}" "${CASAOS_MODULES_MIN_CORE_TAG}" || ! Version_At_Least "${found}" "${CASAOS_MODULE_UPDATE_MIN_CORE_TAG}"; then
+        shown="$(printf '%.40s' "${found}" | tr -c 'A-Za-z0-9._-' '?')"
+        Show 3 "No module was updated: ${CASA_BIN} did not report a version of ${CASAOS_MODULE_UPDATE_MIN_CORE_TAG} or later, the first that has 'casaos module update' (it reported '${shown}'). ReCasaOS itself is installed and is not affected."
+        return 0
+    fi
+
+    work="$(mktemp -d)" || {
+        Show 3 "No module was updated: no temporary directory could be made. Each module keeps the version it has."
+        return 0
+    }
+    # The list is one JSON object on one line (docs/os-modules.md of the core): each module is
+    # an object whose first key is "name" and whose last, for one installed at a version older
+    # than the catalogue's, is "update":{"available":true,...}. Cut before each "{", a module
+    # starts a line with its "name" and its update a line with "available" after a line that
+    # ends with "update":. A quote inside a string is escaped, so no string can make such a
+    # line; the name of an "available" is the "name" before it, and one that is not a module
+    # name is dropped. (A line, not the whole list, is what grep and awk are given: a long line
+    # makes grep -o slow beyond use.)
+    Run_Module_Assistant "${CASA_BIN}" module list </dev/null >"${work}/list" 2>/dev/null || status=$?
+    tr '{' '\n' <"${work}/list" >"${work}/lines" 2>/dev/null || true
+    if [ "${status}" != 0 ] || ! grep -Eq '"modules": *\[' "${work}/lines" 2>/dev/null; then
+        ${sudo_cmd} rm -rf "${work}" || true
+        Show 3 "No module was updated: 'casaos module list' did not give the list of the modules (exit status ${status}). Each module keeps the version it has, and the Modules window offers the update."
+        return 0
+    fi
+    # (a pipe and not a file of names: nothing here can end the install under set -e)
+    names="$(awk '/^ *"name": *"/ { name = $0; sub(/^ *"name": *"/, "", name); i = index(name, "\""); name = i ? substr(name, 1, i - 1) : "" }
+        /^ *"available": *true *[,}]/ && prev ~ /"update": *$/ { print name; name = "" }
+        { prev = $0 }' "${work}/lines" 2>/dev/null | while IFS= read -r name; do
+        if Valid_Module_Name "${name}"; then echo "${name}"; fi
+    done | awk '!seen[$0]++' | tr '\n' ' ')" || names=""
+    ${sudo_cmd} rm -rf "${work}" || true
+
+    if [ -z "${names}" ]; then
+        Show 2 "No installed module has a later version in the catalogue of this release."
+        return 0
+    fi
+    if Running_Under_Update_Unit; then
+        # shellcheck disable=SC2086 # (names, split on purpose)
+        Hand_Off_Module_Updates ${names}
+        return 0
+    fi
+    for name in ${names}; do
+        Update_One_Module "${name}"
+    done
+    if [ -n "${MODULES_UPDATED}" ]; then
+        Show 0 "Modules updated to the versions of this release: ${MODULES_UPDATED}."
+    fi
+    if [ -n "${MODULES_NOT_UPDATED}" ]; then
+        Show 3 "Modules NOT updated, each at its old version unless its lines above say otherwise: ${MODULES_NOT_UPDATED}. Retry from the Modules window of the dashboard, or with: sudo casaos module update <name>"
+    fi
+}
+
 ###############################################################################
 # Main                                                                        #
 ###############################################################################
@@ -1513,6 +1731,9 @@ Valid options are:
                             RECASAOS_DEBIAN_ARCHIVE=1); the first copy of sources.list is kept
     --module <name>         Once ReCasaOS runs, install this optional module (repeat the option
                             for more than one); the module catalogue of the release lists them
+    --no-module-update      Do not update the installed optional modules to the versions of this
+                            release's catalogue (same as RECASAOS_MODULE_UPDATE=0). Without it, a
+                            module whose update fails keeps running at its old version
     -h                      Show this help message and exit
 
 Anonymous statistics: https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics
@@ -1537,6 +1758,9 @@ while getopts ":p:h-:" arg; do
             ;;
         use-debian-archive)
             DEBIAN_ARCHIVE=1
+            ;;
+        no-module-update)
+            NO_MODULE_UPDATE=1
             ;;
         module)
             # "--module name": getopts leaves the name as the next argument
@@ -1601,9 +1825,11 @@ if ! [[ -t 1 ]]; then
     Show 0 "CasaOS upgrade successfully"
 fi
 
-# The modules asked for with --module; whatever happens to them, the exit status
-# of this script stays the one of the install above
+# The modules asked for with --module, then the installed modules updated to this
+# release's catalogue; whatever happens to them, the exit status of this script
+# stays the one of the install above
 Install_Modules
+Update_Installed_Modules
 
 # Step 10: Clear Term and Show Welcome Banner
 Welcome_Banner

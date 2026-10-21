@@ -44,9 +44,15 @@ bash -n "${INSTALL_SH}" || fail "install.sh does not parse"
 eval "$(grep -E '^(CASA_MODULE_CATALOGUE_DIR|CASA_BIN)=' "${INSTALL_SH}")"
 [ "${CASA_MODULE_CATALOGUE_DIR}" = /usr/share/casaos/modules ] || fail "the catalogue is placed in ${CASA_MODULE_CATALOGUE_DIR}, not in /usr/share/casaos/modules"
 [ "${CASA_BIN}" = /usr/bin/casaos ] || fail "the assistant is run as ${CASA_BIN}, not as /usr/bin/casaos"
-grep -Fq 'Run_Module_Assistant "${CASA_BIN}" module install "${name}" --yes </dev/null' "${INSTALL_SH}" ||
-    fail "the module install is not 'casaos module install <name> --yes' with no input, run through Run_Module_Assistant"
-[ "$(grep -c '"${CASA_BIN}" module ' "${INSTALL_SH}")" -eq 1 ] || fail "the assistant is run in more than one place, or not through Run_Module_Assistant"
+grep -Fq 'Run_Module_Assistant "${CASA_BIN}" module "${verb}" "${name}" --yes </dev/null' "${INSTALL_SH}" ||
+    fail "a module job is not 'casaos module <verb> <name> --yes' with no input, run through Run_Module_Assistant"
+grep -Fxq '    if ! Run_Module_Job install "${name}"; then' "${INSTALL_SH}" || fail "the module install is not a job of the verb install"
+grep -Fxq '    if ! Run_Module_Job update "${name}"; then' "${INSTALL_SH}" || fail "the module update is not a job of the verb update"
+grep -Fq 'Run_Module_Assistant "${CASA_BIN}" module list </dev/null >' "${INSTALL_SH}" ||
+    fail "the list of the modules is not 'casaos module list' with no input, run through Run_Module_Assistant"
+# (the assistant is run in two places, both through Run_Module_Assistant: the job, and the list)
+[ "$(grep -c '"${CASA_BIN}" module ' "${INSTALL_SH}")" -eq 2 ] && [ "$(grep -c 'Run_Module_Assistant "${CASA_BIN}" module ' "${INSTALL_SH}")" -eq 2 ] ||
+    fail "the assistant is run in another place than the job and the list, or not through Run_Module_Assistant"
 pass "the placeholder, the catalogue directory and the assistant are where the install needs them"
 
 # the oldest core that has `module` is written by the build, once; the flag that says
@@ -76,6 +82,8 @@ n_starting="$(line_of 'Show 2 "Starting ${SERVICE}..."')"
     fail "Install_Module_Catalogue is not called once, between Install_Rclone and the start of the services"
 [ "$(grep -c '^ *Install_Module_Catalogue$' "${INSTALL_SH}")" -eq 1 ] || fail "Install_Module_Catalogue is not called exactly once"
 [ "$(grep -c '^Install_Modules$' "${INSTALL_SH}")" -eq 1 ] || fail "Install_Modules is not called exactly once"
+[ "$(grep -c '^Update_Installed_Modules$' "${INSTALL_SH}")" -eq 1 ] && [ "$(line_of '^Update_Installed_Modules$')" = "$(($(line_of '^Install_Modules$') + 1))" ] ||
+    fail "Update_Installed_Modules is not called once, on the line after Install_Modules"
 [ "$(grep -c '^Validate_Module_Request$' "${INSTALL_SH}")" -eq 1 ] || fail "Validate_Module_Request is not called exactly once"
 n_done="$(grep -n '^done$' "${INSTALL_SH}" | head -n 1 | cut -d: -f1)"
 n_validate="$(line_of '^Validate_Module_Request$')"
@@ -95,7 +103,7 @@ extract() { sed -n "/^$1() {\$/,/^}\$/p" "${INSTALL_SH}"; }
 
 FUNCTIONS="${WORK}/functions.sh"
 : >"${FUNCTIONS}"
-for f in usage Valid_Module_Name Version_Parts Version_At_Least Run_Module_Assistant Add_Requested_Module Validate_Module_Request Remove_Module_Catalogue Place_Module_Catalogue Install_Module_Catalogue Install_One_Module Install_Modules; do
+for f in usage Valid_Module_Name Version_Parts Version_At_Least Run_Module_Assistant Add_Requested_Module Validate_Module_Request Remove_Module_Catalogue Place_Module_Catalogue Install_Module_Catalogue Run_Module_Job Install_One_Module Install_Modules Update_One_Module Running_Under_Update_Unit Hand_Off_Module_Updates Update_Installed_Modules; do
     body="$(extract "${f}")"
     [ -n "${body}" ] || fail "install.sh defines no ${f}()"
     printf '%s\n' "${body}" >>"${FUNCTIONS}"
@@ -130,6 +138,12 @@ MODULES_REQUESTED=""
 MODULE_CATALOGUE_READY=0
 CASAOS_MODULES_MIN_CORE_TAG=v0.4.75
 CORE_INSTALLED_NOW=1
+NO_MODULE_UPDATE=0
+# the oldest core that has `casaos module update` is written in install.sh itself, once, and is v0.4.78
+[ "$(grep -c '^readonly CASAOS_MODULE_UPDATE_MIN_CORE_TAG="v0.4.78"$' "${INSTALL_SH}")" -eq 1 ] && [ "$(grep -c 'CASAOS_MODULE_UPDATE_MIN_CORE_TAG=' "${INSTALL_SH}")" -eq 1 ] ||
+    fail "install.sh does not say once that v0.4.78 is the oldest core that has 'casaos module update'"
+CASAOS_MODULE_UPDATE_MIN_CORE_TAG=v0.4.78
+CASAOS_UPDATE_LOG=/nonexistent/upgrade.log
 GreyStart() { :; }
 ColorReset() { :; }
 Show() {
@@ -191,6 +205,12 @@ env | grep '^CASAOS_MODULE' >>"${ENVSEEN}" || true
 echo "KEEP_ME=${KEEP_ME:-none}" >>"${ENVSEEN}.kept"
 [ -s "${VERCALLS}" ] || echo "module given before the version was asked" >>"${CALLS}"
 cat >"${WORK}/stdin-got"
+# `module list` says what $WORK/list.out holds (a list with no module when there is no such file), with the status in $WORK/list.status
+if [ "${2:-}" = list ]; then
+    if [ -f "${WORK}/list.out" ]; then cat "${WORK}/list.out"; else echo '{"catalogue":{"ok":true},"modules":[]}'; fi
+    echo "a line of the assistant's on its error output" >&2
+    exit "$(cat "${WORK}/list.status" 2>/dev/null || echo 0)"
+fi
 name="$3"
 mode="$(cat "${MODES}/${name}" 2>/dev/null || echo ok)"
 T=2026-10-18T10:00:00Z
@@ -234,6 +254,28 @@ refused)
     echo "refused: already_installed"
     echo "CASAOS_MODULE_RESULT - ${name} refused - already_installed - ${T}"
     exit 2
+    ;;
+uptodate | downgrade | busy)
+    code="${mode}"
+    [ "${mode}" != uptodate ] || code=up_to_date
+    echo "refused: ${code}"
+    echo "CASAOS_MODULE_RESULT - ${name} refused - ${code} - ${T}"
+    exit 2
+    ;;
+notdropped)
+    step done done
+    echo "updated: ${name} v0.2.1 -> v0.2.2 is installed, but the backup folder /var/lib/casaos/modules/tmp/backup-${name} could not be dropped"
+    echo "CASAOS_MODULE_RESULT - ${name} failed - backup_not_dropped - ${T}"
+    exit 3
+    ;;
+left)
+    all_steps_to swap
+    step swap begin
+    step swap failed
+    echo "failed at step swap: file_exists"
+    echo "rolled back, but these files were left as they are, and the old version is not whole: /etc/x"
+    echo "CASAOS_MODULE_RESULT - ${name} failed swap file_exists rolled_back_with_left ${T}"
+    exit 3
     ;;
 noresult)
     all_steps_to download
@@ -299,6 +341,8 @@ if [ "${SUDO_OK:-}" != 1 ]; then
     exit 99
 fi
 echo "sudo $*" >>"${SUDOCALLS}"
+# (SUDO_RM_FAILS=1: an rm through it fails, and removes nothing)
+if [ "${1:-}" = rm ] && [ "${SUDO_RM_FAILS:-}" = 1 ]; then exit 1; fi
 VIA_SUDO=1
 export VIA_SUDO
 exec "$@"
@@ -310,16 +354,33 @@ echo "FORBIDDEN $0 $*" >>"${CALLS}"
 exit 99
 STUB
 done
+cat >"${WORK}/bin/systemd-run" <<'STUB'
+#!/bin/sh
+# stand-in for systemd-run: records the call, and each argument in a file of its own: $WORK/sdrun/<n>.raw as it was given, and $WORK/sdrun/<n>
+# as systemd makes it the word of the unit's command ("${NAME}" and a word that is "$NAME" are replaced by the variable, of which the unit has none
+# here, "$$" is "$", "%%" is "%" and "%<letter>" a specifier); $WORK/sdrun/changed is there when a word was not left as it was. Ends with $SDRUN_STATUS
+echo "systemd-run $*" >>"${CALLS}"
+rm -rf "${WORK}/sdrun"
+mkdir -p "${WORK}/sdrun"
+n=0
+for a in "$@"; do
+    n=$((n + 1))
+    printf '%s' "${a}" >"${WORK}/sdrun/${n}.raw"
+    printf '%s' "${a}" | sed -e 's/^\$[A-Za-z_][A-Za-z0-9_]*$//' -e 's/\${[^}]*}//g' -e 's/\$\$/$/g' -e 's/%%/%/g' -e 's/%[A-Za-z]/<specifier>/g' >"${WORK}/sdrun/${n}"
+    cmp -s "${WORK}/sdrun/${n}" "${WORK}/sdrun/${n}.raw" || echo "${n}" >>"${WORK}/sdrun/changed"
+done
+exit "${SDRUN_STATUS:-0}"
+STUB
 chmod +x "${WORK}"/bin/*
 PATH="${WORK}/bin:${PATH}"
 export PATH
 
 fresh() {
-    rm -rf "${FAKE}" "${TMPDIR}" "${MODES}" "${WORK}/stdin-got" "${WORK}/version.out" "${WORK}/version.status" "${WORK}/v-stdin-got"
+    rm -rf "${FAKE}" "${TMPDIR}" "${MODES}" "${WORK}/stdin-got" "${WORK}/version.out" "${WORK}/version.status" "${WORK}/v-stdin-got" "${WORK}/list.out" "${WORK}/list.status" "${WORK}/sdrun"
     mkdir -p "${FAKE}" "${TMPDIR}" "${MODES}"
     : >"${CALLS}"
     : >"${VERCALLS}"
-    unset WGET_SAYS INSTALL_SAYS MV_SAYS SUDO_OK
+    unset WGET_SAYS INSTALL_SAYS MV_SAYS SUDO_OK SDRUN_STATUS SUDO_RM_FAILS
     : >"${SUDOCALLS}"
     : >"${UNPRIV}"
     : >"${ENVSEEN}"
@@ -346,6 +407,9 @@ Valid options are:
                             RECASAOS_DEBIAN_ARCHIVE=1); the first copy of sources.list is kept
     --module <name>         Once ReCasaOS runs, install this optional module (repeat the option
                             for more than one); the module catalogue of the release lists them
+    --no-module-update      Do not update the installed optional modules to the versions of this
+                            release's catalogue (same as RECASAOS_MODULE_UPDATE=0). Without it, a
+                            module whose update fails keeps running at its old version
     -h                      Show this help message and exit
 
 Anonymous statistics: https://github.com/ReCasaOS/CasaOS-Install#anonymous-statistics
@@ -360,10 +424,10 @@ parse() {
     out="$(
         exec 2>&1
         set -e
-        MODULES_REQUESTED="" NO_TELEMETRY=0 DEBIAN_ARCHIVE=0 BUILD_DIR=""
+        MODULES_REQUESTED="" NO_TELEMETRY=0 DEBIAN_ARCHIVE=0 BUILD_DIR="" NO_MODULE_UPDATE=0
         CASAOS_MODULE_CATALOGUE_SHA256="${CATALOGUE_SHA}"
         parse_options "$@"
-        echo "REQUESTED=[${MODULES_REQUESTED}] TELEMETRY=${NO_TELEMETRY} ARCHIVE=${DEBIAN_ARCHIVE} BUILD=[${BUILD_DIR}]"
+        echo "REQUESTED=[${MODULES_REQUESTED}] TELEMETRY=${NO_TELEMETRY} ARCHIVE=${DEBIAN_ARCHIVE} BUILD=[${BUILD_DIR}] MODULE_UPDATE_OFF=${NO_MODULE_UPDATE}"
     )" || status=$?
 }
 
@@ -392,6 +456,29 @@ parses "abcdefghijklmnopqrstuvwxyz012345" --module abcdefghijklmnopqrstuvwxyz012
 parses "a-b-" --module a-b-
 parses "" -- --module virt
 pass "--module, repeated, in both forms, beside the other options"
+
+parses "" --no-telemetry
+case "${out}" in *" MODULE_UPDATE_OFF=0") ;; *) fail "the update of the modules is turned off without being asked: ${out}" ;; esac
+parses "" --no-module-update
+case "${out}" in *" MODULE_UPDATE_OFF=1") ;; *) fail "--no-module-update does not turn the update of the modules off: ${out}" ;; esac
+parses "virt" --module virt --no-module-update --no-telemetry -p /x
+case "${out}" in *"TELEMETRY=1 ARCHIVE=0 BUILD=[/x] MODULE_UPDATE_OFF=1") ;; *) fail "--no-module-update beside the other options: ${out}" ;; esac
+# RECASAOS_MODULE_UPDATE=0 on the install line is the same; any other value, or none, is not (install.sh's own lines, run by bash)
+module_update_off() { # [the value of RECASAOS_MODULE_UPDATE; none: not set]
+    (
+        unset RECASAOS_MODULE_UPDATE
+        if [ $# -gt 0 ]; then RECASAOS_MODULE_UPDATE="$1" && export RECASAOS_MODULE_UPDATE; fi
+        bash -c "$(sed -n '/^NO_MODULE_UPDATE=0$/,/^fi$/p' "${INSTALL_SH}")"'
+echo "${NO_MODULE_UPDATE}"'
+    )
+}
+[ "$(sed -n '/^NO_MODULE_UPDATE=0$/,/^fi$/p' "${INSTALL_SH}" | wc -l | tr -d ' ')" -eq 4 ] || fail "install.sh does not read RECASAOS_MODULE_UPDATE in the four lines from NO_MODULE_UPDATE=0"
+[ "$(module_update_off)" = 0 ] || fail "no RECASAOS_MODULE_UPDATE turned the update of the modules off"
+[ "$(module_update_off 0)" = 1 ] || fail "RECASAOS_MODULE_UPDATE=0 does not turn the update of the modules off"
+for v in 1 "" no false 00 " 0"; do
+    [ "$(module_update_off "${v}")" = 0 ] || fail "RECASAOS_MODULE_UPDATE='${v}' turned the update of the modules off"
+done
+pass "--no-module-update and RECASAOS_MODULE_UPDATE=0 turn the update of the modules off, and nothing else does"
 
 refuses() { # <what> <args...>: status 1, the sentence, nothing run, nothing written
     what="$1"
@@ -460,7 +547,7 @@ pass "--module is refused when the release has no catalogue, and only then"
 fresh
 parse -h
 [ "${status}" -eq 0 ] && [ "${out}" = "${EXPECTED_USAGE}" ] || fail "-h: status ${status}, text: ${out}"
-for bad in --help --bogus -x --module-x --modules --Module --no-telemetry=1 --use-debian-archive=1 -module -m; do
+for bad in --help --bogus -x --module-x --modules --Module --no-telemetry=1 --use-debian-archive=1 -module -m --no-module-update=1 --no-module-updates --module-update; do
     parse "${bad}" virt
     [ "${status}" -eq 1 ] && [ "${out}" = "${EXPECTED_USAGE}" ] || fail "'${bad}': status ${status}, text: ${out}"
 done
@@ -1105,15 +1192,519 @@ case "${line}" in *KEEP_ME*) fail "with sudo: a variable that is not of the hook
 case "$(sed -n 2p "${SUDOCALLS}")" in "sudo rm -rf ${TMPDIR}/"*) ;; *) fail "with sudo: the temporary directory is not removed through it: $(tr '\n' '|' <"${SUDOCALLS}")" ;; esac
 pass "with sudo, the assistant and the removal of the temporary directory go through it, and the hooks are still taken out"
 
+# ---- the update of the installed modules -------------------------------------
+
+CASAOS_UPDATE_LOG="${FAKE}/var/log/casaos/upgrade.log"
+CASA_RUN_DIR="${FAKE}/run"
+
+# entry <name> <none|same|newer> [description]: a module of the list as `casaos module list` prints it (json.Marshal: no blank, the keys in
+# the order of the core's ListModule); none: not installed; same: installed at the catalogue's tag; newer: the catalogue has a later one
+entry() {
+    case "$2" in
+    none) printf '{"name":"%s","title":"T","description":"%s","tier":"core","tag":"v0.2.2","catalogue":true,"installed":null,"system":{"supported":true,"reasons":[]}}' "$1" "${3:-d}" ;;
+    same) printf '{"name":"%s","title":"T","description":"%s","tier":"core","tag":"v0.2.2","catalogue":true,"installed":{"version":"v0.2.2"},"system":{"supported":true,"reasons":[]},"update":{"available":false,"installed":"v0.2.2","latest":"v0.2.2"}}' "$1" "${3:-d}" ;;
+    newer) printf '{"name":"%s","title":"T","description":"%s","tier":"core","tag":"v0.2.2","catalogue":true,"installed":{"version":"v0.2.1"},"system":{"supported":true,"reasons":[]},"update":{"available":true,"installed":"v0.2.1","latest":"v0.2.2"}}' "$1" "${3:-d}" ;;
+    esac
+}
+list_says() { printf '{"catalogue":{"ok":true},"modules":[%s]}\n' "$1" >"${WORK}/list.out"; }
+ufresh() { fresh && say_version v0.4.78; } # a core that has `casaos module update`
+
+# update_step: Update_Installed_Modules as the install runs it, with what is left of a script piped into bash on its input
+update_step() {
+    status=0
+    out="$(
+        exec 2>&1
+        set -e
+        MODULE_CATALOGUE_READY="${READY:-1}"
+        CASAOS_MODULE_CATALOGUE_SHA256="${MODSHA-${CATALOGUE_SHA}}"
+        printf 'REST OF THE SCRIPT\n' | {
+            Update_Installed_Modules
+            read -r left || left="(nothing left)"
+            echo "the install goes on: ${left}"
+        }
+    )" || status=$?
+    case "${out}" in *"the install goes on: REST OF THE SCRIPT"*) ;; *) fail "the update of the modules ended the install, or consumed the script's own input (status ${status}): ${out}" ;; esac
+    [ "${status}" -eq 0 ] || fail "the update of the modules changed the status of the install (${status}): ${out}"
+    # (unless the case makes the removals fail)
+    [ "${SUDO_RM_FAILS:-}" = 1 ] || [ -z "$(ls -A "${TMPDIR}")" ] || fail "the update of the modules left a temporary directory: $(ls -A "${TMPDIR}")"
+}
+
+# whether the run is casaos-update.service: install.sh's own test, on a cgroup file of the case's
+CGROUP="${WORK}/cgroup"
+eval "$(extract Running_Under_Update_Unit | sed 's|/proc/\$\$/cgroup|'"${CGROUP}"'|g')"
+under_unit() { # <yes|no> <the cgroup file's text; none: no file>
+    rm -f "${CGROUP}"
+    [ "$2" = none ] || printf '%s\n' "$2" >"${CGROUP}"
+    if Running_Under_Update_Unit; then got=yes; else got=no; fi
+    [ "${got}" = "$1" ] || fail "a run whose cgroup says '$2' is taken for casaos-update.service: ${got}, wanted $1"
+}
+under_unit yes "0::/system.slice/casaos-update.service"
+under_unit yes "1:name=systemd:/system.slice/casaos-update.service
+0::/system.slice/casaos-update.service/x"
+under_unit no "0::/system.slice/casaos.service"
+under_unit no "0::/system.slice/casaos-update-v0-5-44-1729500000-42.service"
+under_unit no "0::/system.slice/xcasaos-update.service"
+under_unit no "0::/user.slice/user-0.slice/session-1.scope"
+under_unit no none
+Running_Under_Update_Unit() { [ "${UNDER_UPDATE_UNIT:-0}" = 1 ]; }
+pass "the update the core started is told by its cgroup, casaos-update.service and no other unit"
+
+# nothing to update: the list is asked for, once, and nothing else
+nothing_to_update() { # <what>
+    update_step
+    [ "$(calls)" = "casaos module list|" ] || fail "$1: something else than the list was asked: $(calls)"
+    [ "$(cat "${VERCALLS}")" = "casaos -v" ] || fail "$1: the version was not asked exactly once"
+    [ ! -s "${WORK}/stdin-got" ] || fail "$1: the list was given input"
+    case "$(summary)" in "[2] No installed module has a later version in the catalogue of this release.") ;; *) fail "$1: not said, or more said: $(summary)" ;; esac
+}
+ufresh
+nothing_to_update "no module at all"
+ufresh
+list_says "$(entry virt none)"
+nothing_to_update "a module that is not installed"
+ufresh
+list_says "$(entry virt same)"
+nothing_to_update "a module at the catalogue's version"
+ufresh
+list_says "$(entry virt none),$(entry other same)"
+nothing_to_update "one not installed, one at the catalogue's version"
+ufresh
+printf '{"catalogue":{"ok":false,"error":"invalid","detail":"x"},"modules":[]}\n' >"${WORK}/list.out"
+nothing_to_update "a catalogue that the assistant does not take"
+pass "with no installed module that has a later version, the list is read and nothing is updated"
+
+# one module with a later version: `casaos module update <name> --yes`, once, with no input and none of the CASAOS_MODULE variables
+ufresh
+list_says "$(entry virt newer)"
+hooks_on
+update_step
+hooks_off
+[ "$(calls)" = "casaos module list|casaos module update virt --yes|" ] || fail "one module with a later version: not the list then 'casaos module update virt --yes', once: $(calls)"
+[ "$(cat "${VERCALLS}")" = "casaos -v" ] || fail "one module: the version was not asked exactly once"
+[ ! -s "${WORK}/stdin-got" ] || fail "one module: the update was given input"
+[ ! -s "${ENVSEEN}" ] || fail "one module: the assistant was given variables of the hooks: $(tr '\n' ' ' <"${ENVSEEN}")"
+[ "$(cat "${ENVSEEN}.kept")" = "KEEP_ME=kept
+KEEP_ME=kept" ] || fail "one module: the rest of the environment was not left as it was: $(cat "${ENVSEEN}.kept")"
+case "${out}" in *"CASAOS_MODULE_STEP - virt done done 2026"*) ;; *) fail "one module: the assistant's lines are not shown: ${out}" ;; esac
+case "$(summary)" in *"[2] Updating the module virt..."*"[0] The module virt is updated."*"[0] Modules updated to the versions of this release: virt."*) ;; *) fail "one module: not said: $(summary)" ;; esac
+case "$(summary)" in *"NOT updated"*) fail "one module: said not to be updated: $(summary)" ;; esac
+pass "a module with a later version is updated with 'casaos module update <name> --yes', once, no input, no hook variables"
+
+# two: the first fails and is rolled back, the second is updated all the same; the install is not failed
+ufresh
+list_says "$(entry alpha newer),$(entry beta newer)"
+printf failed >"${MODES}/alpha"
+printf ok >"${MODES}/beta"
+update_step
+[ "$(calls)" = "casaos module list|casaos module update alpha --yes|casaos module update beta --yes|" ] || fail "two modules: not each in turn: $(calls)"
+case "$(summary)" in *"[3] The module alpha was not updated: it failed at the step download (download_failed)."*"[3] Its old version was put back and keeps running."*"[3] Retry from the Modules window of the dashboard, or with: sudo casaos module update alpha"*"[0] The module beta is updated."*"[0] Modules updated to the versions of this release: beta."*"[3] Modules NOT updated, each at its old version unless its lines above say otherwise: alpha. Retry from the Modules window of the dashboard, or with: sudo casaos module update <name>"*) ;; *) fail "two modules, the first failing: $(summary)" ;; esac
+case "${out}" in *"failed at step download: download_failed"*"rolled back"*) ;; *) fail "two modules: the assistant's own sentences are not shown: ${out}" ;; esac
+pass "a module whose update fails is said, with its old version put back, and the next one is updated"
+
+# each answer of the assistant, said as what it is
+answer() { # <mode> <what is said> [counted as not updated: yes|no]
+    ufresh
+    list_says "$(entry virt newer)"
+    printf '%s' "$1" >"${MODES}/virt"
+    update_step
+    [ "$(calls)" = "casaos module list|casaos module update virt --yes|" ] || fail "mode $1: $(calls)"
+    case "$(summary)" in *"$2"*) ;; *) fail "mode $1: '$2' is not said: $(summary)" ;; esac
+    case "$(summary)" in *"is updated."* | *"Modules updated"*) fail "mode $1: said to be updated: $(summary)" ;; esac
+    case "${3:-yes}:$(summary)" in
+    yes:*"[3] Modules NOT updated, each at its old version unless its lines above say otherwise: virt."*) ;;
+    no:*"NOT updated"* | no:*"Retry"*) fail "mode $1: nothing to do is said as a failure: $(summary)" ;;
+    no:*) ;;
+    *) fail "mode $1: not in the summary of what was not updated: $(summary)" ;;
+    esac
+}
+answer uptodate "[2] The module virt has nothing to update (up_to_date)." no
+answer downgrade "[2] The module virt has nothing to update (downgrade)." no
+# failed - backup_not_dropped -: the new version is installed, only the backup of the old one is left: updated, with what to do
+ufresh
+list_says "$(entry virt newer)"
+printf notdropped >"${MODES}/virt"
+update_step
+case "$(summary)" in *"[3] The module virt is updated, but the backup of its old version could not be dropped: delete it by hand as the lines above say, or the next install, update or remove of the module puts the old version back."*"[0] Modules updated to the versions of this release: virt."*) ;; *) fail "backup_not_dropped: not said as an update that is installed: $(summary)" ;; esac
+case "$(summary)" in *"NOT updated"* | *"was not updated"*) fail "backup_not_dropped: said not to be updated: $(summary)" ;; esac
+answer busy "[3] The module virt was not updated: the assistant refused it (busy). Nothing was changed: it keeps its old version. Retry from the Modules window of the dashboard, or with: sudo casaos module update virt"
+answer incomplete "[3] The module virt was not updated: it failed at the step unpack (unpack_failed).
+[3] Its old version could not all be put back: the lines above say what is left and how to finish.
+[3] Retry from the Modules window"
+case "$(summary)" in *"keeps running"*) fail "an incomplete rollback is said to keep the old version running" ;; esac
+answer left "[3] The module virt was not updated: it failed at the step swap (file_exists).
+[3] Its old version was put back, except files that were found changed and left as they were: the lines above name them."
+case "$(summary)" in *"keeps running"*) fail "a rollback that left files is said to keep the old version running" ;; esac
+for modewant in noresult:3 silent:0 okexit1:1 forged:0 othername:0 status7:7; do
+    answer "${modewant%%:*}" "[3] The module virt was not updated: the assistant did not report a success (exit status ${modewant#*:}). Retry from the Modules window of the dashboard, or with: sudo casaos module update virt"
+done
+answer escape "it failed at the step dl??31mx (cd??0m_x)."
+case "$(summary)" in *"$(printf '\033')"*) fail "an escape sequence of the assistant's result line reached the summary" ;; esac
+pass "nothing to update, a refusal, a failure and its rollback, and an end with no result are each said as what they are"
+
+# the opt-out: nothing is asked of the core, not even its version
+ufresh
+list_says "$(entry virt newer)"
+NO_MODULE_UPDATE=1
+update_step
+NO_MODULE_UPDATE=0
+[ ! -s "${CALLS}" ] && [ ! -s "${VERCALLS}" ] || fail "the opt-out: the core was asked something: $(calls) / $(cat "${VERCALLS}")"
+case "$(summary)" in "[2] The installed modules were not updated (--no-module-update or RECASAOS_MODULE_UPDATE=0): each keeps the version it has, and the Modules window offers the update.") ;; *) fail "the opt-out: not said: $(summary)" ;; esac
+# and the option, through install.sh's own parsing, ahead of the step
+ufresh
+list_says "$(entry virt newer)"
+status=0
+out="$(
+    exec 2>&1
+    set -e
+    NO_MODULE_UPDATE=0 MODULES_REQUESTED=""
+    CASAOS_MODULE_CATALOGUE_SHA256="${CATALOGUE_SHA}"
+    MODULE_CATALOGUE_READY=1
+    parse_options --no-module-update
+    Update_Installed_Modules
+    echo finished
+)" || status=$?
+[ "${status}" -eq 0 ] && [ ! -s "${CALLS}" ] && [ ! -s "${VERCALLS}" ] && case "${out}" in *"were not updated (--no-module-update"*finished) true ;; *) false ;; esac ||
+    fail "--no-module-update: the modules were updated, or the install did not finish: ${status}: $(calls): ${out}"
+pass "--no-module-update and RECASAOS_MODULE_UPDATE=0 update no module and ask the core nothing"
+
+# no catalogue in place, a core this run did not put in place, no core: nothing asked
+not_asked() { # <what> <what is said>
+    update_step
+    [ ! -s "${CALLS}" ] && [ ! -s "${VERCALLS}" ] || fail "$1: the core was asked something: $(calls) / $(cat "${VERCALLS}")"
+    case "$(summary)" in "$2") ;; *) fail "$1: not said, or more said: $(summary)" ;; esac
+}
+ufresh
+list_says "$(entry virt newer)"
+READY=0
+not_asked "a catalogue that could not be installed" "[3] No module was updated: the module catalogue could not be installed by this run (see above), so each module keeps the version it has. ReCasaOS itself is installed and is not affected."
+unset READY
+MODSHA=""
+not_asked "a release with no catalogue" "[2] No module was updated: this release carries no module catalogue, so it has no version to update one to."
+unset MODSHA
+CORE_INSTALLED_NOW=0
+not_asked "a core this run did not put in place" "[3] No module was updated: this run did not put the core of this release in place, so ${CASA_BIN} is not known to have 'casaos module update'. ReCasaOS itself is installed and is not affected."
+CORE_INSTALLED_NOW=1
+CASA_BIN_SAVED="${CASA_BIN}"
+CASA_BIN="${WORK}/bin/not-there"
+not_asked "no core" "[3] No module was updated: ${WORK}/bin/not-there is not there. ReCasaOS itself is installed and is not affected."
+CASA_BIN="${CASA_BIN_SAVED}"
+pass "no catalogue in place, a core this run did not put in place, or no core: no module is updated and the core is asked nothing"
+
+# a core older than the first that has `casaos module update` (v0.4.75 has `module` and no update), or whose version is not one: never given `module`
+too_old() { # <what> <what -v prints> [its status]
+    ufresh
+    say_version "$2" "${3:-0}"
+    list_says "$(entry virt newer)"
+    update_step
+    [ ! -s "${CALLS}" ] || fail "$1: the core was given 'module': $(calls)"
+    [ "$(cat "${VERCALLS}")" = "casaos -v" ] || fail "$1: the version was not asked exactly once"
+    case "$(summary)" in "[3] No module was updated: ${CASA_BIN} did not report a version of v0.4.78 or later, the first that has 'casaos module update' (it reported '"*"'). ReCasaOS itself is installed and is not affected.") ;; *) fail "$1: not said: $(summary)" ;; esac
+    case "$(summary)" in *"$(printf '\033')"*) fail "$1: an escape sequence reached the screen" ;; esac
+}
+too_old "the core that brought module, without update" v0.4.75
+too_old "the patch before update" v0.4.77
+too_old "an older minor" v0.3.999
+too_old "a private build" v0.0.0-dev
+too_old "a tag with a suffix" v0.4.78-rc1
+too_old "a core that says nothing" ''
+too_old "a word" hello
+too_old "an escape sequence" "$(printf '\033[31mv0.4.77')"
+too_old "the right version, with a status that is not 0" v0.4.78 1
+for v in v0.4.78 v0.4.79 v0.4.100 v0.5.0 v1.0.0; do
+    ufresh
+    say_version "${v}"
+    list_says "$(entry virt newer)"
+    update_step
+    [ "$(calls)" = "casaos module list|casaos module update virt --yes|" ] || fail "a core of ${v}: the module was not updated: $(calls)"
+done
+for badmin in __CASAOS_MODULES_MIN_CORE_TAG__ "" v0.4; do
+    ufresh
+    say_version v9.9.9
+    list_says "$(entry virt newer)"
+    CASAOS_MODULES_MIN_CORE_TAG="${badmin}"
+    update_step
+    CASAOS_MODULES_MIN_CORE_TAG=v0.4.75
+    [ ! -s "${CALLS}" ] || fail "a minimum of '${badmin}' for 'module': the core was given 'module': $(calls)"
+done
+pass "a core older than v0.4.78, or whose version is not one, or an installer built with no minimum, updates no module"
+
+# a list that is not one: nothing is updated, and that is said
+bad_list() { # <what> [the status of the list]
+    printf '%s' "${2:-0}" >"${WORK}/list.status"
+    update_step
+    [ "$(calls)" = "casaos module list|" ] || fail "$1: something else than the list was asked: $(calls)"
+    case "$(summary)" in "[3] No module was updated: 'casaos module list' did not give the list of the modules (exit status ${2:-0}). Each module keeps the version it has, and the Modules window offers the update.") ;; *) fail "$1: not said: $(summary)" ;; esac
+}
+ufresh
+: >"${WORK}/list.out"
+bad_list "an empty list"
+ufresh
+printf 'hello\n"name":"virt","update":{"available":true,\n' >"${WORK}/list.out"
+bad_list "a text that is not a list"
+ufresh
+list_says "$(entry virt newer)"
+bad_list "a list with a status that is not 0" 1
+ufresh
+list_says "$(entry virt newer)"
+bad_list "a list with a status of 3" 3
+pass "a list that is empty, is not a list, or ends with a status that is not 0, updates no module"
+
+# what a string of the list says is never a key: a description that holds the words of the keys, escaped as JSON escapes them
+ufresh
+list_says "$(entry virt same 'x\"update\":{\"available\":true,\"installed\":\"v0.0.1\"}'),$(entry alpha newer 'see \"name\":\"beta\",')"
+update_step
+[ "$(calls)" = "casaos module list|casaos module update alpha --yes|" ] || fail "the words of a string were taken for keys: $(calls)"
+# blanks between the keys, the colons and the values are taken as the list's words too
+ufresh
+printf '{"catalogue": {"ok": true}, "modules": [{"name": "virt", "installed": {"version": "v0.2.1"}, "update": {"available": true, "installed": "v0.2.1", "latest": "v0.2.2"}}, {"name": "other", "update": {"available": false}}]}\n' >"${WORK}/list.out"
+update_step
+[ "$(calls)" = "casaos module list|casaos module update virt --yes|" ] || fail "a list with blanks: $(calls)"
+# a long list: 20000 modules that are not installed, and one at the end with a later version
+ufresh
+awk 'BEGIN {
+    printf "{\"catalogue\":{\"ok\":true},\"modules\":["
+    for (i = 0; i < 20000; i++) printf "{\"name\":\"m%d\",\"title\":\"T\",\"description\":\"%0100d\",\"tier\":\"core\",\"tag\":\"v0.2.2\",\"catalogue\":true,\"installed\":null,\"system\":{\"supported\":true,\"reasons\":[]}},", i, 0
+}' >"${WORK}/list.out"
+printf '%s]}\n' "$(entry last newer)" >>"${WORK}/list.out"
+[ "$(wc -c <"${WORK}/list.out")" -gt 4000000 ] || fail "the long list is not long"
+update_step
+[ "$(calls)" = "casaos module list|casaos module update last --yes|" ] || fail "a long list: $(calls)"
+pass "a string is never read as a key, blanks are allowed, and a long list is read whole"
+
+# the names: only one that is a module name is ever given to the assistant, and each once
+ufresh
+hostile=""
+for bad in Virt 1virt -virt virt_x virt.x 'a;id' '$(id)' '`id`' '../x' 'a b' ' virt' 'virt ' 'a{b' 'a}b' abcdefghijklmnopqrstuvwxyz0123456 'a\"b' 'vért' '' 'a%sb' '-' "$(printf 'a\033[31m')" "$(printf 'virt\tx')"; do
+    hostile="${hostile}$(entry "${bad}" newer),"
+done
+list_says "${hostile}$(entry good newer),$(entry good newer),$(entry abcdefghijklmnopqrstuvwxyz012345 newer)"
+update_step
+[ "$(calls)" = "casaos module list|casaos module update good --yes|casaos module update abcdefghijklmnopqrstuvwxyz012345 --yes|" ] || fail "a name that is not a module name was given to the assistant, or one was given twice: $(calls)"
+case "${out}" in *"$(printf '\033')"*) fail "an escape sequence of a name of the list reached the screen" ;; esac
+pass "of the names of the list, only module names reach the assistant, each once"
+
+# with sudo: the list, the update and the removal of the temporary directories go through it, with none of the variables of the hooks
+ufresh
+list_says "$(entry virt newer)"
+hooks_on
+sudo_cmd=sudo
+SUDO_OK=1
+export SUDO_OK
+update_step
+sudo_cmd=""
+unset SUDO_OK
+hooks_off
+case "$(summary)" in *"[0] The module virt is updated."*) ;; *) fail "with sudo: not updated: ${out}" ;; esac
+[ ! -s "${UNPRIV}" ] || fail "with sudo: something ran without it: $(tr '\n' '|' <"${UNPRIV}")"
+[ ! -s "${ENVSEEN}" ] || fail "with sudo: the assistant was given variables of the hooks: $(tr '\n' ' ' <"${ENVSEEN}")"
+[ "$(wc -l <"${SUDOCALLS}" | tr -d ' ')" -eq 4 ] || fail "with sudo: not the list, a removal, the update and a removal: $(tr '\n' '|' <"${SUDOCALLS}")"
+case "$(sed -n 1p "${SUDOCALLS}")" in "sudo env"*" -u CASAOS_MODULE_TEST "*" ${CASA_BIN} module list") ;; *) fail "with sudo: the list is not 'sudo env -u ... casaos module list': $(sed -n 1p "${SUDOCALLS}")" ;; esac
+case "$(sed -n 3p "${SUDOCALLS}")" in "sudo env"*" -u CASAOS_MODULE_TEST "*" ${CASA_BIN} module update virt --yes") ;; *) fail "with sudo: the update is not 'sudo env -u ... casaos module update virt --yes': $(sed -n 3p "${SUDOCALLS}")" ;; esac
+for n in 2 4; do
+    case "$(sed -n "${n}p" "${SUDOCALLS}")" in "sudo rm -rf ${TMPDIR}/"*) ;; *) fail "with sudo: a temporary directory is not removed through it: $(tr '\n' '|' <"${SUDOCALLS}")" ;; esac
+done
+pass "with sudo, the list, the update and the removals go through it, and the hooks are still taken out"
+
+# removals of the temporary directories that fail (through sudo): the install goes on all the same, for a list that is one and one that is not. This is
+# run as install.sh runs it, by bash with set -e at its top and the step a command of its own: in the subshells above, a part of "out=$(...) || ...",
+# bash does not stop on an error whatever set -e says, so they cannot tell
+sete_step() { # Update_Installed_Modules as install.sh runs it, through sudo
+    {
+        echo 'set -e'
+        cat "${FUNCTIONS}"
+        echo 'Running_Under_Update_Unit() { return 1; }'
+        echo 'GreyStart() { :; }; ColorReset() { :; }; Show() { echo "[$1] $2"; }'
+        for v in CASA_BIN CASA_RUN_DIR CASAOS_UPDATE_LOG CATALOGUE_SHA CASAOS_MODULES_MIN_CORE_TAG CASAOS_MODULE_UPDATE_MIN_CORE_TAG; do
+            eval "printf '%s=%s\n' \"\${v}\" \"'\${${v}}'\""
+        done
+        echo 'sudo_cmd=sudo NO_MODULE_UPDATE=0 MODULE_CATALOGUE_READY=1 CORE_INSTALLED_NOW=1 CASAOS_MODULE_CATALOGUE_SHA256="${CATALOGUE_SHA}"'
+        echo 'Update_Installed_Modules'
+        echo 'echo "the install goes on"'
+    } >"${WORK}/sete.bash"
+    status=0
+    out="$(bash "${WORK}/sete.bash" </dev/null 2>&1)" || status=$?
+}
+# (and that run does stop on an error: the check can say no)
+printf 'set -e\nfalse\necho "the install goes on"\n' >"${WORK}/sete-false.bash"
+[ "$(bash "${WORK}/sete-false.bash" 2>&1 || true)" = "" ] || fail "bash with set -e at its top does not stop on an error here"
+for listcase in good bad; do
+    ufresh
+    if [ "${listcase}" = good ]; then list_says "$(entry virt newer)"; else : >"${WORK}/list.out"; fi
+    SUDO_OK=1
+    SUDO_RM_FAILS=1
+    export SUDO_OK SUDO_RM_FAILS
+    sete_step
+    unset SUDO_OK SUDO_RM_FAILS
+    [ "${status}" -eq 0 ] && case "${out}" in *"the install goes on") true ;; *) false ;; esac || fail "removals that fail (${listcase} list): the install ended (status ${status}): ${out}"
+    grep -q '^sudo rm -rf ' "${SUDOCALLS}" || fail "removals that fail (${listcase} list): none was tried: $(tr '\n' '|' <"${SUDOCALLS}")"
+    case "${listcase}:$(summary)" in good:*"[0] The module virt is updated."* | bad:*"did not give the list of the modules"*) ;; *) fail "removals that fail (${listcase} list): $(summary)" ;; esac
+done
+pass "a removal of a temporary directory that fails does not end the install, run with set -e as install.sh runs"
+
+# the run the core started (casaos-update.service): the assistant would refuse the update there (busy), so it is handed to a unit of its own
+handed_off() { # Update_Installed_Modules inside casaos-update.service, with a directory for the script
+    mkdir -p "${CASA_RUN_DIR}"
+    UNDER_UPDATE_UNIT=1
+    update_step
+    unset UNDER_UPDATE_UNIT
+}
+sdrun_words() { # <first> <last>: the words given to systemd-run, as systemd makes them, joined by |
+    words=""
+    n="$1"
+    while [ "${n}" -le "$2" ]; do
+        words="${words}$(cat "${WORK}/sdrun/${n}")|"
+        n=$((n + 1))
+    done
+    printf '%s' "${words}"
+}
+ufresh
+list_says "$(entry virt newer),$(entry beta newer),$(entry other same)"
+handed_off
+! grep -q '^casaos module update' "${CALLS}" || fail "the hand-off: a module was updated while casaos-update.service runs: $(calls)"
+[ "$(grep -c '^systemd-run ' "${CALLS}")" -eq 1 ] || fail "the hand-off: not one unit: $(calls)"
+# systemd takes ${NAME}, $NAME, $$ and % in the words of a unit's command for its own: no word given to it holds one
+[ ! -e "${WORK}/sdrun/changed" ] || fail "the hand-off: systemd would change the words $(tr '\n' ' ' <"${WORK}/sdrun/changed")of the unit's command"
+! grep -l '[$%]' "${WORK}"/sdrun/*.raw >/dev/null 2>&1 || fail "the hand-off: a word given to systemd-run holds a \$ or a %"
+[ "$(sdrun_words 1 7)" = "--quiet|--collect|--unit=casaos-update-modules|--property=Type=exec|--property=KillMode=mixed|--property=TimeoutStopSec=420|/bin/sh|" ] ||
+    fail "the hand-off: the unit is not started as it should be: $(sdrun_words 1 7)"
+SCRIPT_FILE="$(cat "${WORK}/sdrun/8")"
+case "${SCRIPT_FILE}" in "${CASA_RUN_DIR}"/casaos-update-modules.??????/run.sh) ;; *) fail "the hand-off: the script is not a file of a directory of its own in ${CASA_RUN_DIR}: ${SCRIPT_FILE}" ;; esac
+[ -f "${SCRIPT_FILE}" ] && [ "$(ls -A "${SCRIPT_FILE%/*}")" = run.sh ] || fail "the hand-off: the script is not there, alone in its directory"
+# (mktemp -d makes it 0700; a Windows checkout's file system does not keep the mode)
+[ "$(uname -s)" != Linux ] || [ "$(stat -c %a "${SCRIPT_FILE%/*}")" = 700 ] || fail "the hand-off: the directory of the script is $(stat -c %a "${SCRIPT_FILE%/*}"), not 700"
+[ "$(sdrun_words 9 12)" = "${CASAOS_UPDATE_LOG}|${CASA_BIN}|virt|beta|" ] && [ ! -e "${WORK}/sdrun/13" ] ||
+    fail "the hand-off: the unit is not given the log, the core and the names, and nothing else: $(sdrun_words 9 13)"
+! grep -q -e '--setenv' "${WORK}"/sdrun/* || fail "the hand-off: the unit is given variables"
+case "$(summary)" in "[2] The modules virt beta will be updated once this update has finished, by casaos-update-modules.service: what they say is added to ${CASAOS_UPDATE_LOG}, and the Modules window shows the version each one has.") ;; *) fail "the hand-off: not said: $(summary)" ;; esac
+cp "${SCRIPT_FILE}" "${WORK}/run.sh.saved"
+# what the unit runs: it waits while casaos-update.service runs, then updates each module in a unit of its own, with no input, in the log, whatever one
+# of them does, and takes its script away
+mkdir -p "${WORK}/handoff-bin"
+cat >"${WORK}/handoff-bin/systemctl" <<'STUB'
+#!/bin/sh
+# answers ACTIVE_WORD (active) for the first ACTIVE_FOR questions, then inactive
+echo "systemctl $*" >>"${WORK}/systemctl.calls"
+n="$(wc -l <"${WORK}/systemctl.calls")"
+if [ "${n}" -le "${ACTIVE_FOR:-0}" ]; then echo "${ACTIVE_WORD:-active}"; else echo inactive; fi
+STUB
+cat >"${WORK}/handoff-bin/sleep" <<'STUB'
+#!/bin/sh
+echo "sleep $*" >>"${WORK}/sleep.calls"
+STUB
+cat >"${WORK}/handoff-bin/systemd-run" <<'STUB'
+#!/bin/sh
+# stand-in for the systemd-run of the unit's script: its words, one call a line, and a word that holds a $ or a % in inner.bad; then what follows
+# "--" is run as --wait --pipe has it run: to its end, with this input and output, and its status is this one's
+printf '%s|' "$@" >>"${WORK}/inner.calls"
+echo >>"${WORK}/inner.calls"
+for a in "$@"; do case "${a}" in *'$'* | *%*) echo "${a}" >>"${WORK}/inner.bad" ;; esac; done
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+STUB
+chmod +x "${WORK}/handoff-bin/systemctl" "${WORK}/handoff-bin/sleep" "${WORK}/handoff-bin/systemd-run"
+handoff_runs() { # <questions answered active> <the word> <names>...
+    ACTIVE_FOR="$1" ACTIVE_WORD="$2"
+    shift 2
+    rm -rf "${WORK}/systemctl.calls" "${WORK}/sleep.calls" "${WORK}/inner.calls" "${WORK}/inner.bad" "${CASAOS_UPDATE_LOG}" "${WORK}/stdin-got" "${WORK}/rd"
+    : >"${CALLS}"
+    mkdir -p "$(dirname "${CASAOS_UPDATE_LOG}")" "${WORK}/rd"
+    cp "${WORK}/run.sh.saved" "${WORK}/rd/run.sh"
+    (
+        export ACTIVE_FOR ACTIVE_WORD
+        PATH="${WORK}/handoff-bin:${PATH}"
+        export PATH
+        printf 'not for the unit\n' | sh "${WORK}/rd/run.sh" "${CASAOS_UPDATE_LOG}" "${CASA_BIN}" "$@"
+    ) >"${WORK}/handoff.out" 2>&1
+    [ ! -s "${WORK}/handoff.out" ] || fail "the unit wrote elsewhere than in the log: $(cat "${WORK}/handoff.out")"
+    [ ! -s "${WORK}/stdin-got" ] || fail "the unit gave the assistant input"
+    [ ! -e "${WORK}/rd" ] || fail "the unit did not take its script and its directory away: $(ls -A "${WORK}/rd")"
+    [ ! -e "${WORK}/inner.bad" ] || fail "a word given to systemd-run by the unit holds a \$ or a %: $(cat "${WORK}/inner.bad")"
+}
+inner_words() { sed 's/-[0-9][0-9]*|--property=Type=exec/-<time>|--property=Type=exec/' "${WORK}/inner.calls"; }
+printf failed >"${MODES}/virt"
+printf ok >"${MODES}/beta"
+handoff_runs 2 active virt beta
+[ "$(wc -l <"${WORK}/systemctl.calls" | tr -d ' ')" -eq 3 ] && [ "$(sort -u "${WORK}/systemctl.calls")" = "systemctl show casaos-update.service --property=ActiveState --value" ] ||
+    fail "the unit did not ask casaos-update.service until it was gone: $(cat "${WORK}/systemctl.calls")"
+[ "$(cat "${WORK}/sleep.calls")" = "sleep 2
+sleep 2" ] || fail "the unit did not wait two seconds between its questions: $(cat "${WORK}/sleep.calls")"
+# each module in a unit of its own, whose stop asks the assistant alone (KillMode=mixed) and gives it the time of its rollback, waited for
+[ "$(inner_words)" = "--wait|--pipe|--collect|--unit=casaos-update-modules-virt-<time>|--property=Type=exec|--property=KillMode=mixed|--property=TimeoutStopSec=420|--|${CASA_BIN}|module|update|virt|--yes|
+--wait|--pipe|--collect|--unit=casaos-update-modules-beta-<time>|--property=Type=exec|--property=KillMode=mixed|--property=TimeoutStopSec=420|--|${CASA_BIN}|module|update|beta|--yes|" ] ||
+    fail "the unit does not update each module in a unit of its own as it should: $(cat "${WORK}/inner.calls")"
+[ "$(calls)" = "casaos module update virt --yes|casaos module update beta --yes|" ] || fail "the unit did not update each module in turn: $(calls)"
+case "$(cat "${CASAOS_UPDATE_LOG}")" in *"Updating the module virt..."*"failed at step download: download_failed"*"rolled back"*"The update of the module virt ended with exit status 3: the lines above say whether it is updated, and if not whether its old version was put back. To try again: the Modules window of the dashboard, or sudo casaos module update virt"*"Updating the module beta..."*"CASAOS_MODULE_RESULT - beta ok done - - "*) ;; *) fail "the log of the unit: $(cat "${CASAOS_UPDATE_LOG}")" ;; esac
+handoff_runs 1 deactivating virt
+[ "$(wc -l <"${WORK}/systemctl.calls" | tr -d ' ')" -eq 2 ] || fail "the unit did not wait for a casaos-update.service that is stopping"
+handoff_runs 0 active virt
+[ "$(wc -l <"${WORK}/systemctl.calls" | tr -d ' ')" -eq 1 ] && [ ! -e "${WORK}/sleep.calls" ] || fail "the unit waited for a casaos-update.service that is gone"
+# bounded: a casaos-update.service that never ends is waited for 300 times 2 seconds, and the assistant is then asked all the same (it says busy itself)
+handoff_runs 100000 active virt
+[ "$(wc -l <"${WORK}/systemctl.calls" | tr -d ' ')" -eq 300 ] && [ "$(wc -l <"${WORK}/sleep.calls" | tr -d ' ')" -eq 300 ] || fail "the unit's wait is not 300 questions"
+[ "$(calls)" = "casaos module update virt --yes|" ] || fail "after its wait the unit did not go on: $(calls)"
+# a unit that cannot be started, no directory for the script, or a word that systemd would change: said, no module is updated, nothing is left
+handoff_refused() { # <what>
+    ! grep -q '^casaos module update' "${CALLS}" || fail "$1: a module was updated: $(calls)"
+    case "$(summary)" in "[3] The modules virt were not updated: their update could not be handed to a unit of its own, and the assistant refuses one while this update runs. Each keeps its old version. Once this update has finished, update them from the Modules window of the dashboard, or with: sudo casaos module update <name>") ;; *) fail "$1: not said: $(summary)" ;; esac
+    [ -z "$(ls -A "${CASA_RUN_DIR}" 2>/dev/null)" ] || fail "$1: a script was left: $(ls -A "${CASA_RUN_DIR}")"
+}
+ufresh
+list_says "$(entry virt newer)"
+SDRUN_STATUS=1
+export SDRUN_STATUS
+handed_off
+unset SDRUN_STATUS
+handoff_refused "a unit that cannot be started"
+ufresh
+list_says "$(entry virt newer)"
+UNDER_UPDATE_UNIT=1
+update_step
+unset UNDER_UPDATE_UNIT
+handoff_refused "no directory for the script"
+! grep -q '^systemd-run ' "${CALLS}" || fail "no directory for the script: systemd-run was run"
+for odd in 'ca$saos' 'ca%nsaos' 'ca${X}saos' 'ca$$saos'; do
+    ufresh
+    cp "${WORK}/bin/casaos" "${WORK}/bin/${odd}"
+    CASA_BIN_SAVED="${CASA_BIN}"
+    CASA_BIN="${WORK}/bin/${odd}"
+    list_says "$(entry virt newer)"
+    handed_off
+    CASA_BIN="${CASA_BIN_SAVED}"
+    rm -f "${WORK}/bin/${odd}"
+    handoff_refused "a core at '${odd}'"
+    ! grep -q '^systemd-run ' "${CALLS}" || fail "a core at '${odd}': a word with a \$ or a % was given to systemd-run"
+done
+pass "inside casaos-update.service the updates go to a unit of their own, from a script file and no word systemd would change, which waits for it, at most 10 minutes, and updates each module in a unit of its own"
+
+# the whole sequence of the end of the install, under set -e: a module that fails its update does not change its status
+ufresh
+write_catalogue 8
+CASAOS_MODULE_CATALOGUE_SHA256="$(sha_of "${CATALOGUE_FILE}")"
+list_says "$(entry virt newer)"
+printf failed >"${MODES}/virt"
+status=0
+out="$(
+    exec 2>&1
+    set -e
+    MODULES_REQUESTED=""
+    Install_Module_Catalogue
+    Install_Modules
+    Update_Installed_Modules
+    echo finished
+)" || status=$?
+[ "${status}" -eq 0 ] && case "${out}" in *"The module virt was not updated"*finished) true ;; *) false ;; esac || fail "a failed update ended the install: ${status}: ${out}"
+pass "catalogue, modules, then updates, and the install finishes whatever an update did"
+
 # ---- the detached run --------------------------------------------------------
 
 # An update that runs inside casaos.service hands itself to a transient unit that takes no options: the modules asked for
 # with --module cannot reach it, and that is said, with the way to install them afterwards, instead of dropped in silence
 # (Detach_From_CasaOS_Service is bash: the harness runs it under bash, against a stand-in for systemd-run)
-detach() { # <the modules asked for>
+detach() { # <the modules asked for> [NO_TELEMETRY] [NO_MODULE_UPDATE]
     fresh
     status=0
-    out="$(bash "${WORK}/detach.bash" "$1" 2>&1)" || status=$?
+    out="$(bash "${WORK}/detach.bash" "$1" "${2:-0}" "${3:-0}" 2>&1)" || status=$?
 }
 extract Detach_From_CasaOS_Service >"${WORK}/detach.fn"
 [ -s "${WORK}/detach.fn" ] || fail "install.sh defines no Detach_From_CasaOS_Service()"
@@ -1125,17 +1716,11 @@ extract Detach_From_CasaOS_Service >"${WORK}/detach.fn"
     echo "CASAOS_UPDATE_LOG='${FAKE}/var/log/casaos/upgrade.log'"
     echo 'CASAOS_INSTALL_RELEASE_TAG=v0.0.0'
     echo 'CASAOS_INSTALLER_SELF_URL=https://example.invalid/install.sh'
-    echo 'NO_TELEMETRY=0'
     cat "${WORK}/detach.fn"
-    echo 'MODULES_REQUESTED="$1"'
+    echo 'MODULES_REQUESTED="$1" NO_TELEMETRY="$2" NO_MODULE_UPDATE="$3"'
     echo 'Detach_From_CasaOS_Service'
 } >"${WORK}/detach.bash"
 bash -n "${WORK}/detach.bash" || fail "the detach function does not parse"
-cat >"${WORK}/bin/systemd-run" <<'STUB'
-#!/bin/sh
-echo "systemd-run $*" >>"${CALLS}"
-STUB
-chmod +x "${WORK}/bin/systemd-run"
 
 detach "virt other"
 [ "${status}" -eq 0 ] || fail "the detached update ended with ${status}: ${out}"
@@ -1150,5 +1735,16 @@ detach ""
 case "${out}" in *"[3] "*) fail "no module asked for and something is said: ${out}" ;; esac
 case "${out}" in *"[2] Handing the update to casaos-update-"*) ;; *) fail "no module: the hand-off is not said: ${out}" ;; esac
 pass "the detached update says that it does not install the modules asked for, and how to install them"
+
+# the detached run takes no options: the opt-outs reach it as variables of its unit, and only when asked
+sdrun_args() { i=1; while [ -e "${WORK}/sdrun/${i}" ]; do cat "${WORK}/sdrun/${i}"; echo; i=$((i + 1)); done; }
+detach "" 0 1
+[ "${status}" -eq 0 ] && [ "$(sdrun_args | grep -c '^--setenv=RECASAOS_MODULE_UPDATE=0$')" -eq 1 ] || fail "--no-module-update does not reach the detached update: $(sdrun_args | tr '\n' ' ')"
+sdrun_args | grep -q '^--setenv=RECASAOS_TELEMETRY' && fail "the detached update was given RECASAOS_TELEMETRY without being asked"
+detach "" 1 1
+[ "$(sdrun_args | grep -c '^--setenv=RECASAOS_MODULE_UPDATE=0$')" -eq 1 ] && [ "$(sdrun_args | grep -c '^--setenv=RECASAOS_TELEMETRY=0$')" -eq 1 ] || fail "both opt-outs do not reach the detached update: $(sdrun_args | tr '\n' ' ')"
+detach "" 0 0
+[ "$(sdrun_args | grep -c '^--setenv=')" -eq 1 ] && [ "$(sdrun_args | grep -c '^--setenv=CASAOS_INSTALLER_DETACHED=1$')" -eq 1 ] || fail "the detached update was given an opt-out without being asked: $(sdrun_args | tr '\n' ' ')"
+pass "--no-module-update and --no-telemetry reach the detached update as variables, and only when asked"
 
 echo "all module checks passed"

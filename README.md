@@ -73,6 +73,8 @@ curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/i
 
 **One module is offered: `virt`** (virtual machines, from [CasaOS-VirtManagement](https://github.com/ReCasaOS/CasaOS-VirtManagement)). It is in the *core* tier: maintained here and installed, run, updated and removed in CI on real guests (Debian 12, Ubuntu 22.04 and Ubuntu 24.04, with libvirt's test driver) before a release carries it. Install it from the Modules window, with `casaos module install virt`, or with `--module virt`; the Modules window says when a newer version is in the catalogue and offers *Update*. A box that does not ask for it downloads and runs none of it.
 
+**Installed modules follow the release.** When ReCasaOS is updated (the dashboard's update button, the automatic updates, or the installer run again), every installed module that the new release's catalogue has at a later version is updated to it with `casaos module update <name> --yes`, so a new dashboard does not run beside a module built for the old one. Nothing is installed that was not, and no module goes back to an earlier version. A module whose update fails is reported with the step and why; the module's own rollback puts its old version back, it keeps running at that version, and you can retry from the Modules window or with `sudo casaos module update <name>`. The installer's exit status does not change. The dashboard's update and the automatic updates run in `casaos-update.service`, and the module assistant refuses to change a module while that unit runs, so there the updates are handed to `casaos-update-modules.service`: it waits up to 10 minutes for the update to finish, then updates each module in a unit of its own, and adds their lines to `/var/log/casaos/upgrade.log`. If the machine restarts during that wait, the pending module updates are dropped; the Modules window still offers them. To leave the modules at the versions they have, run the installer by hand with `--no-module-update`, or with `RECASAOS_MODULE_UPDATE=0` on the install line. There is no opt-out on the dashboard's update or the automatic updates: the core passes them no option and no variable, so they always update the installed modules.
+
 The installer only gives `module` to the core it has just installed and only when that core reports a version that has the command, and a release is only built with a catalogue after the core it pins has been built and its `casaos module list` has been run on that catalogue: an older core would take `module` for a start of the server. `sudo casaos-uninstall` removes the modules before it removes ReCasaOS (see [Uninstall](#uninstall)).
 
 ## Anonymous statistics
@@ -121,6 +123,10 @@ Any one of these; an upgrade never turns them back on.
 
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
+
+## What is in v0.5.46
+
+**Installed modules are updated together with a release**, so a new dashboard never meets an old module again (the case that cut an image upload short). Not yet seen on a real machine; the Modules window still offers the update if a module is left behind.
 
 ## What is in v0.5.45
 
