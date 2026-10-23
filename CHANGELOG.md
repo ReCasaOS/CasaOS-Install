@@ -2,6 +2,29 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.47] - 2026-10-23
+
+Components: CasaOS `v0.4.82`. Unchanged from v0.5.46: CasaOS-UI `v0.4.100`, CasaOS-AppManagement `v0.4.71`, module `virt` `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Security
+
+- A token in a URL (`?token=`) is accepted only for reads (GET and websockets), and only the access token is accepted: a leaked download link no longer gives write access, and the refresh token no longer opens the API.
+- `GET /v1/sys/version/check`, which answers without signing in, no longer writes a row to the database at every call (anyone could fill the disk).
+- The tokens of connected cloud storages (Dropbox, Google Drive, OneDrive) and rclone's replies are no longer written to the logs.
+- Samba: a password with a comma can no longer add mount options, and a crafted user name or port is refused.
+
+### Fixed
+
+- **Moving files can no longer delete them.** A move on the same disk is a rename; across disks the source is removed only after a complete copy. A destination inside the source, or a paste into a folder that would overwrite the source's own parent, is refused. Links and bind mounts are taken into account, and no delete ever crosses a mounted disk or network share.
+- A failed copy is reported as failed instead of finished; cancelling the running copy stops it and starts the next one; a cancelled overwrite keeps the old file.
+- Uploads close their files, a re-upload no longer keeps the tail of an older file, and an upload over an existing file keeps its permissions, owner and links. Saving in the code editor writes a new file and renames it, so a crash never leaves an empty file.
+- The core no longer crashes on the Drop page's websocket or in the progress of copies, and no longer stays down when the gateway is restarting at the same moment (it waits up to two minutes).
+- A Samba connection whose server is unreachable at boot is kept instead of deleted, can be deleted from the dashboard, and an unmount that fails never deletes files on the share.
+- Installing or updating a module no longer kills apt or dpkg on a timer (only the download is time-limited), and the operating-system upgrade sees a module command started by hand.
+- The end of a resource alert is delivered even during an update; the repeat count of an alert only says "since" within a day.
+- The machine's statistics record the free space of `/` only, so mounting and unmounting disks over months no longer uses up the series.
+- An old `casaos.conf` no longer resets the dashboard's port at every start.
+
 ## [0.5.46] - 2026-10-22
 
 Components: none changed (CasaOS `v0.4.81`, CasaOS-AppManagement `v0.4.71`, CasaOS-UI `v0.4.100`, module `virt` `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`).
