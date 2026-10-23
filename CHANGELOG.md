@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.48] - 2026-10-23
+
+Components: CasaOS-UI `v0.4.101`. Unchanged from v0.5.47: CasaOS `v0.4.82`, CasaOS-AppManagement `v0.4.71`, module `virt` `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Fixed
+
+- On a touch screen, swiping over the app grid scrolls it instead of moving an icon: dragging an icon now starts only after a long press on touch screens (a mouse still drags at once) ([ReCasaOS/CasaOS#37](https://github.com/ReCasaOS/CasaOS/issues/37)).
+
 ## [0.5.47] - 2026-10-23
 
 Components: CasaOS `v0.4.82`. Unchanged from v0.5.46: CasaOS-UI `v0.4.100`, CasaOS-AppManagement `v0.4.71`, module `virt` `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
