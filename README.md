@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.49
+
+**One bad upload request no longer blocks every later upload** until a restart, and resetting a password with `casaos-user-service -ru` leaves the running user service alone.
+
 ## What is in v0.5.48
 
 **On a phone, swiping over the app grid scrolls it** instead of moving an icon; a long press still moves it.

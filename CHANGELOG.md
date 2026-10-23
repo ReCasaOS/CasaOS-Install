@@ -2,6 +2,16 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.49] - 2026-10-23
+
+Components: CasaOS `v0.4.83`, CasaOS-UserService `v0.4.32`. Unchanged from v0.5.48: CasaOS-UI `v0.4.101`, CasaOS-AppManagement `v0.4.71`, module `virt` `v0.2.2`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
+
+### Fixed
+
+- **One bad upload request no longer blocks every later upload.** A chunk number outside the file, or a chunk count its size cannot have, made the upload the file manager uses fail while it held its lock: every upload after it hung until the core restarted. Both are refused now, and the older upload route checks its chunk number before using it as a file name ([ReCasaOS/CasaOS#50](https://github.com/ReCasaOS/CasaOS/pull/50)).
+- `casaos-user-service -ru` (reset a user's password) exits once done, instead of starting a second user service that took the running one's place at the gateway ([ReCasaOS/CasaOS-UserService#4](https://github.com/ReCasaOS/CasaOS-UserService/pull/4), by @ppenguin).
+- The helper scripts run `bash` from PATH, so hosts without `/bin/bash` (NixOS) can run them; Debian and Ubuntu run the same bash ([ReCasaOS/CasaOS-Common#6](https://github.com/ReCasaOS/CasaOS-Common/pull/6), by @ppenguin).
+
 ## [0.5.48] - 2026-10-23
 
 Components: CasaOS-UI `v0.4.101`. Unchanged from v0.5.47: CasaOS `v0.4.82`, CasaOS-AppManagement `v0.4.71`, module `virt` `v0.2.2`, CasaOS-UserService `v0.4.31`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
