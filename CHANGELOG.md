@@ -2,6 +2,34 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.50] - 2026-10-24
+
+Components: CasaOS `v0.4.84`, CasaOS-AppManagement `v0.4.72`, CasaOS-Gateway `v0.4.31`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-LocalStorage `v0.4.45`, CasaOS-UI `v0.4.102`, module `virt` `v0.2.3`. Unchanged from v0.5.49: rclone `v1.75.1`.
+
+Most of this release was contributed by @ppenguin.
+
+### Security
+
+- **A refresh token no longer opens any route.** It is signed with the same key as the access token and lives seven days; every service but the core accepted it as an access token. Only the access token is accepted now, and the refresh call is unchanged ([ReCasaOS/CasaOS-Common#10](https://github.com/ReCasaOS/CasaOS-Common/pull/10)).
+- echo `v4.16.1` in every service, containerd `v2.3.6` in app management, and patched dashboard dependencies (dompurify, music-metadata, build tools), from Dependabot alerts.
+
+### Added
+
+Every setting below is opt-in: left unset, nothing changes.
+
+- **`[file] ManagementRoots`** (casaos.conf) confines the file manager to the folders you list: every path, upload, copy and move is checked, links that lead out are refused, and a root itself cannot be deleted, renamed or moved ([ReCasaOS/CasaOS#49](https://github.com/ReCasaOS/CasaOS/pull/49)).
+- **`[server] ImageManaged = true`** for hosts whose system image owns updates and packages (NixOS, A/B images): the package, OS and update routes are absent and the dashboard hides them, and modules come from units shipped in the image ([ReCasaOS/CasaOS#53](https://github.com/ReCasaOS/CasaOS/pull/53), [ReCasaOS/CasaOS-UI#55](https://github.com/ReCasaOS/CasaOS-UI/pull/55)).
+- **`[app] FirstAdmin = local`** (user-service.conf): the first administrator is created on the machine with `casaos-user-service -bootstrap-admin`, and nobody on the network can claim an empty box ([ReCasaOS/CasaOS-UserService#6](https://github.com/ReCasaOS/CasaOS-UserService/pull/6)).
+- **`[server] SambaMainConfig = external`**: the host owns `smb.conf` and CasaOS manages only `smb.casa.conf`, which `smb.conf` must include ([ReCasaOS/CasaOS#55](https://github.com/ReCasaOS/CasaOS/pull/55)).
+- `Authorization: Bearer <token>` is accepted by every service as well as the bare token ([ReCasaOS/CasaOS#46](https://github.com/ReCasaOS/CasaOS/issues/46)).
+
+### Fixed
+
+- Editing or removing a share reloads Samba and closes only that share, instead of restarting it and cutting every open transfer ([ReCasaOS/CasaOS#42](https://github.com/ReCasaOS/CasaOS/pull/42)).
+- When the app grid fails to load, the built-in apps stay, the icon order is no longer saved without your apps, and the error shows once ([ReCasaOS/CasaOS-UI#53](https://github.com/ReCasaOS/CasaOS-UI/pull/53), [#56](https://github.com/ReCasaOS/CasaOS-UI/pull/56)).
+- The message bus keeps subscriptions made before it starts, and no longer crashes when an event arrives as it stops ([ReCasaOS/CasaOS-MessageBus#4](https://github.com/ReCasaOS/CasaOS-MessageBus/pull/4), [#7](https://github.com/ReCasaOS/CasaOS-MessageBus/pull/7)).
+- `casaos-user-service -ru` writes the new password and clears two-factor authentication in one write, and says so when it fails ([ReCasaOS/CasaOS-UserService#6](https://github.com/ReCasaOS/CasaOS-UserService/pull/6)).
+
 ## [0.5.49] - 2026-10-23
 
 Components: CasaOS `v0.4.83`, CasaOS-UserService `v0.4.32`. Unchanged from v0.5.48: CasaOS-UI `v0.4.101`, CasaOS-AppManagement `v0.4.71`, module `virt` `v0.2.2`, CasaOS-MessageBus `v0.4.29`, CasaOS-LocalStorage `v0.4.44`, CasaOS-Gateway `v0.4.30`, rclone `v1.75.1`.
