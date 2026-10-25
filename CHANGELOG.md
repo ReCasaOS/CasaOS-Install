@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.51] - 2026-10-25
+
+Components: CasaOS-UI `v0.4.103`. Unchanged from v0.5.50: CasaOS `v0.4.84`, CasaOS-AppManagement `v0.4.72`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-LocalStorage `v0.4.45`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Changed
+
+- A virtual machine's tile in the app grid shows the mark of the system it runs (Debian, Ubuntu, Windows, Home Assistant…), in a colour that stays readable in both themes; a machine with no known system keeps the screen ([ReCasaOS/CasaOS-UI#57](https://github.com/ReCasaOS/CasaOS-UI/pull/57), by @Vinz2168).
+
 ## [0.5.50] - 2026-10-24
 
 Components: CasaOS `v0.4.84`, CasaOS-AppManagement `v0.4.72`, CasaOS-Gateway `v0.4.31`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-LocalStorage `v0.4.45`, CasaOS-UI `v0.4.102`, module `virt` `v0.2.3`. Unchanged from v0.5.49: rclone `v1.75.1`.
