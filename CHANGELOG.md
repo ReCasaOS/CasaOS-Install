@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.53] - 2026-10-27
+
+Components: CasaOS-LocalStorage `v0.4.46`, CasaOS `v0.4.86`, CasaOS-UI `v0.4.105`. Unchanged from v0.5.52: CasaOS-AppManagement `v0.4.72`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+Published as a pre-release until the RAID proof (`raid-proof`) is green on real guests.
+
+### Added
+
+- **The state of each software RAID array (mdadm).** The Storage manager shows it under the storage on the array: healthy, degraded, rebuilding (with the percent and the time left), resyncing, checking, or not running. It also shows the array's level and its disks (failed, rebuilding, spare) and how many disks are missing. An array with no storage mounted on it is listed on its own. The storage widget on the home page adds a RAID tag when an array needs you. The state is read from the kernel; mdadm is not needed for it ([ReCasaOS/CasaOS-LocalStorage#8](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/8), [ReCasaOS/CasaOS-UI#60](https://github.com/ReCasaOS/CasaOS-UI/pull/60)).
+- **Alerts for RAID arrays**, checked every five minutes in the Disks category. One tells when an array is degraded, naming the failed disk when there is one. One tells when an array stops running. One tells when an array is complete again, which is how a finished rebuild is told ([ReCasaOS/CasaOS#59](https://github.com/ReCasaOS/CasaOS/pull/59)).
+- **Repairing an array from the Storage manager.** *Add a disk* erases a blank disk and adds it where one is missing or failed, and the array then rebuilds onto it. Only blank disks at least as big as the array's members are offered, and the disk's name must be typed again. *Take out* removes a failed disk. Both need mdadm, which an array almost always comes with ([ReCasaOS/CasaOS-LocalStorage#9](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/9), [ReCasaOS/CasaOS-UI#61](https://github.com/ReCasaOS/CasaOS-UI/pull/61)).
+
 ## [0.5.52] - 2026-10-27
 
 Components: CasaOS `v0.4.85`, CasaOS-UI `v0.4.104`. Unchanged from v0.5.51: CasaOS-AppManagement `v0.4.72`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-LocalStorage `v0.4.45`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
