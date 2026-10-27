@@ -118,8 +118,9 @@ jobs:
             ServerAliveInterval 30
             ServerAliveCountMax 10
           EOF
+          # the system disk boots first by name: without bootindex the firmware may try a blank RAID disk and stop there
           qemu-system-x86_64 -enable-kvm -cpu host -m 4096 -smp 2 -display none -daemonize \
-            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=disk.img,if=none,id=sys,format=qcow2 -device virtio-blk-pci,drive=sys,bootindex=0 \
             -drive file=seed.img,if=virtio,format=raw \
             -drive file=raid1.qcow2,if=none,id=rp1,format=qcow2 -device virtio-blk-pci,drive=rp1,serial=rp1 \
             -drive file=raid2.qcow2,if=none,id=rp2,format=qcow2 -device virtio-blk-pci,drive=rp2,serial=rp2 \
