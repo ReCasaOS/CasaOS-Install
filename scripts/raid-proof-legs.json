@@ -1,0 +1,4 @@
+[
+  {"leg": "d12", "name": "Debian 12", "label": "the RAID repair on a Debian 12 guest, three blank virtio disks", "id": "debian", "version": "12", "base": "https://cloud.debian.org/images/cloud/bookworm/latest", "image": "debian-12-genericcloud-amd64.qcow2", "sums": "SHA512SUMS", "algo": "sha512sum", "timeout": 60, "prove_timeout": 45},
+  {"leg": "u24", "name": "Ubuntu 24.04", "label": "the RAID repair on an Ubuntu 24.04 guest, three blank virtio disks", "id": "ubuntu", "version": "24.04", "base": "https://cloud-images.ubuntu.com/releases/24.04/release", "image": "ubuntu-24.04-server-cloudimg-amd64.img", "sums": "SHA256SUMS", "algo": "sha256sum", "timeout": 60, "prove_timeout": 45}
+]

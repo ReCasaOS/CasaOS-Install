@@ -1,0 +1,145 @@
+name: raid-proof
+
+# Proof of the software RAID repair of a published release on a real machine: a RAID 1 made with mdadm on two blank virtual disks, its status through LocalStorage
+# (GET /v1/disks/raid), a failed disk, its removal, the refusals, a third disk added and rebuilt onto, the data on it, and a restart of the guest.
+#
+# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with three blank 64 MiB disks (virtio serials rp1, rp2
+# and rp3) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
+# calls LocalStorage through the gateway, prints PASS or FAIL for each check and fails the job on any FAIL.
+#
+#   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64
+# `tag` is the installer release under test (a pre-release when it is a candidate). It publishes nothing and changes nothing outside the guests. By hand only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The installer release to install, a tag of this repository (a pre-release when it is a candidate); empty for the latest published release
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: The legs of this run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: The legs this run proves
+        id: plan
+        run: |
+          set -euo pipefail
+          echo "matrix=$(jq -c '{include: .}' scripts/raid-proof-legs.json)" >>"${GITHUB_OUTPUT}"
+
+  vm:
+    name: ${{ matrix.leg }}, ${{ matrix.name }}, ${{ matrix.label }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      BASE: ${{ matrix.base }}
+      IMAGE: ${{ matrix.image }}
+      SUMS: ${{ matrix.sums }}
+      ALGO: ${{ matrix.algo }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Fetch the published installer
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG}" ]; then
+            TAG="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName --jq .tagName)"
+          fi
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: ${TAG}"; exit 1; }
+          PRE="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+          echo "installer release: ${TAG} (pre-release: ${PRE})" | tee -a "${GITHUB_STEP_SUMMARY}"
+          mkdir published
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh -p install.sh.sha256
+          (cd published && sha256sum --check install.sh.sha256)
+
+      - name: The distribution's cloud image
+        run: |
+          set -euo pipefail
+          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
+          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+
+      - name: Boot it, with three blank disks
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            [ "${attempt}" -lt 3 ] || exit 1
+            echo "apt stalled or failed (try ${attempt}), again"
+            sudo dpkg --configure -a || true
+          done
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ssh-keygen -q -t ed25519 -N '' -f vm_key
+          cat > user-data <<EOF
+          #cloud-config
+          users:
+            - name: casa
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          EOF
+          cloud-localds seed.img user-data
+          qemu-img resize disk.img 30G
+          # the disks of the RAID: the guest finds them by their serials (/dev/disk/by-id/virtio-rp1...), not by the order of the kernel's names
+          for n in 1 2 3; do qemu-img create -q -f qcow2 "raid${n}.qcow2" 64M; done
+          cat > ssh_config <<EOF
+          Host vm
+            HostName 127.0.0.1
+            Port 2222
+            User casa
+            IdentityFile ${PWD}/vm_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
+          EOF
+          qemu-system-x86_64 -enable-kvm -cpu host -m 4096 -smp 2 -display none -daemonize \
+            -drive file=disk.img,if=virtio,format=qcow2 \
+            -drive file=seed.img,if=virtio,format=raw \
+            -drive file=raid1.qcow2,if=none,id=rp1,format=qcow2 -device virtio-blk-pci,drive=rp1,serial=rp1 \
+            -drive file=raid2.qcow2,if=none,id=rp2,format=qcow2 -device virtio-blk-pci,drive=rp2,serial=rp2 \
+            -drive file=raid3.qcow2,if=none,id=rp3,format=qcow2 -device virtio-blk-pci,drive=rp3,serial=rp3 \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8080-:80 -device virtio-net-pci,netdev=n0 \
+            -serial file:serial.log
+          for _ in $(seq 1 90); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm true 2>/dev/null && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; lsblk -d -o NAME,SIZE,SERIAL'
+
+      - name: Prove it
+        timeout-minutes: ${{ matrix.prove_timeout }}
+        run: |
+          set -euo pipefail
+          INSTALL_SH=published/install.sh SSH_CONFIG=ssh_config GW_PORT=8080 bash scripts/raid-proof.sh
+
+      - name: What the machine says when it is not well
+        if: failure()
+        run: |
+          ssh -F ssh_config vm 'sudo tail -n 40 install.log; cat /proc/mdstat; sudo journalctl -b -u casaos-local-storage.service --no-pager | tail -n 80' || true
+          tail -30 serial.log || true
