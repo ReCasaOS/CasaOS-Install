@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.53
+
+**Software RAID arrays**: their state in the Storage manager and on the home page, an alert when one loses a disk, and their repair (add a blank disk, take a failed one out) without the command line.
+
 ## What is in v0.5.52
 
 **Files has a trash**: what you delete stays thirty days and can be put back where it was. And the home page fits a phone's screen.
