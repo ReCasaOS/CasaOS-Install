@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.52] - 2026-10-27
+
+Components: CasaOS `v0.4.85`, CasaOS-UI `v0.4.104`. Unchanged from v0.5.51: CasaOS-AppManagement `v0.4.72`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-LocalStorage `v0.4.45`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **A trash in Files.** Deleting moves items to the trash of their disk, where they stay thirty days. Restore puts an item back where it was: if the name is taken it comes back as "photo (restored).jpg", and if its folder is gone the folder is made again. The trash can also delete an item for good or empty itself. The confirmation has a box to delete permanently instead. A read-only or network disk has no trash: the dashboard names those items and offers to delete them permanently. The trash uses the freedesktop.org layout (`.Trash-0` at the root of each disk), so Linux file managers see the same one. Under `[file] ManagementRoots`, it shows and restores only what was below a root ([ReCasaOS/CasaOS#58](https://github.com/ReCasaOS/CasaOS/pull/58), [ReCasaOS/CasaOS-UI#59](https://github.com/ReCasaOS/CasaOS-UI/pull/59)).
+
+### Fixed
+
+- On a phone, the home page fits the screen's width instead of running past its right edge, and the sidebar slides in and out properly ([ReCasaOS/CasaOS-UI#58](https://github.com/ReCasaOS/CasaOS-UI/pull/58)).
+
 ## [0.5.51] - 2026-10-25
 
 Components: CasaOS-UI `v0.4.103`. Unchanged from v0.5.50: CasaOS `v0.4.84`, CasaOS-AppManagement `v0.4.72`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-LocalStorage `v0.4.45`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
