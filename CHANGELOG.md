@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.54] - 2026-10-28
+
+Components: CasaOS-AppManagement `v0.4.73`, CasaOS-UI `v0.4.106`. Unchanged from v0.5.53: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+The RAID proof (`raid-proof`) passed on v0.5.53 on Debian 12 and Ubuntu 24.04, 13 checks of 13 on each. It made a real mdadm RAID 1 on virtual disks, failed a disk, took it out and added a new disk through the API, and checked the refusals. The array rebuilt, and survived a restart with its data intact. This release adds the fixes below and is published as a pre-release until its install check is green.
+
+### Added
+
+- **A git app deploys the compose file and the profiles its `.env` names**, as `docker compose` reads them. `COMPOSE_FILE=docker-compose.prod.yml` chooses the file, or files, to deploy. `COMPOSE_PROFILES=engine` turns profiles on, for the build as well as the start. Before, a git app deployed only `compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml`, and never built a service behind a profile. The deploy dialog says so ([ReCasaOS/CasaOS-AppManagement#21](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/21), [ReCasaOS/CasaOS-UI#62](https://github.com/ReCasaOS/CasaOS-UI/pull/62)).
+
+### Fixed
+
+- **A compose file pasted at install time now uses a variable's default or message when nothing sets the variable.** `${FILES:-4}` was "$FILES", so a number written that way (replicas, a port) failed to load, and `${PASSWORD:?message}` never showed its message ([ReCasaOS/CasaOS-AppManagement#20](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/20)).
+
 ## [0.5.53] - 2026-10-27
 
 Components: CasaOS-LocalStorage `v0.4.46`, CasaOS `v0.4.86`, CasaOS-UI `v0.4.105`. Unchanged from v0.5.52: CasaOS-AppManagement `v0.4.72`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
