@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.57] - 2026-10-28
+
+Components: CasaOS-AppManagement `v0.4.77`, CasaOS-UI `v0.4.110`. Unchanged from v0.5.56: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Fixed
+
+- **The .env tab, the Compose tab and the .env box of a git app saved the browser's own event instead of the text.** Applying a `.env` failed with `unexpected character "{" in variable name "{\"isTrusted\":true,...}"`, and the Compose tab would have saved that event as the compose file. Since the move to Vue 3, the code editors passed the parent the `input` event of their hidden text area besides the text ([ReCasaOS/CasaOS-UI#67](https://github.com/ReCasaOS/CasaOS-UI/pull/67)).
+- **A service behind a profile that is off stays in the app's file.** The file written for an app installed with its `.env` had only the services of the profiles the `.env` turned on, so turning one on later (Watchtower, a proxy) brought nothing back, and the Compose tab did not show an engine behind a profile: the first save, App Store update or image refresh took it out of the app. The file now keeps every service with its profiles, and the `COMPOSE_PROFILES` of the `.env` decides what runs, as with docker compose. The port check of a save skips a service whose profile is off. An app installed before this release has to be installed again once to get the services that were left out ([ReCasaOS/CasaOS-AppManagement#26](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/26)).
+- **The image of a service that has `build:` and `image:` is pulled when it is not on the box, and a private registry's login is seen.** A compose file installed as a custom app, written for a CI that pushes the images, ended with `No such image`: a pull never fetched a service that has a build section. And the pull read the registry login from `/config.json`, never from `~/.docker/config.json` where `docker login` writes it. Both are fixed; an image that is already on the box is not replaced ([ReCasaOS/CasaOS-AppManagement#25](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/25)).
+- **The web UI port can be changed again from the settings.** The panel sent the port as a number, and the gateway reads it as text: the change was refused with `Unmarshal type error: expected=string, got=number` ([ReCasaOS/CasaOS-UI#65](https://github.com/ReCasaOS/CasaOS-UI/pull/65)).
+- **`${HOME}` in a compose file is the user's home when the service has none.** A service started by systemd has no `HOME`, so a volume such as `${HOME}/.docker/config.json` (the usual Watchtower one) was taken for the name of a volume, and the install failed with `refers to undefined volume $HOME/...`. A volume path that starts with a variable the `.env` does not define now says which variable has no value ([ReCasaOS/CasaOS-AppManagement#24](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/24)).
+- **The help under Install as written says what the form really does** to a compose: it rewrites the ports, the commands and the volumes, and adds limits. It does not drop `depends_on` or `healthcheck`, as v0.5.55 said ([ReCasaOS/CasaOS-UI#66](https://github.com/ReCasaOS/CasaOS-UI/pull/66)).
+
 ## [0.5.56] - 2026-10-28
 
 Components: CasaOS-AppManagement `v0.4.75`, CasaOS-UI `v0.4.108`. Unchanged from v0.5.55: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
@@ -21,7 +34,7 @@ Components: CasaOS-AppManagement `v0.4.74`, CasaOS-UI `v0.4.107`. Unchanged from
 ### Added
 
 - **A customized app is installed together with its `.env`.** The Import window takes the app's `.env` next to the compose, pasted or dropped as a file. The compose is checked with its values, an `env_file: .env` included, and the `.env` is written next to the app's `docker-compose.yml`, readable by root only. A `${KEY}` of the compose stays as written, so the `.env` remains editable afterwards from the app's settings. A key CasaOS sets itself (`TZ`, `PUID`, `PGID`, `AppID`) is refused with its name ([ReCasaOS/CasaOS-AppManagement#22](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/22)).
-- **Install as written.** The Import window can send the compose, and its `.env`, straight to the install. The form keeps only part of each service and drops `depends_on`, `healthcheck`, `deploy`, `profiles` and `env_file`, so a stack written for docker compose could not be installed through it. A compose without a name asks for one, and nothing else of the text changes, anchors included ([ReCasaOS/CasaOS-UI#63](https://github.com/ReCasaOS/CasaOS-UI/pull/63)).
+- **Install as written.** The Import window can send the compose, and its `.env`, straight to the install. The form rewrites the ports, the commands and the volumes of every service and adds limits, so a stack written for docker compose could not be installed through it: a port with a variable such as `${HTTP:-127.0.0.1:8080}:80` and a shell-form command come out broken. (This entry first said the form dropped `depends_on`, `healthcheck`, `deploy`, `profiles` and `env_file`. It keeps them.) A compose without a name asks for one, and nothing else of the text changes, anchors included ([ReCasaOS/CasaOS-UI#63](https://github.com/ReCasaOS/CasaOS-UI/pull/63)).
 
 ## [0.5.54] - 2026-10-28
 
