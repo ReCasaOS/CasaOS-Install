@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.55] - 2026-10-28
+
+Components: CasaOS-AppManagement `v0.4.74`, CasaOS-UI `v0.4.107`. Unchanged from v0.5.54: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **A customized app is installed together with its `.env`.** The Import window takes the app's `.env` next to the compose, pasted or dropped as a file. The compose is checked with its values, an `env_file: .env` included, and the `.env` is written next to the app's `docker-compose.yml`, readable by root only. A `${KEY}` of the compose stays as written, so the `.env` remains editable afterwards from the app's settings. A key CasaOS sets itself (`TZ`, `PUID`, `PGID`, `AppID`) is refused with its name ([ReCasaOS/CasaOS-AppManagement#22](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/22)).
+- **Install as written.** The Import window can send the compose, and its `.env`, straight to the install. The form keeps only part of each service and drops `depends_on`, `healthcheck`, `deploy`, `profiles` and `env_file`, so a stack written for docker compose could not be installed through it. A compose without a name asks for one, and nothing else of the text changes, anchors included ([ReCasaOS/CasaOS-UI#63](https://github.com/ReCasaOS/CasaOS-UI/pull/63)).
+
 ## [0.5.54] - 2026-10-28
 
 Components: CasaOS-AppManagement `v0.4.73`, CasaOS-UI `v0.4.106`. Unchanged from v0.5.53: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
