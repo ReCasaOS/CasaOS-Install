@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.56
+
+**An app installed with its `.env` gets the profiles `COMPOSE_PROFILES` names**, and the custom app form reads services that share their settings through a YAML anchor.
+
 ## What is in v0.5.55
 
 **A customized app is installed together with its `.env`**, and the Import window can install a compose as written, without the form that kept only part of each service.

@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.56] - 2026-10-28
+
+Components: CasaOS-AppManagement `v0.4.75`, CasaOS-UI `v0.4.108`. Unchanged from v0.5.55: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **`COMPOSE_PROFILES` in the `.env` installed with an app turns its profiles on**, as docker compose reads it. Before, every service behind a profile was left out of the app, and nothing in its `.env` could bring it back. A service of a profile it names is now installed and runs. A service of another profile (a reverse proxy, an updater) is still left out ([ReCasaOS/CasaOS-AppManagement#23](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/23)).
+
+### Fixed
+
+- **The custom app form takes what a service shares through a YAML anchor** (`<<: *php`). Such services reached the form with no image, environment or volumes ([ReCasaOS/CasaOS-UI#64](https://github.com/ReCasaOS/CasaOS-UI/pull/64)).
+
 ## [0.5.55] - 2026-10-28
 
 Components: CasaOS-AppManagement `v0.4.74`, CasaOS-UI `v0.4.107`. Unchanged from v0.5.54: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
