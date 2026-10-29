@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.58
+
+**Modules are offered on a derivative of Debian or Ubuntu** such as Linux Mint 22.2: the box is read as the Debian or Ubuntu release it is built on, by a codename the core knows, and the plan says both. An unknown codename is still refused.
+
 ## What is in v0.5.57
 
 **The code editors save the text again** (the `.env` and Compose tabs), **a service behind a profile stays in its app**, the images of a stack that has `build:` and `image:` are pulled with your registry login, the web UI port can be changed, and `${HOME}` works in a compose file.
