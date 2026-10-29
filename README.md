@@ -126,7 +126,7 @@ Any one of these; an upgrade never turns them back on.
 
 ## What is in v0.5.58
 
-**Modules are offered on a derivative of Debian or Ubuntu** such as Linux Mint 22.2: the box is read as the Debian or Ubuntu release it is built on, by a codename the core knows, and the plan says both. An unknown codename is still refused.
+**Modules are offered on a derivative of Debian or Ubuntu** such as Linux Mint 22.2: the box is read as the Debian or Ubuntu release it is built on, by a codename the core knows, and the plan says both. An unknown codename is still refused. **The processor's temperature shows on a box with no thermal zone**, on Intel and on AMD.
 
 ## What is in v0.5.57
 
