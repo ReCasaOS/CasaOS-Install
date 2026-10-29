@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.58] - 2026-10-29
+
+Components: CasaOS `v0.4.88`, CasaOS-UI `v0.4.111`. Unchanged from v0.5.57: CasaOS-AppManagement `v0.4.77`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A derivative of Debian or Ubuntu is no longer refused every module.** On Linux Mint 22.2, where ReCasaOS installs, `casaos module list` said `os` for `virt`: the module check read `ID=linuxmint` and nothing else, while the installer already reads `ID_LIKE`. A box whose `ID_LIKE` names `ubuntu` or `debian` is now read as the release it is built on when its os-release gives a codename the core knows, from one fixed table (`jammy`, `noble`, `resolute` for Ubuntu 22.04, 24.04, 26.04; `bookworm`, `trixie` for Debian 12, 13). The derivative's own version is never taken for a release, and an unknown codename, none, or a codename under the other distribution's key is still refused with `os`. The `os` check of the plan says both, `ubuntu:24.04 (linuxmint:22.2, UBUNTU_CODENAME=noble)`, and the Modules page shows it. The proofs of the modules run on Debian and Ubuntu only, never on a derivative ([ReCasaOS/CasaOS#60](https://github.com/ReCasaOS/CasaOS/pull/60) and [ReCasaOS/CasaOS-UI#68](https://github.com/ReCasaOS/CasaOS-UI/pull/68), by @Vinz2168; closes [ReCasaOS/CasaOS#56](https://github.com/ReCasaOS/CasaOS/issues/56)).
+- **The processor's temperature shows on a box with no thermal zone.** The dashboard read the fixed path `/sys/class/hwmon/hwmon0/temp1_input`, and on a laptop `hwmon0` is the charger, so Intel's `coretemp` (`hwmon2` there, which lists only its cores) was never read and the temperature was 0. The chip is now found by its name, `coretemp` for Intel, `k10temp` and `zenpower` for AMD, with `temp1` when it has one and the hottest core otherwise, before the thermal zones. A board with none of these chips (an ARM board) reads what it read. The power in watts is still read from `intel-rapl` only ([ReCasaOS/CasaOS#61](https://github.com/ReCasaOS/CasaOS/pull/61)).
+
 ## [0.5.57] - 2026-10-28
 
 Components: CasaOS-AppManagement `v0.4.77`, CasaOS-UI `v0.4.110`. Unchanged from v0.5.56: CasaOS `v0.4.86`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
