@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.61
+
+**`mdadm` is installed for you, for real this time**: v0.5.60 claimed to do it and failed with `Shell Injection Detected` on a real box.
+
 ## What is in v0.5.60
 
 **`mdadm` is installed for you** when you make or repair a RAID array on a box that lacks it, instead of asking you to run `apt` yourself.

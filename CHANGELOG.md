@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.61] - 2026-10-30
+
+Components: CasaOS-LocalStorage `v0.4.49`. Unchanged from v0.5.60: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, CasaOS-UI `v0.4.112`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Fixed
+
+- **`mdadm` is now really installed when a RAID array is made or repaired on a box that lacks it.** v0.5.60 said it did, and on a real box it answered `mdadm is not installed and could not be installed (sudo apt install mdadm): Shell Injection Detected`. The command was run through a helper whose shell-injection check reads `DEBIAN_FRONTEND=noninteractive`, passed as an argument, as a shell assignment and refuses it. `apt-get` is now started directly, with that variable in its environment, and the end of apt's own words goes into the error if it fails. The v0.5.60 line below stands for what it was meant to do, not for what it did ([ReCasaOS/CasaOS-LocalStorage#14](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/14)).
+- Nothing was erased by the failed installation: it comes after every check of the request and before the first drive is wiped.
+
+### Proof
+
+Why it was not caught: the tests simulated the command, and the RAID proof installed `mdadm` by hand before it started. The proof now lets the product make its array first, on a guest that has no `mdadm` yet, and checks that the refusals install nothing and that the creation leaves `mdadm` on the guest ([ReCasaOS/CasaOS-Install#65](https://github.com/ReCasaOS/CasaOS-Install/pull/65)). On an image that already has `mdadm` (Ubuntu's, probably) those two checks are skipped and the log says so. Its result on this release is added here.
+
 ## [0.5.60] - 2026-10-30
 
 Components: CasaOS-LocalStorage `v0.4.48`. Unchanged from v0.5.59: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, CasaOS-UI `v0.4.112`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
