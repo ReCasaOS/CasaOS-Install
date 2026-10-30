@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.62] - 2026-10-30
+
+Components: CasaOS-LocalStorage `v0.4.50`, CasaOS-UI `v0.4.113`. Unchanged from v0.5.61: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **A RAID 0 can be made from Create RAID, from 2 drives.** It has no protection: one failed drive loses everything on the storage. So the window asks for a box to be ticked saying so (it is forgotten when the level changes), the estimate says that one failed drive loses everything, and the call carries `accept_data_loss`. Without it the API answers 400 before any drive is looked at or wiped. It suits data that can be made again (a cache, a scratch folder). It is the last level in the list, so the window still opens on RAID 1, and the status line of a RAID 0 carries a "No protection" tag. `linear` stays refused ([ReCasaOS/CasaOS-LocalStorage#15](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/15), [ReCasaOS/CasaOS-UI#72](https://github.com/ReCasaOS/CasaOS-UI/pull/72)).
+
+### Proof
+
+Creating a RAID 0 is tested with a simulated `mdadm`. The RAID proof (`raid-proof`, dispatch only) now has a RAID 0 leg: the product refuses it without the consent and wipes nothing, makes it with the consent, mounts it under `/media/Fast`, and after a restart of the guest the array is assembled again with its file intact ([ReCasaOS/CasaOS-Install#67](https://github.com/ReCasaOS/CasaOS-Install/pull/67)). Its result on this release is added here.
+
 ## [0.5.61] - 2026-10-30
 
 Components: CasaOS-LocalStorage `v0.4.49`. Unchanged from v0.5.60: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, CasaOS-UI `v0.4.112`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
