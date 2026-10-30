@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Proof of the software RAID repair of ReCasaOS on a real machine. A RAID 1 is made with mdadm on two blank virtio disks (test scaffolding, not something the
+# Proof of the software RAID repair and creation of ReCasaOS on a real machine. A RAID 1 is made with mdadm on two blank virtio disks (test scaffolding, not something the
 # product does), and LocalStorage is checked against it: its status (GET /v1/disks/raid), a failed disk, its removal (DELETE /v1/disks/raid/md0/disks/<member>),
-# the refusals, a third disk added (POST /v1/disks/raid/md0/disks) and rebuilt onto, the data on the array, and a restart of the guest.
+# the refusals, a third disk added (POST /v1/disks/raid/md0/disks) and rebuilt onto, the data on the array, then a second array MADE BY THE PRODUCT (POST /v1/disks/raid)
+# from two other blank disks, its refusals, its filesystem and mount, and a restart of the guest after which both arrays and their data must be back.
 #
 # It runs ON THE CI RUNNER (raid-proof.yml boots the guest), like stats-proof.sh: it drives the guest over ssh and calls LocalStorage through the gateway (QEMU
 # forwards the runner's GW_PORT to the guest's port 80) with the token of a user of the box's own. The same file is copied to the guest, where
@@ -9,9 +10,9 @@
 # status 1 when a check failed. Its own notes go to standard error, prefixed with #.
 #
 # Needs, on the runner: bash, curl, jq, ssh, scp, timeout. Environment: INSTALL_SH (published/install.sh, the published installer, named install.sh), SSH_CONFIG
-# (ssh_config, with a host named vm), GW_PORT (8080). The guest has three blank disks with the virtio serials rp1, rp2 and rp3.
+# (ssh_config, with a host named vm), GW_PORT (8080). The guest has five blank disks with the virtio serials rp1 to rp5.
 # shellcheck disable=SC2016
-# (the jq filters name their variables, $d1 $d2 $d3, in single quotes on purpose)
+# (the jq filters name their variables, $d1 to $d5, in single quotes on purpose)
 set -uo pipefail
 export LC_ALL=C
 
@@ -26,8 +27,8 @@ guest() {
         # apt's own timers would take dpkg's lock in the middle of the run
         systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service >/dev/null 2>&1 || true
         bash install.sh --no-telemetry >install.log 2>&1 || { tail -n 40 install.log; return 1; } ;;
-    disks) # the kernel's names of the three blank disks (by their serials), and of the disk that holds /
-        for s in rp1 rp2 rp3; do
+    disks) # the kernel's names of the five blank disks (by their serials), and of the disk that holds /
+        for s in rp1 rp2 rp3 rp4 rp5; do
             p="$(readlink -e "/dev/disk/by-id/virtio-${s}")" || return 1
             out="${out}${p#/dev/} "
         done
@@ -52,6 +53,17 @@ guest() {
         sync && echo 3 >/proc/sys/vm/drop_caches
         mountpoint -q /DATA/Mirror || { echo "/DATA/Mirror was not mounted at boot: mounting it" >&2; mount /DATA/Mirror; } || return 1
         sha256sum /DATA/Mirror/proof.bin | cut -d' ' -f1 ;;
+    blank) # blank <disk>...: none of them carries a signature (a refused call wiped nothing)
+        for s in "${@:2}"; do ! blkid -p "/dev/$s" >/dev/null 2>&1 || { echo "/dev/$s carries a signature: $(blkid -p "/dev/$s")" >&2; return 1; }; done ;;
+    made_write) # a file of random bytes on the storage the product made; prints its sha256
+        p="$(findmnt -rno TARGET | grep -m1 '^/media/Made')" || return 1
+        head -c 4M /dev/urandom >"${p}/proof.bin" && sync && sha256sum "${p}/proof.bin" | cut -d' ' -f1 ;;
+    made_mount) findmnt -rno SOURCE,FSTYPE,TARGET | grep -m1 ' /media/Made' ;;
+    made_sum) # the file's sha256, read from the disks; the product mounts its storages when it starts, so it is given 2 minutes to have done it
+        for s in $(seq 1 40); do p="$(findmnt -rno TARGET | grep -m1 '^/media/Made')" && break; sleep 3; done
+        [ -n "${p:-}" ] || return 1
+        sync && echo 3 >/proc/sys/vm/drop_caches
+        sha256sum "${p}/proof.bin" | cut -d' ' -f1 ;;
     boot_id) cat /proc/sys/kernel/random/boot_id ;;
     reboot) nohup sh -c 'sleep 2; systemctl reboot' >/dev/null 2>&1 </dev/null & echo scheduled ;;
     *) echo "unknown verb: $1" >&2; return 2 ;;
@@ -65,7 +77,9 @@ GW="http://127.0.0.1:${GW_PORT:-8080}"
 PROOF_USER=raidproof
 # the array is whole: two active members and nothing missing
 OK='.state == "ok" and .level == "raid1" and .disks == 2 and .missing == 0 and .component_size > 0 and (.members | length) == 2 and all(.members[]; .state == "active")'
-FAILS=0 TOKEN="" PASSWORD="" CODE=000 WORK="" D1="" D2="" D3="" SYS=""
+FAILS=0 TOKEN="" PASSWORD="" CODE=000 WORK="" D1="" D2="" D3="" D4="" D5="" SYS=""
+# the array raid() looks for: the one named PICK_NAME or holding PICK_DISK (the proof's mirror to begin with)
+PICK_DISK="" PICK_NAME=md0
 
 log() { printf '# %s\n' "$*" >&2; }
 pass() { echo "PASS $1"; }
@@ -97,16 +111,16 @@ api() {
 }
 body() { head -c 300 "${WORK}/body.json"; }
 
-# raid: GET /v1/disks/raid, and the proof's array into $WORK/md.json: md0, or the array that has disk1 as a member (with no mdadm.conf entry a restart names it md127)
+# raid: GET /v1/disks/raid, and the array looked for into $WORK/md.json: the one named PICK_NAME or having PICK_DISK as a member (with no mdadm.conf entry a restart names it md127)
 raid() {
     : >"${WORK}/md.json"
     api GET /v1/disks/raid
     [ "${CODE}" = 200 ] &&
-        jq -c --arg d1 "${D1}" '[.data[] | select(.name == "md0" or any(.members[]?; .disk == $d1))][0] // empty' "${WORK}/body.json" >"${WORK}/md.json" 2>/dev/null &&
+        jq -c --arg d "${PICK_DISK:-${D1}}" --arg n "${PICK_NAME}" '[.data[] | select(.name == $n or any(.members[]?; .disk == $d))][0] // empty' "${WORK}/body.json" >"${WORK}/md.json" 2>/dev/null &&
         [ -s "${WORK}/md.json" ]
 }
-# holds <jq test>: the test on the array, with the disks' names as $d1 $d2 $d3
-holds() { jq -e --arg d1 "${D1}" --arg d2 "${D2}" --arg d3 "${D3}" "$1" "${WORK}/md.json" >/dev/null 2>&1; }
+# holds <jq test>: the test on the array, with the disks' names as $d1 to $d5
+holds() { jq -e --arg d1 "${D1}" --arg d2 "${D2}" --arg d3 "${D3}" --arg d4 "${D4}" --arg d5 "${D5}" "$1" "${WORK}/md.json" >/dev/null 2>&1; }
 seen() {
     if [ -s "${WORK}/md.json" ]; then jq -c '{name, state, level, disks, missing, component_size, action, members}' "${WORK}/md.json"; else echo "GET /v1/disks/raid answered ${CODE}: $(body)"; fi
 }
@@ -137,11 +151,13 @@ refuse() {
     esac
 }
 add_body() { printf '{"path":"/dev/%s","confirm":"%s"}' "$1" "$2"; }
+# create_body <name> <level> <JSON list of disk paths> <confirm>
+create_body() { printf '{"name":"%s","level":"%s","disks":%s,"confirm":"%s"}' "$1" "$2" "$3" "$4"; }
 same_data() { local now; now="$(g sum)"; if [ "${now}" = "$2" ]; then pass "$1"; else fail "$1" "sha256 ${now:-none}, ${2} was written"; fi; }
 member_of() { jq -r --arg d "$1" '.members[]? | select(.disk == $d) | .name' "${WORK}/md.json" 2>/dev/null; }
 
 run() {
-    local key sum m1 m2 old id end
+    local key sum msum made now both m1 m2 old id end
     WORK="$(mktemp -d)"
     PASSWORD="Aa1-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
@@ -157,9 +173,9 @@ run() {
         -d "$(printf '{"username":"%s","password":"%s","key":"%s"}' "${PROOF_USER}" "${PASSWORD}" "${key}")" >/dev/null
     login || die login "the box's user could not log in"
 
-    read -r D1 D2 D3 SYS <<<"$(g disks)"
-    [ -n "${SYS}" ] || die disks "the blank disks (serials rp1 rp2 rp3) or the system disk were not found: '${D1} ${D2} ${D3}'"
-    log "disk1 ${D1}, disk2 ${D2}, disk3 ${D3}, the system disk ${SYS}"
+    read -r D1 D2 D3 D4 D5 SYS <<<"$(g disks)"
+    [ -n "${SYS}" ] || die disks "the blank disks (serials rp1 to rp5) or the system disk were not found: '${D1} ${D2} ${D3} ${D4} ${D5}'"
+    log "disk1 ${D1}, disk2 ${D2}, disk3 ${D3}, disk4 ${D4}, disk5 ${D5}, the system disk ${SYS}"
 
     log "1. a RAID 1 of ${D1} and ${D2}, ext4 on /DATA/Mirror, a file of known content"
     sum="$(LIMIT=900 g setup "${D1}" "${D2}" | tail -n 1)" && [ -n "${sum}" ] || die setup "the RAID 1 could not be made (mdadm's words are above)"
@@ -193,6 +209,25 @@ run() {
     log "7. the data"
     same_data data-after-rebuild "${sum}"
 
+    log "7b. a RAID 1 of ${D4} and ${D5}, made by the product; what it refuses first"
+    both="[\"/dev/${D4}\",\"/dev/${D5}\"]"
+    refuse refuse-create-wrong-confirm POST /v1/disks/raid "$(create_body Made raid1 "${both}" Mad)"
+    refuse refuse-create-raid0 POST /v1/disks/raid "$(create_body Made raid0 "${both}" Made)"
+    refuse refuse-create-too-few POST /v1/disks/raid "$(create_body Made raid5 "${both}" Made)"
+    refuse refuse-create-system-disk POST /v1/disks/raid "$(create_body Made raid1 "[\"/dev/${D4}\",\"/dev/${SYS}\"]" Made)"
+    refuse refuse-create-active-member POST /v1/disks/raid "$(create_body Made raid1 "[\"/dev/${D4}\",\"/dev/${D1}\"]" Made)"
+    refuse refuse-create-bad-name POST /v1/disks/raid "$(create_body 'Made;' raid1 "${both}" 'Made;')"
+    if g blank "${D4}" "${D5}" >&2; then pass refusals-wiped-nothing; else fail refusals-wiped-nothing "a refused call touched ${D4} or ${D5}"; fi
+    api POST /v1/disks/raid "$(create_body Made raid1 "${both}" Made)"
+    code_is create-array 200
+    PICK_DISK="${D4}" PICK_NAME=""
+    check created-array 120 '.level == "raid1" and .disks == 2 and .missing == 0 and (.state == "ok" or .state == "resyncing") and any(.members[]; .disk == $d4) and any(.members[]; .disk == $d5)'
+    if made="$(g made_mount)" && [[ "${made}" =~ ^/dev/md[0-9]+\ ext4\ /media/Made ]]; then pass created-array-mounted; else fail created-array-mounted "findmnt: '${made:-nothing}'"; fi
+    msum="$(g made_write)" && [ -n "${msum}" ] || fail created-array-written "no file could be written on /media/Made"
+    api GET /v1/storage
+    if [ "${CODE}" = 200 ] && jq -e '[.. | objects | select((.mount_point? // "") | tostring | startswith("/media/Made"))] | length > 0' "${WORK}/body.json" >/dev/null 2>&1; then pass created-array-listed; else fail created-array-listed "HTTP ${CODE}: $(body)"; fi
+    PICK_DISK="" PICK_NAME=md0
+
     log "8. the guest restarts"
     old="$(g boot_id)"
     [ -n "${old}" ] || die reboot "the guest gave no boot id"
@@ -203,10 +238,15 @@ run() {
         sleep 5
     done
     # the kernel may name the disks otherwise after a restart
-    read -r D1 D2 D3 SYS <<<"$(g disks)"
+    read -r D1 D2 D3 D4 D5 SYS <<<"$(g disks)"
     check reboot-assembled 300 "${OK}"' and any(.members[]; .disk == $d1) and any(.members[]; .disk == $d3)'
     [ "$(jq -r .name "${WORK}/md.json" 2>/dev/null)" = md0 ] || log "the array came back as $(jq -r .name "${WORK}/md.json" 2>/dev/null): accepted by its members"
     same_data data-after-reboot "${sum}"
+    # the storage the product made is assembled and mounted again by itself, with its file
+    PICK_DISK="${D4}" PICK_NAME=""
+    check made-reassembled 300 '.level == "raid1" and .disks == 2 and .missing == 0 and any(.members[]; .disk == $d4) and any(.members[]; .disk == $d5)'
+    now="$(g made_sum)"
+    if [ -n "${msum:-}" ] && [ "${now}" = "${msum}" ]; then pass made-data-after-reboot; else fail made-data-after-reboot "sha256 ${now:-none} (the storage was not mounted again within 2 minutes?), ${msum:-none} was written"; fi
 
     log "${FAILS} check(s) failed"
     [ "${FAILS}" -eq 0 ]

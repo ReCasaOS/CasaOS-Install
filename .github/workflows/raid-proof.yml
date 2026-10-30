@@ -3,7 +3,7 @@ name: raid-proof
 # Proof of the software RAID repair of a published release on a real machine: a RAID 1 made with mdadm on two blank virtual disks, its status through LocalStorage
 # (GET /v1/disks/raid), a failed disk, its removal, the refusals, a third disk added and rebuilt onto, the data on it, and a restart of the guest.
 #
-# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with three blank 64 MiB disks (virtio serials rp1, rp2
+# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with five blank 64 MiB disks (virtio serials rp1, rp2
 # and rp3) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
 # calls LocalStorage through the gateway, prints PASS or FAIL for each check and fails the job on any FAIL.
 #
@@ -105,7 +105,7 @@ jobs:
           cloud-localds seed.img user-data
           qemu-img resize disk.img 30G
           # the disks of the RAID: the guest finds them by their serials (/dev/disk/by-id/virtio-rp1...), not by the order of the kernel's names
-          for n in 1 2 3; do qemu-img create -q -f qcow2 "raid${n}.qcow2" 64M; done
+          for n in 1 2 3 4 5; do qemu-img create -q -f qcow2 "raid${n}.qcow2" 64M; done
           cat > ssh_config <<EOF
           Host vm
             HostName 127.0.0.1
@@ -125,6 +125,8 @@ jobs:
             -drive file=raid1.qcow2,if=none,id=rp1,format=qcow2 -device virtio-blk-pci,drive=rp1,serial=rp1 \
             -drive file=raid2.qcow2,if=none,id=rp2,format=qcow2 -device virtio-blk-pci,drive=rp2,serial=rp2 \
             -drive file=raid3.qcow2,if=none,id=rp3,format=qcow2 -device virtio-blk-pci,drive=rp3,serial=rp3 \
+            -drive file=raid4.qcow2,if=none,id=rp4,format=qcow2 -device virtio-blk-pci,drive=rp4,serial=rp4 \
+            -drive file=raid5.qcow2,if=none,id=rp5,format=qcow2 -device virtio-blk-pci,drive=rp5,serial=rp5 \
             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8080-:80 -device virtio-net-pci,netdev=n0 \
             -serial file:serial.log
           for _ in $(seq 1 90); do
