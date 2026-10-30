@@ -148,4 +148,6 @@ jobs:
         if: failure()
         run: |
           ssh -F ssh_config vm 'sudo tail -n 40 install.log; cat /proc/mdstat; sudo journalctl -b -u casaos-local-storage.service --no-pager | tail -n 80' || true
+          # the unit that mounts the storages again at boot, and what it left mounted
+          ssh -F ssh_config vm 'sudo systemctl status casaos-local-storage-first.service --no-pager -l | tail -n 25; sudo journalctl -b -u casaos-local-storage-first.service --no-pager | tail -n 60; lsblk -f; findmnt -rno SOURCE,TARGET | grep -E "/media|/DATA"' || true
           tail -30 serial.log || true
