@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.60] - 2026-10-30
+
+Components: CasaOS-LocalStorage `v0.4.48`. Unchanged from v0.5.59: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, CasaOS-UI `v0.4.112`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **`mdadm` is installed for you when a RAID array is made or repaired on a box that lacks it.** Before, the window answered `mdadm is not installed (sudo apt install mdadm)` and left you at the command line. Now `apt-get` installs it, without any question, after every check of the request and before the first drive is wiped, so a refused request installs nothing. If apt cannot (no network, dpkg locked, not Debian or Ubuntu), the answer is the same as before, now saying "and could not be installed", and no drive is touched. The repair window waits 60 seconds for its answer, the creation window 10 minutes: an installation slower than a minute shows a timeout in the repair window while it goes on ([ReCasaOS/CasaOS-LocalStorage#13](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/13)). The install itself is tested with a simulated `apt-get`; the RAID proof installs `mdadm` by hand before it starts, so it does not exercise this path.
+
 ## [0.5.59] - 2026-10-30
 
 Components: CasaOS-LocalStorage `v0.4.47`, CasaOS-UI `v0.4.112`. Unchanged from v0.5.58: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
