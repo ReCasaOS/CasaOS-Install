@@ -3,7 +3,8 @@
 # product does), and LocalStorage is checked against it: its status (GET /v1/disks/raid), a failed disk, its removal (DELETE /v1/disks/raid/md1/disks/<member>),
 # the refusals, a third disk added (POST /v1/disks/raid/md1/disks) and rebuilt onto, the data on the array, then a second array MADE BY THE PRODUCT (POST /v1/disks/raid)
 # from two other blank disks, its refusals, its filesystem and mount, a RAID 0 made the same way from two more (refused without the consent that one failed disk loses
-# everything on it), and a restart of the guest after which all three arrays and their data must be back.
+# everything on it), a RAID 1 made the same way and CHANGED TO A RAID 5 with a third disk (POST /v1/disks/raid/<name>/level), its refusals, then the filesystem
+# grown into the room (POST /v1/disks/raid/<name>/filesystem), and a restart of the guest after which all four arrays and their data must be back.
 #
 # It runs ON THE CI RUNNER (raid-proof.yml boots the guest), like stats-proof.sh: it drives the guest over ssh and calls LocalStorage through the gateway (QEMU
 # forwards the runner's GW_PORT to the guest's port 80) with the token of a user of the box's own. The same file is copied to the guest, where
@@ -11,9 +12,9 @@
 # status 1 when a check failed. Its own notes go to standard error, prefixed with #.
 #
 # Needs, on the runner: bash, curl, jq, ssh, scp, timeout. Environment: INSTALL_SH (published/install.sh, the published installer, named install.sh), SSH_CONFIG
-# (ssh_config, with a host named vm), GW_PORT (8080). The guest has seven blank disks with the virtio serials rp1 to rp7.
+# (ssh_config, with a host named vm), GW_PORT (8080). The guest has ten blank disks with the virtio serials rp1 to rp10.
 # shellcheck disable=SC2016
-# (the jq filters name their variables, $d1 to $d7, in single quotes on purpose)
+# (the jq filters name their variables, $d1 to $d10, in single quotes on purpose)
 set -uo pipefail
 export LC_ALL=C
 
@@ -28,8 +29,8 @@ guest() {
         # apt's own timers would take dpkg's lock in the middle of the run
         systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service >/dev/null 2>&1 || true
         bash install.sh --no-telemetry >install.log 2>&1 || { tail -n 40 install.log; return 1; } ;;
-    disks) # the kernel's names of the seven blank disks (by their serials), and of the disk that holds /
-        for s in rp1 rp2 rp3 rp4 rp5 rp6 rp7; do
+    disks) # the kernel's names of the ten blank disks (by their serials), and of the disk that holds /
+        for s in rp1 rp2 rp3 rp4 rp5 rp6 rp7 rp8 rp9 rp10; do
             p="$(readlink -e "/dev/disk/by-id/virtio-${s}")" || return 1
             out="${out}${p#/dev/} "
         done
@@ -61,6 +62,13 @@ guest() {
         p="$(findmnt -rno TARGET | grep -m1 "^/media/$2")" || return 1
         head -c 4M /dev/urandom >"${p}/proof.bin" && sync && sha256sum "${p}/proof.bin" | cut -d' ' -f1 ;;
     made_mount) findmnt -rno SOURCE,FSTYPE,TARGET | grep -m1 " /media/$2" ;;
+    made_size) # made_size <storage>: the bytes its filesystem holds
+        p="$(findmnt -rno TARGET | grep -m1 "^/media/$2")" || return 1
+        df -B1 --output=size "${p}" | tail -n 1 | tr -d ' ' ;;
+    bitmap) # bitmap <md>: what mdadm gives a big array by itself and a small one never gets; the product has to take it off before a reshape. Prints where the bitmap is
+        mdadm --grow "/dev/$2" --bitmap=internal >&2 || return 1
+        cat "/sys/block/$2/md/bitmap/location" ;;
+    backups) find /var/lib/casaos /etc/casaos -name 'raid-*.backup' 2>/dev/null ;; # the copies mdadm keeps during a reshape, which are not wanted afterwards
     made_sum) # made_sum <storage>: the file's sha256, read from the disks; the product mounts its storages when it starts, so it is given 2 minutes to have done it
         for s in $(seq 1 40); do p="$(findmnt -rno TARGET | grep -m1 "^/media/$2")" && break; sleep 3; done
         [ -n "${p:-}" ] || return 1
@@ -79,7 +87,7 @@ GW="http://127.0.0.1:${GW_PORT:-8080}"
 PROOF_USER=raidproof
 # the array is whole: two active members and nothing missing
 OK='.state == "ok" and .level == "raid1" and .disks == 2 and .missing == 0 and .component_size > 0 and (.members | length) == 2 and all(.members[]; .state == "active")'
-FAILS=0 TOKEN="" PASSWORD="" CODE=000 WORK="" D1="" D2="" D3="" D4="" D5="" D6="" D7="" SYS=""
+FAILS=0 TOKEN="" PASSWORD="" CODE=000 WORK="" D1="" D2="" D3="" D4="" D5="" D6="" D7="" D8="" D9="" D10="" SYS=""
 # the array raid() looks for: the one that has PICK_DISK as a member (the proof's mirror, which has disk1, to begin with)
 PICK_DISK=""
 
@@ -121,10 +129,12 @@ raid() {
         jq -c --arg d "${PICK_DISK:-${D1}}" '[.data[] | select(any(.members[]?; .disk == $d))][0] // empty' "${WORK}/body.json" >"${WORK}/md.json" 2>/dev/null &&
         [ -s "${WORK}/md.json" ]
 }
-# holds <jq test>: the test on the array, with the disks' names as $d1 to $d7
-holds() { jq -e --arg d1 "${D1}" --arg d2 "${D2}" --arg d3 "${D3}" --arg d4 "${D4}" --arg d5 "${D5}" --arg d6 "${D6}" --arg d7 "${D7}" "$1" "${WORK}/md.json" >/dev/null 2>&1; }
+# holds <jq test>: the test on the array, with the disks' names as $d1 to $d10
+holds() {
+    jq -e --arg d1 "${D1}" --arg d2 "${D2}" --arg d3 "${D3}" --arg d4 "${D4}" --arg d5 "${D5}" --arg d6 "${D6}" --arg d7 "${D7}" --arg d8 "${D8}" --arg d9 "${D9}" --arg d10 "${D10}" "$1" "${WORK}/md.json" >/dev/null 2>&1
+}
 seen() {
-    if [ -s "${WORK}/md.json" ]; then jq -c '{name, state, level, disks, missing, component_size, action, members}' "${WORK}/md.json"; else echo "GET /v1/disks/raid answered ${CODE}: $(body)"; fi
+    if [ -s "${WORK}/md.json" ]; then jq -c '{name, state, level, disks, missing, component_size, size, bitmap, action, members}' "${WORK}/md.json"; else echo "GET /v1/disks/raid answered ${CODE}: $(body)"; fi
 }
 
 # check <check> <seconds> <jq test>: GET every 3 s until the array passes the test (PASS), or the time is out (FAIL, with what was seen last)
@@ -159,7 +169,7 @@ same_data() { local now; now="$(g sum)"; if [ "${now}" = "$2" ]; then pass "$1";
 member_of() { jq -r --arg d "$1" '.members[]? | select(.disk == $d) | .name' "${WORK}/md.json" 2>/dev/null; }
 
 run() {
-    local key sum msum fsum made fast now both pair had m1 m2 old id end
+    local key sum msum fsum gsum made fast now both pair two had m1 m2 old id end fastname gname bitmapped size_before size_after fs_before fs_after
     WORK="$(mktemp -d)"
     PASSWORD="Aa1-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
@@ -175,9 +185,9 @@ run() {
         -d "$(printf '{"username":"%s","password":"%s","key":"%s"}' "${PROOF_USER}" "${PASSWORD}" "${key}")" >/dev/null
     login || die login "the box's user could not log in"
 
-    read -r D1 D2 D3 D4 D5 D6 D7 SYS <<<"$(g disks)"
-    [ -n "${SYS}" ] || die disks "the blank disks (serials rp1 to rp7) or the system disk were not found: '${D1} ${D2} ${D3} ${D4} ${D5} ${D6} ${D7}'"
-    log "disk1 ${D1}, disk2 ${D2}, disk3 ${D3}, disk4 ${D4}, disk5 ${D5}, disk6 ${D6}, disk7 ${D7}, the system disk ${SYS}"
+    read -r D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 SYS <<<"$(g disks)"
+    [ -n "${SYS}" ] || die disks "the blank disks (serials rp1 to rp10) or the system disk were not found: '${D1} ${D2} ${D3} ${D4} ${D5} ${D6} ${D7} ${D8} ${D9} ${D10}'"
+    log "disk1 ${D1}, disk2 ${D2}, disk3 ${D3}, disk4 ${D4}, disk5 ${D5}, disk6 ${D6}, disk7 ${D7}, disk8 ${D8}, disk9 ${D9}, disk10 ${D10}, the system disk ${SYS}"
 
     log "0. a RAID 1 of ${D4} and ${D5}, made by the product before anything installs mdadm; what it refuses first"
     if g has_mdadm >/dev/null 2>&1; then had=1; log "mdadm is already on this image: the product's installation of it is not exercised on this leg"; else had=0; fi
@@ -243,8 +253,59 @@ run() {
     code_is create-raid0 200
     PICK_DISK="${D6}"
     check created-raid0 120 '.level == "raid0" and .disks == 2 and .missing == 0 and .state == "ok" and any(.members[]; .disk == $d6) and any(.members[]; .disk == $d7)'
+    fastname="$(jq -r .name "${WORK}/md.json" 2>/dev/null)"
     if fast="$(g made_mount Fast)" && [[ "${fast}" =~ ^/dev/md[0-9]+\ ext4\ /media/Fast ]]; then pass created-raid0-mounted; else fail created-raid0-mounted "findmnt: '${fast:-nothing}'"; fi
     fsum="$(g made_write Fast)" && [ -n "${fsum}" ] || fail created-raid0-written "no file could be written on /media/Fast"
+    PICK_DISK=""
+
+    log "7c. a RAID 1 of ${D8} and ${D9}, made by the product, changed to a RAID 5 with ${D10}, then its filesystem grown into the room"
+    two="[\"/dev/${D8}\",\"/dev/${D9}\"]"
+    api POST /v1/disks/raid "$(create_body Grown raid1 "${two}" Grown)"
+    code_is create-mirror-to-change 200
+    PICK_DISK="${D8}"
+    check mirror-to-change-whole 180 '.level == "raid1" and .disks == 2 and .missing == 0 and .state == "ok" and .action == "idle" and any(.members[]; .disk == $d8) and any(.members[]; .disk == $d9)'
+    gname="$(jq -r .name "${WORK}/md.json" 2>/dev/null)"
+    gsum="$(g made_write Grown)" && [ -n "${gsum}" ] || fail mirror-to-change-written "no file could be written on /media/Grown"
+    fs_before="$(g made_size Grown)"
+    size_before="$(jq -r .size "${WORK}/md.json" 2>/dev/null)"
+    # mdadm gives no bitmap to an array this small, and a reshape refuses one: it is added by hand, as an administrator would have it on a big array, for the product to take off
+    bitmapped=0
+    if g bitmap "${gname}" >&2; then
+        bitmapped=1
+        check mirror-bitmap-seen 30 '.bitmap == true'
+    else
+        log "the bitmap could not be added to ${gname}: the removal of a bitmap is not exercised on this leg"
+    fi
+
+    log "7c. what must be refused, leaving the mirror and the disks as they were"
+    refuse refuse-level-wrong-confirm POST "/v1/disks/raid/${gname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"not-%s"}' "${D10}" "${D10}")"
+    refuse refuse-level-raid6 POST "/v1/disks/raid/${gname}/level" "$(printf '{"level":"raid6","path":"/dev/%s","confirm":"%s"}' "${D10}" "${D10}")"
+    refuse refuse-level-system-disk POST "/v1/disks/raid/${gname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${SYS}" "${SYS}")"
+    refuse refuse-level-active-member POST "/v1/disks/raid/${gname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${D8}" "${D8}")"
+    refuse refuse-level-disk-in-use POST "/v1/disks/raid/${gname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${D3}" "${D3}")"
+    refuse refuse-level-unknown-array POST /v1/disks/raid/md99/level "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${D10}" "${D10}")"
+    PICK_DISK="${D6}" # a RAID 0 is not a mirror: the array looked at here is the RAID 0
+    refuse refuse-level-not-a-mirror POST "/v1/disks/raid/${fastname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${D10}" "${D10}")"
+    PICK_DISK="${D8}"
+    if g blank "${D10}" >&2; then pass level-refusals-wiped-nothing; else fail level-refusals-wiped-nothing "a refused call touched ${D10}"; fi
+
+    log "7c. the change, then the filesystem"
+    api POST "/v1/disks/raid/${gname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${D10}" "${D10}")"
+    code_is change-to-raid5 200
+    check changed-to-raid5 600 '.level == "raid5" and .disks == 3 and .missing == 0 and .state == "ok" and .action == "idle" and (.members | length) == 3 and any(.members[]; .disk == $d8) and any(.members[]; .disk == $d9) and any(.members[]; .disk == $d10)'
+    if [ "${bitmapped}" = 1 ]; then check bitmap-taken-off 30 '.bitmap == false'; fi
+    now="$(g made_sum Grown)"
+    if [ -n "${gsum:-}" ] && [ "${now}" = "${gsum}" ]; then pass grown-data-after-change; else fail grown-data-after-change "sha256 ${now:-none}, ${gsum:-none} was written"; fi
+    size_after="$(jq -r .size "${WORK}/md.json" 2>/dev/null)"
+    # three disks of a RAID 5 hold two disks' worth, a mirror of two held one
+    if [ "${size_before:-0}" -gt 0 ] && [ "${size_after:-0}" -gt $((size_before * 3 / 2)) ]; then pass array-holds-more; else fail array-holds-more "${size_before:-none} bytes before, ${size_after:-none} after"; fi
+    api POST "/v1/disks/raid/${gname}/filesystem" '{}'
+    code_is grow-filesystem 200
+    fs_after="$(g made_size Grown)"
+    if [ "${fs_before:-0}" -gt 0 ] && [ "${fs_after:-0}" -gt $((fs_before * 3 / 2)) ]; then pass filesystem-grown; else fail filesystem-grown "${fs_before:-none} bytes before, ${fs_after:-none} after"; fi
+    now="$(g made_sum Grown)"
+    if [ -n "${gsum:-}" ] && [ "${now}" = "${gsum}" ]; then pass grown-data-after-grow; else fail grown-data-after-grow "sha256 ${now:-none}, ${gsum:-none} was written"; fi
+    if [ -z "$(g backups)" ]; then pass reshape-backup-file-gone; else fail reshape-backup-file-gone "left behind: $(g backups | tr '\n' ' ')"; fi
     PICK_DISK=""
 
     log "8. the guest restarts"
@@ -257,7 +318,7 @@ run() {
         sleep 5
     done
     # the kernel may name the disks otherwise after a restart
-    read -r D1 D2 D3 D4 D5 D6 D7 SYS <<<"$(g disks)"
+    read -r D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 SYS <<<"$(g disks)"
     check reboot-assembled 300 "${OK}"' and any(.members[]; .disk == $d1) and any(.members[]; .disk == $d3)'
     [ "$(jq -r .name "${WORK}/md.json" 2>/dev/null)" = md1 ] || log "the array came back as $(jq -r .name "${WORK}/md.json" 2>/dev/null): accepted by its members"
     same_data data-after-reboot "${sum}"
@@ -271,6 +332,13 @@ run() {
     check raid0-reassembled 300 '.level == "raid0" and .disks == 2 and .missing == 0 and .state == "ok" and any(.members[]; .disk == $d6) and any(.members[]; .disk == $d7)'
     now="$(g made_sum Fast)"
     if [ -n "${fsum:-}" ] && [ "${now}" = "${fsum}" ]; then pass raid0-data-after-reboot; else fail raid0-data-after-reboot "sha256 ${now:-none} (the storage was not mounted again within 2 minutes?), ${fsum:-none} was written"; fi
+    # the RAID 5 made of a mirror: three disks, whole, its grown filesystem mounted again and its file there
+    PICK_DISK="${D8}"
+    check raid5-reassembled 300 '.level == "raid5" and .disks == 3 and .missing == 0 and .state == "ok" and any(.members[]; .disk == $d8) and any(.members[]; .disk == $d9) and any(.members[]; .disk == $d10)'
+    now="$(g made_sum Grown)"
+    if [ -n "${gsum:-}" ] && [ "${now}" = "${gsum}" ]; then pass raid5-data-after-reboot; else fail raid5-data-after-reboot "sha256 ${now:-none} (the storage was not mounted again within 2 minutes?), ${gsum:-none} was written"; fi
+    now="$(g made_size Grown)"
+    if [ "${now}" = "${fs_after:-none}" ]; then pass raid5-filesystem-after-reboot; else fail raid5-filesystem-after-reboot "${now:-none} bytes, ${fs_after:-none} before the restart"; fi
 
     log "${FAILS} check(s) failed"
     [ "${FAILS}" -eq 0 ]
