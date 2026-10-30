@@ -4,8 +4,8 @@ name: raid-proof
 # LocalStorage (GET /v1/disks/raid), a failed disk, its removal, the refusals, a third disk added and rebuilt onto, the data on it; then a second RAID 1 made by the
 # product (POST /v1/disks/raid) from two other disks, its refusals, its mount and its data; and a restart of the guest.
 #
-# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with five blank 64 MiB disks (virtio serials rp1 to
-# rp5) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
+# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with seven blank 64 MiB disks (virtio serials rp1 to
+# rp7) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
 # calls LocalStorage through the gateway, prints PASS or FAIL for each check and fails the job on any FAIL.
 #
 #   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64
@@ -106,7 +106,7 @@ jobs:
           cloud-localds seed.img user-data
           qemu-img resize disk.img 30G
           # the disks of the RAID: the guest finds them by their serials (/dev/disk/by-id/virtio-rp1...), not by the order of the kernel's names
-          for n in 1 2 3 4 5; do qemu-img create -q -f qcow2 "raid${n}.qcow2" 64M; done
+          for n in 1 2 3 4 5 6 7; do qemu-img create -q -f qcow2 "raid${n}.qcow2" 64M; done
           cat > ssh_config <<EOF
           Host vm
             HostName 127.0.0.1
@@ -128,6 +128,8 @@ jobs:
             -drive file=raid3.qcow2,if=none,id=rp3,format=qcow2 -device virtio-blk-pci,drive=rp3,serial=rp3 \
             -drive file=raid4.qcow2,if=none,id=rp4,format=qcow2 -device virtio-blk-pci,drive=rp4,serial=rp4 \
             -drive file=raid5.qcow2,if=none,id=rp5,format=qcow2 -device virtio-blk-pci,drive=rp5,serial=rp5 \
+            -drive file=raid6.qcow2,if=none,id=rp6,format=qcow2 -device virtio-blk-pci,drive=rp6,serial=rp6 \
+            -drive file=raid7.qcow2,if=none,id=rp7,format=qcow2 -device virtio-blk-pci,drive=rp7,serial=rp7 \
             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8080-:80 -device virtio-net-pci,netdev=n0 \
             -serial file:serial.log
           for _ in $(seq 1 90); do
