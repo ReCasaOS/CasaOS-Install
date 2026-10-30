@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Proof of the software RAID repair and creation of ReCasaOS on a real machine. A RAID 1 is made with mdadm on two blank virtio disks (test scaffolding, not something the
-# product does), and LocalStorage is checked against it: its status (GET /v1/disks/raid), a failed disk, its removal (DELETE /v1/disks/raid/md0/disks/<member>),
-# the refusals, a third disk added (POST /v1/disks/raid/md0/disks) and rebuilt onto, the data on the array, then a second array MADE BY THE PRODUCT (POST /v1/disks/raid)
+# product does), and LocalStorage is checked against it: its status (GET /v1/disks/raid), a failed disk, its removal (DELETE /v1/disks/raid/md1/disks/<member>),
+# the refusals, a third disk added (POST /v1/disks/raid/md1/disks) and rebuilt onto, the data on the array, then a second array MADE BY THE PRODUCT (POST /v1/disks/raid)
 # from two other blank disks, its refusals, its filesystem and mount, and a restart of the guest after which both arrays and their data must be back.
 #
 # It runs ON THE CI RUNNER (raid-proof.yml boots the guest), like stats-proof.sh: it drives the guest over ssh and calls LocalStorage through the gateway (QEMU
@@ -37,22 +37,23 @@ guest() {
         {
             apt-get -o DPkg::Lock::Timeout=300 update -qq &&
                 apt-get -o DPkg::Lock::Timeout=300 install -y -q --no-install-recommends mdadm &&
-                mdadm --create /dev/md0 --level=1 --raid-devices=2 --run "/dev/$2" "/dev/$3" </dev/null || return 1
-            mdadm --wait /dev/md0 # status 1 when the resync was already over
-            [ "$(cat /sys/block/md0/md/sync_action)" = idle ] &&
-                mkfs.ext4 -q /dev/md0 && mkdir -p /DATA/Mirror &&
-                echo "UUID=$(blkid -s UUID -o value /dev/md0) /DATA/Mirror ext4 defaults,nofail 0 2" >>/etc/fstab &&
+                mdadm --create /dev/md1 --level=1 --raid-devices=2 --run "/dev/$2" "/dev/$3" </dev/null || return 1
+            mdadm --wait /dev/md1 # status 1 when the resync was already over
+            [ "$(cat /sys/block/md1/md/sync_action)" = idle ] &&
+                mkfs.ext4 -q /dev/md1 && mkdir -p /DATA/Mirror &&
+                echo "UUID=$(blkid -s UUID -o value /dev/md1) /DATA/Mirror ext4 defaults,nofail 0 2" >>/etc/fstab &&
                 mount /DATA/Mirror && head -c 8M /dev/urandom >/DATA/Mirror/proof.bin && sync &&
                 mdadm --detail --scan >>/etc/mdadm/mdadm.conf && update-initramfs -u || return 1
         } >&2
         sha256sum /DATA/Mirror/proof.bin | cut -d' ' -f1 ;;
-    fail) mdadm /dev/md0 --fail "/dev/$2" ;;
+    fail) mdadm /dev/md1 --fail "/dev/$2" ;;
     unplug) mdadm --zero-superblock "/dev/$2" ;; # what pulling the failed disk out amounts to: its old RAID header cannot come back at the next boot
     mdstat) cat /proc/mdstat ;;
     sum) # the file's sha256, read from the disks and not from the page cache
         sync && echo 3 >/proc/sys/vm/drop_caches
         mountpoint -q /DATA/Mirror || { echo "/DATA/Mirror was not mounted at boot: mounting it" >&2; mount /DATA/Mirror; } || return 1
         sha256sum /DATA/Mirror/proof.bin | cut -d' ' -f1 ;;
+    has_mdadm) command -v mdadm ;;
     blank) # blank <disk>...: none of them carries a signature (a refused call wiped nothing)
         for s in "${@:2}"; do ! blkid -p "/dev/$s" >/dev/null 2>&1 || { echo "/dev/$s carries a signature: $(blkid -p "/dev/$s")" >&2; return 1; }; done ;;
     made_write) # a file of random bytes on the storage the product made; prints its sha256
@@ -78,8 +79,8 @@ PROOF_USER=raidproof
 # the array is whole: two active members and nothing missing
 OK='.state == "ok" and .level == "raid1" and .disks == 2 and .missing == 0 and .component_size > 0 and (.members | length) == 2 and all(.members[]; .state == "active")'
 FAILS=0 TOKEN="" PASSWORD="" CODE=000 WORK="" D1="" D2="" D3="" D4="" D5="" SYS=""
-# the array raid() looks for: the one named PICK_NAME or holding PICK_DISK (the proof's mirror to begin with)
-PICK_DISK="" PICK_NAME=md0
+# the array raid() looks for: the one that has PICK_DISK as a member (the proof's mirror, which has disk1, to begin with)
+PICK_DISK=""
 
 log() { printf '# %s\n' "$*" >&2; }
 pass() { echo "PASS $1"; }
@@ -111,12 +112,12 @@ api() {
 }
 body() { head -c 300 "${WORK}/body.json"; }
 
-# raid: GET /v1/disks/raid, and the array looked for into $WORK/md.json: the one named PICK_NAME or having PICK_DISK as a member (with no mdadm.conf entry a restart names it md127)
+# raid: GET /v1/disks/raid, and the array looked for into $WORK/md.json: the one having PICK_DISK as a member (with no mdadm.conf entry a restart names it md127)
 raid() {
     : >"${WORK}/md.json"
     api GET /v1/disks/raid
     [ "${CODE}" = 200 ] &&
-        jq -c --arg d "${PICK_DISK:-${D1}}" --arg n "${PICK_NAME}" '[.data[] | select(.name == $n or any(.members[]?; .disk == $d))][0] // empty' "${WORK}/body.json" >"${WORK}/md.json" 2>/dev/null &&
+        jq -c --arg d "${PICK_DISK:-${D1}}" '[.data[] | select(any(.members[]?; .disk == $d))][0] // empty' "${WORK}/body.json" >"${WORK}/md.json" 2>/dev/null &&
         [ -s "${WORK}/md.json" ]
 }
 # holds <jq test>: the test on the array, with the disks' names as $d1 to $d5
@@ -157,7 +158,7 @@ same_data() { local now; now="$(g sum)"; if [ "${now}" = "$2" ]; then pass "$1";
 member_of() { jq -r --arg d "$1" '.members[]? | select(.disk == $d) | .name' "${WORK}/md.json" 2>/dev/null; }
 
 run() {
-    local key sum msum made now both m1 m2 old id end
+    local key sum msum made now both had m1 m2 old id end
     WORK="$(mktemp -d)"
     PASSWORD="Aa1-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
@@ -177,7 +178,28 @@ run() {
     [ -n "${SYS}" ] || die disks "the blank disks (serials rp1 to rp5) or the system disk were not found: '${D1} ${D2} ${D3} ${D4} ${D5}'"
     log "disk1 ${D1}, disk2 ${D2}, disk3 ${D3}, disk4 ${D4}, disk5 ${D5}, the system disk ${SYS}"
 
-    log "1. a RAID 1 of ${D1} and ${D2}, ext4 on /DATA/Mirror, a file of known content"
+    log "0. a RAID 1 of ${D4} and ${D5}, made by the product before anything installs mdadm; what it refuses first"
+    if g has_mdadm >/dev/null 2>&1; then had=1; log "mdadm is already on this image: the product's installation of it is not exercised on this leg"; else had=0; fi
+    both="[\"/dev/${D4}\",\"/dev/${D5}\"]"
+    refuse refuse-create-wrong-confirm POST /v1/disks/raid "$(create_body Made raid1 "${both}" Mad)"
+    refuse refuse-create-raid0 POST /v1/disks/raid "$(create_body Made raid0 "${both}" Made)"
+    refuse refuse-create-too-few POST /v1/disks/raid "$(create_body Made raid5 "${both}" Made)"
+    refuse refuse-create-system-disk POST /v1/disks/raid "$(create_body Made raid1 "[\"/dev/${D4}\",\"/dev/${SYS}\"]" Made)"
+    refuse refuse-create-bad-name POST /v1/disks/raid "$(create_body 'Made;' raid1 "${both}" 'Made;')"
+    if [ "${had}" = 0 ]; then if g has_mdadm >/dev/null 2>&1; then fail refusals-installed-nothing "a refused call installed mdadm"; else pass refusals-installed-nothing; fi; fi
+    if g blank "${D4}" "${D5}" >&2; then pass refusals-wiped-nothing; else fail refusals-wiped-nothing "a refused call touched ${D4} or ${D5}"; fi
+    api POST /v1/disks/raid "$(create_body Made raid1 "${both}" Made)"
+    code_is create-array 200
+    if [ "${had}" = 0 ]; then if g has_mdadm >/dev/null 2>&1; then pass mdadm-installed-by-product; else fail mdadm-installed-by-product "the array was made but mdadm is not on the guest: $(body)"; fi; fi
+    PICK_DISK="${D4}"
+    check created-array 120 '.level == "raid1" and .disks == 2 and .missing == 0 and (.state == "ok" or .state == "resyncing") and any(.members[]; .disk == $d4) and any(.members[]; .disk == $d5)'
+    if made="$(g made_mount)" && [[ "${made}" =~ ^/dev/md[0-9]+\ ext4\ /media/Made ]]; then pass created-array-mounted; else fail created-array-mounted "findmnt: '${made:-nothing}'"; fi
+    msum="$(g made_write)" && [ -n "${msum}" ] || fail created-array-written "no file could be written on /media/Made"
+    api GET /v1/storage
+    if [ "${CODE}" = 200 ] && jq -e '[.. | objects | select((.mount_point? // "") | tostring | startswith("/media/Made"))] | length > 0' "${WORK}/body.json" >/dev/null 2>&1; then pass created-array-listed; else fail created-array-listed "HTTP ${CODE}: $(body)"; fi
+    PICK_DISK=""
+
+    log "1. a RAID 1 of ${D1} and ${D2} (the first free name, md0, is the product's array: this one is md1), ext4 on /DATA/Mirror, a file of known content"
     sum="$(LIMIT=900 g setup "${D1}" "${D2}" | tail -n 1)" && [ -n "${sum}" ] || die setup "the RAID 1 could not be made (mdadm's words are above)"
 
     log "2. its status"
@@ -189,44 +211,26 @@ run() {
 
     log "4. the failed member is taken out"
     m2="$(member_of "${D2}")"
-    api DELETE "/v1/disks/raid/md0/disks/${m2:-${D2}}"
+    api DELETE "/v1/disks/raid/md1/disks/${m2:-${D2}}"
     code_is remove-faulty 200
     check status-after-remove 30 '.state == "degraded" and .missing == 1 and all(.members[]; .state != "faulty" and .disk != $d2)'
     g unplug "${D2}" >&2 || log "the RAID header of ${D2} could not be wiped: the restart may see it"
 
     log "5. the refusals"
     m1="$(member_of "${D1}")"
-    refuse refuse-wrong-confirm POST /v1/disks/raid/md0/disks "$(add_body "${D3}" "not-${D3}")"
-    refuse refuse-system-disk POST /v1/disks/raid/md0/disks "$(add_body "${SYS}" "${SYS}")"
-    refuse refuse-active-member POST /v1/disks/raid/md0/disks "$(add_body "${D1}" "${D1}")"
-    refuse refuse-remove-active DELETE "/v1/disks/raid/md0/disks/${m1:-${D1}}"
+    refuse refuse-wrong-confirm POST /v1/disks/raid/md1/disks "$(add_body "${D3}" "not-${D3}")"
+    refuse refuse-system-disk POST /v1/disks/raid/md1/disks "$(add_body "${SYS}" "${SYS}")"
+    refuse refuse-active-member POST /v1/disks/raid/md1/disks "$(add_body "${D1}" "${D1}")"
+    refuse refuse-create-active-member POST /v1/disks/raid "$(create_body Made raid1 "[\"/dev/${D3}\",\"/dev/${D1}\"]" Made)"
+    refuse refuse-remove-active DELETE "/v1/disks/raid/md1/disks/${m1:-${D1}}"
 
     log "6. ${D3} is added, and the array rebuilds onto it"
-    api POST /v1/disks/raid/md0/disks "$(add_body "${D3}" "${D3}")"
+    api POST /v1/disks/raid/md1/disks "$(add_body "${D3}" "${D3}")"
     code_is add-disk 200
     check rebuilt 300 "${OK}"' and any(.members[]; .disk == $d3)'
 
     log "7. the data"
     same_data data-after-rebuild "${sum}"
-
-    log "7b. a RAID 1 of ${D4} and ${D5}, made by the product; what it refuses first"
-    both="[\"/dev/${D4}\",\"/dev/${D5}\"]"
-    refuse refuse-create-wrong-confirm POST /v1/disks/raid "$(create_body Made raid1 "${both}" Mad)"
-    refuse refuse-create-raid0 POST /v1/disks/raid "$(create_body Made raid0 "${both}" Made)"
-    refuse refuse-create-too-few POST /v1/disks/raid "$(create_body Made raid5 "${both}" Made)"
-    refuse refuse-create-system-disk POST /v1/disks/raid "$(create_body Made raid1 "[\"/dev/${D4}\",\"/dev/${SYS}\"]" Made)"
-    refuse refuse-create-active-member POST /v1/disks/raid "$(create_body Made raid1 "[\"/dev/${D4}\",\"/dev/${D1}\"]" Made)"
-    refuse refuse-create-bad-name POST /v1/disks/raid "$(create_body 'Made;' raid1 "${both}" 'Made;')"
-    if g blank "${D4}" "${D5}" >&2; then pass refusals-wiped-nothing; else fail refusals-wiped-nothing "a refused call touched ${D4} or ${D5}"; fi
-    api POST /v1/disks/raid "$(create_body Made raid1 "${both}" Made)"
-    code_is create-array 200
-    PICK_DISK="${D4}" PICK_NAME=""
-    check created-array 120 '.level == "raid1" and .disks == 2 and .missing == 0 and (.state == "ok" or .state == "resyncing") and any(.members[]; .disk == $d4) and any(.members[]; .disk == $d5)'
-    if made="$(g made_mount)" && [[ "${made}" =~ ^/dev/md[0-9]+\ ext4\ /media/Made ]]; then pass created-array-mounted; else fail created-array-mounted "findmnt: '${made:-nothing}'"; fi
-    msum="$(g made_write)" && [ -n "${msum}" ] || fail created-array-written "no file could be written on /media/Made"
-    api GET /v1/storage
-    if [ "${CODE}" = 200 ] && jq -e '[.. | objects | select((.mount_point? // "") | tostring | startswith("/media/Made"))] | length > 0' "${WORK}/body.json" >/dev/null 2>&1; then pass created-array-listed; else fail created-array-listed "HTTP ${CODE}: $(body)"; fi
-    PICK_DISK="" PICK_NAME=md0
 
     log "8. the guest restarts"
     old="$(g boot_id)"
@@ -240,10 +244,10 @@ run() {
     # the kernel may name the disks otherwise after a restart
     read -r D1 D2 D3 D4 D5 SYS <<<"$(g disks)"
     check reboot-assembled 300 "${OK}"' and any(.members[]; .disk == $d1) and any(.members[]; .disk == $d3)'
-    [ "$(jq -r .name "${WORK}/md.json" 2>/dev/null)" = md0 ] || log "the array came back as $(jq -r .name "${WORK}/md.json" 2>/dev/null): accepted by its members"
+    [ "$(jq -r .name "${WORK}/md.json" 2>/dev/null)" = md1 ] || log "the array came back as $(jq -r .name "${WORK}/md.json" 2>/dev/null): accepted by its members"
     same_data data-after-reboot "${sum}"
     # the storage the product made is assembled and mounted again by itself, with its file
-    PICK_DISK="${D4}" PICK_NAME=""
+    PICK_DISK="${D4}"
     check made-reassembled 300 '.level == "raid1" and .disks == 2 and .missing == 0 and any(.members[]; .disk == $d4) and any(.members[]; .disk == $d5)'
     now="$(g made_sum)"
     if [ -n "${msum:-}" ] && [ "${now}" = "${msum}" ]; then pass made-data-after-reboot; else fail made-data-after-reboot "sha256 ${now:-none} (the storage was not mounted again within 2 minutes?), ${msum:-none} was written"; fi
