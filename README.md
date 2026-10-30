@@ -126,7 +126,7 @@ Any one of these; an upgrade never turns them back on.
 
 ## What is in v0.5.59
 
-**A software RAID array can be made from the Storage manager** (RAID 1, 5, 6 or 10, with the drives you pick, after you type the storage's name again), and a storage on an array is mounted again after a restart even if the array comes up late. The creation is tested with a simulated `mdadm` and is being run on real virtual disks by the RAID proof.
+**A software RAID array can be made from the Storage manager** (RAID 1, 5, 6 or 10, with the drives you pick, after you type the storage's name again), and a storage on an array is mounted again after a restart even if the array comes up late. The creation passed the RAID proof on real virtual disks, on Debian 12 and Ubuntu 24.04, restart included.
 
 ## What is in v0.5.58
 

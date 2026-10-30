@@ -1,10 +1,11 @@
 name: raid-proof
 
-# Proof of the software RAID repair of a published release on a real machine: a RAID 1 made with mdadm on two blank virtual disks, its status through LocalStorage
-# (GET /v1/disks/raid), a failed disk, its removal, the refusals, a third disk added and rebuilt onto, the data on it, and a restart of the guest.
+# Proof of the software RAID repair and creation of a published release on a real machine: a RAID 1 made with mdadm on two blank virtual disks, its status through
+# LocalStorage (GET /v1/disks/raid), a failed disk, its removal, the refusals, a third disk added and rebuilt onto, the data on it; then a second RAID 1 made by the
+# product (POST /v1/disks/raid) from two other disks, its refusals, its mount and its data; and a restart of the guest.
 #
-# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with five blank 64 MiB disks (virtio serials rp1, rp2
-# and rp3) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
+# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with five blank 64 MiB disks (virtio serials rp1 to
+# rp5) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
 # calls LocalStorage through the gateway, prints PASS or FAIL for each check and fails the job on any FAIL.
 #
 #   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64

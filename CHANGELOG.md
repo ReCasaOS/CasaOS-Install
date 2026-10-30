@@ -14,9 +14,9 @@ Components: CasaOS-LocalStorage `v0.4.47`, CasaOS-UI `v0.4.112`. Unchanged from 
 
 - **A storage on a RAID array is mounted again after a restart even if the array comes up a second late.** The unit that mounts the storages again before Docker did not wait for udev, so a storage on an array assembled late stayed unmounted and the apps wrote to the folder under it, on the system disk. While a drive carries a RAID header with no array on it, the boot now reads the drives again, once a second, 15 seconds at most. A box with no such drive waits for nothing; a drive left over from an array that is gone costs the 15 seconds at each start.
 
-### Not proven yet
+### Proof
 
-Making an array is tested here with a simulated `mdadm`. The RAID proof (`raid-proof`, dispatch only) now creates an array through the API on real virtual disks, checks its refusals, and checks that the array and its data are back after a restart ([ReCasaOS/CasaOS-Install#61](https://github.com/ReCasaOS/CasaOS-Install/pull/61)); it is run on this release, and its result is added here.
+The RAID proof (`raid-proof`) passed on this release on Debian 12 and Ubuntu 24.04, 26 checks of 26 on each ([run](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41076798748)). After the repair of v0.5.53, it now makes a RAID 1 through the API on two blank virtual disks. It first sends six bad requests (the name not typed again, RAID 0, RAID 5 on two disks, the system disk, a member of the other array, a bad name), each answered 4xx with the two disks still blank. Then the array is made, formatted and mounted under `/media/Made`, with a file on it. After a restart of the guest, the array is assembled again, mounted again by ReCasaOS itself, and the file is intact ([ReCasaOS/CasaOS-Install#61](https://github.com/ReCasaOS/CasaOS-Install/pull/61)). Not proven: an array that comes up late at boot. The proof does not make one late, so the wait of the fix above is covered by its unit tests only.
 
 ## [0.5.58] - 2026-10-29
 
