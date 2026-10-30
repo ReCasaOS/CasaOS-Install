@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.63
+
+**The storages are mounted again after a restart when one of them is on a RAID array.** From v0.5.59 to v0.5.62 the boot unit stopped at the array, and the storages listed after it stayed unmounted.
+
 ## What is in v0.5.62
 
 **A RAID 0 can be made from Create RAID**, once you tick that one failed drive loses everything on it. RAID 1, 5, 6 and 10 are unchanged.

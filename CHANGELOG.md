@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.63] - 2026-10-30
+
+Components: CasaOS-LocalStorage `v0.4.51`. Unchanged from v0.5.62: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, CasaOS-UI `v0.4.113`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Fixed
+
+- **A storage on a RAID array no longer keeps the storages after it from being mounted again at boot.** The unit that mounts the storages again before Docker (`casaos-local-storage-first`) read the first partition of each device it had just mounted. A RAID array holds its filesystem itself and has no partition, so the unit panicked (`index out of range [0] with length 0`) and every storage listed after the array stayed unmounted; the wait for the merges that follows it was skipped as well. This has been so for any storage made on a RAID array since v0.5.59, and went unseen because the proof's only such storage came last. The device is now asked for its own mount point when it has no partition ([ReCasaOS/CasaOS-LocalStorage#16](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/16)). If you are on v0.5.59 to v0.5.62 and have a storage on a RAID array, upgrade, then restart once: until then, mount the storages listed after it by hand after each restart.
+
+### Proof
+
+Found by the RAID proof on v0.5.62 (below). The proof now also prints the journal of that unit when a leg fails ([ReCasaOS/CasaOS-Install#69](https://github.com/ReCasaOS/CasaOS-Install/pull/69)). Its result on this release is added here.
+
 ## [0.5.62] - 2026-10-30
 
 Components: CasaOS-LocalStorage `v0.4.50`, CasaOS-UI `v0.4.113`. Unchanged from v0.5.61: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
@@ -12,7 +24,7 @@ Components: CasaOS-LocalStorage `v0.4.50`, CasaOS-UI `v0.4.113`. Unchanged from 
 
 ### Proof
 
-Creating a RAID 0 is tested with a simulated `mdadm`. The RAID proof (`raid-proof`, dispatch only) now has a RAID 0 leg: the product refuses it without the consent and wipes nothing, makes it with the consent, mounts it under `/media/Fast`, and after a restart of the guest the array is assembled again with its file intact ([ReCasaOS/CasaOS-Install#67](https://github.com/ReCasaOS/CasaOS-Install/pull/67)). Its result on this release is added here.
+Creating a RAID 0 is tested with a simulated `mdadm`. The RAID proof (`raid-proof`, dispatch only) now has a RAID 0 leg: the product refuses it without the consent and wipes nothing, makes it with the consent, mounts it under `/media/Fast`, and after a restart of the guest the array is assembled again with its file intact ([ReCasaOS/CasaOS-Install#67](https://github.com/ReCasaOS/CasaOS-Install/pull/67)). Result on this release ([run 41104111637](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41104111637)): on Debian 12 and Ubuntu 24.04 the refusals, the creation, the mount, the file and the array assembled again after the restart all pass, and one check fails, `raid0-data-after-reboot`: **the RAID 0 is not mounted again after the restart.** The cause, read in the unit's journal ([run 41107522581](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41107522581)), is not the RAID 0 but the boot unit panicking on the RAID 1 storage mounted before it (see v0.5.63). **On v0.5.62, a storage on a RAID array is usable once made, but the storages listed after it are not mounted again after a restart: upgrade to v0.5.63.**
 
 ## [0.5.61] - 2026-10-30
 
@@ -25,7 +37,7 @@ Components: CasaOS-LocalStorage `v0.4.49`. Unchanged from v0.5.60: CasaOS `v0.4.
 
 ### Proof
 
-Why it was not caught: the tests simulated the command, and the RAID proof installed `mdadm` by hand before it started. The proof now lets the product make its array first, on a guest that has no `mdadm` yet, and checks that the refusals install nothing and that the creation leaves `mdadm` on the guest ([ReCasaOS/CasaOS-Install#65](https://github.com/ReCasaOS/CasaOS-Install/pull/65)). On an image that already has `mdadm` (Ubuntu's, probably) those two checks are skipped and the log says so. Its result on this release is added here.
+Why it was not caught: the tests simulated the command, and the RAID proof installed `mdadm` by hand before it started. The proof now lets the product make its array first, on a guest that has no `mdadm` yet, and checks that the refusals install nothing and that the creation leaves `mdadm` on the guest ([ReCasaOS/CasaOS-Install#65](https://github.com/ReCasaOS/CasaOS-Install/pull/65)). On an image that already has `mdadm` (Ubuntu's, probably) those two checks are skipped and the log says so. Result on this release ([run 41104117488](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41104117488)): on Debian 12 the product refused five bad requests without installing `mdadm` (`refusals-installed-nothing`), then made its array and left `mdadm` on the guest (`mdadm-installed-by-product`), so the fix works on a real box. On Ubuntu 24.04 the image already has `mdadm`, and those two checks are skipped. Every other check passed on both, the restart included; the only failures were the six RAID 0 checks of the later script, which v0.5.61 does not offer.
 
 ## [0.5.60] - 2026-10-30
 
