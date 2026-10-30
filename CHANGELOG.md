@@ -12,7 +12,7 @@ Components: CasaOS-LocalStorage `v0.4.51`. Unchanged from v0.5.62: CasaOS `v0.4.
 
 ### Proof
 
-Found by the RAID proof on v0.5.62 (below). The proof now also prints the journal of that unit when a leg fails ([ReCasaOS/CasaOS-Install#69](https://github.com/ReCasaOS/CasaOS-Install/pull/69)). Its result on this release is added here.
+Found by the RAID proof on v0.5.62 (below). The proof now also prints the journal of that unit when a leg fails ([ReCasaOS/CasaOS-Install#69](https://github.com/ReCasaOS/CasaOS-Install/pull/69)). Result on this release ([run 41110630169](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41110630169)): **no check fails**, 37 pass on Debian 12 and 35 on Ubuntu 24.04 (whose image already has `mdadm`, so its two checks of the product installing it are skipped). That includes `raid0-data-after-reboot`, the one that failed on v0.5.62: the RAID 0 and the RAID 1 storages, both made by the product, are mounted again after the restart with their files intact, and so is the mirror made by hand and repaired.
 
 ## [0.5.62] - 2026-10-30
 
