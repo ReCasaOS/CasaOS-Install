@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.59
+
+**A software RAID array can be made from the Storage manager** (RAID 1, 5, 6 or 10, with the drives you pick, after you type the storage's name again), and a storage on an array is mounted again after a restart even if the array comes up late. The creation is tested with a simulated `mdadm` and is being run on real virtual disks by the RAID proof.
+
 ## What is in v0.5.58
 
 **Modules are offered on a derivative of Debian or Ubuntu** such as Linux Mint 22.2: the box is read as the Debian or Ubuntu release it is built on, by a codename the core knows, and the plan says both. An unknown codename is still refused. **The processor's temperature shows on a box with no thermal zone**, on Intel and on AMD.
@@ -146,7 +150,7 @@ Any one of these; an upgrade never turns them back on.
 
 ## What is in v0.5.53
 
-**Software RAID arrays**: their state in the Storage manager and on the home page, an alert when one loses a disk, and their repair (add a blank disk, take a failed one out) without the command line.
+**Software RAID arrays**: their state in the Storage manager and on the home page, an alert when one loses a disk, and their repair (add a blank disk, take a failed one out) and, since v0.5.59, their creation, without the command line.
 
 ## What is in v0.5.52
 

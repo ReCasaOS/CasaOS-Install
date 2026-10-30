@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.59] - 2026-10-30
+
+Components: CasaOS-LocalStorage `v0.4.47`, CasaOS-UI `v0.4.112`. Unchanged from v0.5.58: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **A software RAID array can be made from the Storage manager.** A **Create RAID** button sits next to **Create Storage**. The window asks for the name of the storage, a level, and the blank drives to use, shows what the array will hold and how many failed drives it survives, and asks for the name to be typed again before the drives are erased. The levels are RAID 1 (2 drives or more), RAID 5 (3), RAID 6 (4) and RAID 10 (4): the ones that go on when a drive fails. RAID 0 and linear are not offered. Every refusal comes before the first drive is touched (the system disk, a drive that holds something, a drive named twice, too few drives for the level, `mdadm` not installed, a name that is not typed again). Then the drives are wiped, the array is made with `mdadm --create`, formatted and mounted under `/media/<name>` like any new storage, and it is usable at once while it synchronizes ([ReCasaOS/CasaOS-LocalStorage#12](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/12), [ReCasaOS/CasaOS-UI#71](https://github.com/ReCasaOS/CasaOS-UI/pull/71)).
+
+### Fixed
+
+- **A storage on a RAID array is mounted again after a restart even if the array comes up a second late.** The unit that mounts the storages again before Docker did not wait for udev, so a storage on an array assembled late stayed unmounted and the apps wrote to the folder under it, on the system disk. While a drive carries a RAID header with no array on it, the boot now reads the drives again, once a second, 15 seconds at most. A box with no such drive waits for nothing; a drive left over from an array that is gone costs the 15 seconds at each start.
+
+### Not proven yet
+
+Making an array is tested here with a simulated `mdadm`. The RAID proof (`raid-proof`, dispatch only) now creates an array through the API on real virtual disks, checks its refusals, and checks that the array and its data are back after a restart ([ReCasaOS/CasaOS-Install#61](https://github.com/ReCasaOS/CasaOS-Install/pull/61)); it is run on this release, and its result is added here.
+
 ## [0.5.58] - 2026-10-29
 
 Components: CasaOS `v0.4.88`, CasaOS-UI `v0.4.111`. Unchanged from v0.5.57: CasaOS-AppManagement `v0.4.77`, CasaOS-LocalStorage `v0.4.46`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
