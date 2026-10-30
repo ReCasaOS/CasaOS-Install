@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.60
+
+**`mdadm` is installed for you** when you make or repair a RAID array on a box that lacks it, instead of asking you to run `apt` yourself.
+
 ## What is in v0.5.59
 
 **A software RAID array can be made from the Storage manager** (RAID 1, 5, 6 or 10, with the drives you pick, after you type the storage's name again), and a storage on an array is mounted again after a restart even if the array comes up late. The creation passed the RAID proof on real virtual disks, on Debian 12 and Ubuntu 24.04, restart included.
