@@ -49,8 +49,8 @@ source /etc/os-release
 readonly MINIMUM_DISK_SIZE_GB="5"
 readonly MINIMUM_MEMORY="400"
 readonly MINIMUM_DOCKER_VERSION="20"
-readonly CASA_DEPANDS_PACKAGE=('wget' 'curl' 'smartmontools' 'parted' 'ntfs-3g' 'net-tools' 'udevil' 'samba' 'cifs-utils' 'mergerfs' 'unzip' 'git')
-readonly CASA_DEPANDS_COMMAND=('wget' 'curl' 'smartctl' 'parted' 'ntfs-3g' 'netstat' 'udevil' 'smbd' 'mount.cifs' 'mount.mergerfs' 'unzip' 'git')
+readonly CASA_DEPANDS_PACKAGE=('wget' 'curl' 'smartmontools' 'parted' 'ntfs-3g' 'net-tools' 'udevil' 'samba' 'cifs-utils' 'mergerfs' 'unzip' 'bzip2' 'git')
+readonly CASA_DEPANDS_COMMAND=('wget' 'curl' 'smartctl' 'parted' 'ntfs-3g' 'netstat' 'udevil' 'smbd' 'mount.cifs' 'mount.mergerfs' 'unzip' 'bzip2' 'git')
 
 # SYSTEM INFO
 PHYSICAL_MEMORY=$(LC_ALL=C free -m | awk '/Mem:/ { print $2 }')
@@ -98,6 +98,7 @@ readonly CASAOS_LOCAL_STORAGE_TAG="__CASAOS_LOCAL_STORAGE_TAG__"
 readonly CASAOS_UI_TAG="__CASAOS_UI_TAG__"
 readonly CASAOS_APPSTORE_TAG="__CASAOS_APPSTORE_TAG__"
 readonly RCLONE_TAG="__RCLONE_TAG__"
+readonly RESTIC_TAG="__RESTIC_TAG__"
 readonly CASAOS_UPDATE_LOG="/var/log/casaos/upgrade.log"
 readonly CASAOS_COMPAT_OVERLAY_FILE="linux-zz-casaos-compat-overlay-${CASAOS_INSTALL_RELEASE_TAG}.tar.gz"
 readonly CASAOS_CORE_PACKAGE_FILE_PREFIX="casaos-${CASAOS_TAG}"
@@ -123,6 +124,9 @@ readonly CASAOS_UI_SHA256="__CASAOS_UI_SHA256__"
 readonly RCLONE_SHA256_AMD64="__RCLONE_SHA256_AMD64__"
 readonly RCLONE_SHA256_ARM64="__RCLONE_SHA256_ARM64__"
 readonly RCLONE_SHA256_ARM7="__RCLONE_SHA256_ARM7__"
+readonly RESTIC_SHA256_AMD64="__RESTIC_SHA256_AMD64__"
+readonly RESTIC_SHA256_ARM64="__RESTIC_SHA256_ARM64__"
+readonly RESTIC_SHA256_ARM7="__RESTIC_SHA256_ARM7__"
 readonly CASAOS_APPSTORE_SHA256="__CASAOS_APPSTORE_SHA256__"
 readonly CASAOS_COMPAT_OVERLAY_SHA256="__CASAOS_COMPAT_OVERLAY_SHA256__"
 readonly CASAOS_UNINSTALL_SHA256="__CASAOS_UNINSTALL_SHA256__"
@@ -399,6 +403,8 @@ Check_Arch() {
         TARGET_ARCH="arm64"
         RCLONE_ARCH="arm64"
         RCLONE_SHA256="${RCLONE_SHA256_ARM64}"
+        RESTIC_ARCH="arm64"
+        RESTIC_SHA256="${RESTIC_SHA256_ARM64}"
         CASAOS_APP_MANAGEMENT_SHA256="${CASAOS_APP_MANAGEMENT_SHA256_ARM64}"
         CASAOS_CORE_SHA256="${CASAOS_CORE_SHA256_ARM64}"
         CASAOS_GATEWAY_SHA256="${CASAOS_GATEWAY_SHA256_ARM64}"
@@ -410,6 +416,8 @@ Check_Arch() {
         TARGET_ARCH="amd64"
         RCLONE_ARCH="amd64"
         RCLONE_SHA256="${RCLONE_SHA256_AMD64}"
+        RESTIC_ARCH="amd64"
+        RESTIC_SHA256="${RESTIC_SHA256_AMD64}"
         CASAOS_APP_MANAGEMENT_SHA256="${CASAOS_APP_MANAGEMENT_SHA256_AMD64}"
         CASAOS_CORE_SHA256="${CASAOS_CORE_SHA256_AMD64}"
         CASAOS_GATEWAY_SHA256="${CASAOS_GATEWAY_SHA256_AMD64}"
@@ -421,6 +429,8 @@ Check_Arch() {
         TARGET_ARCH="arm-7"
         RCLONE_ARCH="arm-v7"
         RCLONE_SHA256="${RCLONE_SHA256_ARM7}"
+        RESTIC_ARCH="arm"
+        RESTIC_SHA256="${RESTIC_SHA256_ARM7}"
         CASAOS_APP_MANAGEMENT_SHA256="${CASAOS_APP_MANAGEMENT_SHA256_ARM7}"
         CASAOS_CORE_SHA256="${CASAOS_CORE_SHA256_ARM7}"
         CASAOS_GATEWAY_SHA256="${CASAOS_GATEWAY_SHA256_ARM7}"
@@ -919,6 +929,53 @@ Install_Rclone() {
   ${sudo_cmd} systemctl enable rclone || Show 3 "Service rclone does not exist."
 }
 
+# Install restic at the pinned version, from its own release, verified.
+#
+# restic is what a backup destination is switched to when it should keep a
+# repository instead of stamped copies. It is optional: a box that cannot get it
+# still installs, and the switch answers that restic is not installed. A digest
+# that does not match is not optional, and ends the install like any package's.
+Install_restic_from_source() {
+  local version="${RESTIC_TAG#v}"
+  local archive="restic_${version}_linux_${RESTIC_ARCH}.bz2"
+  local url="${CASA_DOWNLOAD_DOMAIN}restic/restic/releases/download/${RESTIC_TAG}/${archive}"
+  local unpack
+  unpack="$(mktemp -d)" || {
+    Show 3 "Failed to create a temporary directory for restic; skipping it."
+    return 0
+  }
+
+  Show 2 "Downloading restic ${RESTIC_TAG}..."
+  GreyStart
+  if ! ${sudo_cmd} wget -t 3 -q ${WGET_PROGRESS} -O "${unpack}/${archive}" "${url}"; then
+    ColorReset
+    ${sudo_cmd} rm -rf "${unpack}"
+    Show 3 "Failed to download restic; skipping it."
+    return 0
+  fi
+  ColorReset
+
+  pushd "${unpack}" >/dev/null
+  Verify_Fork_Package "${archive}" "${RESTIC_SHA256}"
+  if ${sudo_cmd} bunzip2 -f "${archive}" && ${sudo_cmd} install -m 0755 -o root -g root "restic_${version}_linux_${RESTIC_ARCH}" "${PREFIX}/usr/bin/restic"; then
+    Show 0 "restic ${RESTIC_TAG} installed."
+  else
+    Show 3 "Failed to install restic; skipping it."
+  fi
+  popd >/dev/null
+  ${sudo_cmd} rm -rf "${unpack}"
+}
+
+Install_Restic() {
+  Show 2 "Install the optional backup tool: restic"
+  if [[ -x "$(command -v restic)" ]] && [[ "$(restic version 2>>errors | head -n 1)" == "restic ${RESTIC_TAG#v} "* ]]; then
+    Show 2 "Target version already installed."
+    return 0
+  fi
+
+  Install_restic_from_source
+}
+
 #Configuration Addons
 Configuration_Addons() {
     Show 2 "Configuration CasaOS Addons"
@@ -1146,6 +1203,8 @@ DownloadAndInstallCasaOS() {
     ${sudo_cmd} chmod +x $CASA_UNINSTALL_PATH
 
     Install_Rclone
+
+    Install_Restic
 
     Install_Module_Catalogue
 

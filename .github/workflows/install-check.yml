@@ -116,7 +116,7 @@ jobs:
           gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" \
             -p install.sh -p install.sh.sha256 -p components.lock
           sha256sum --check install.sh.sha256
-          grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|CASAOS_UI_TAG|CASAOS_TAG)=' components.lock >> "$GITHUB_ENV"
+          grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|RESTIC_TAG|CASAOS_UI_TAG|CASAOS_TAG)=' components.lock >> "$GITHUB_ENV"
 
       # Docker 29 raised the oldest API version it answers to 1.44 and made the
       # containerd image store the default on a new installation, and until
@@ -721,6 +721,111 @@ jobs:
           jq -e '.data.finished_at != null and (.data.apps | length == 1) and (.data.apps[0].state | IN("updated", "current"))' <<<"${run}" >/dev/null
           test "$(docker inspect -f '{{.State.Running}}' smoke)" = true
           echo "every app at once: smoke is $(jq -r '.data.apps[0].state' <<<"${run}") and running"
+
+      # The same runs and the same restore, kept in a restic repository instead of
+      # stamped copies. restic reaches the destination through the rclone remote the
+      # daemon already holds, so the `alias` onto a local directory keeps the test on
+      # this machine and goes through the same door an S3 bucket would. It runs after
+      # the steps that pick "the last run of smoke", which it would otherwise be.
+      - name: A destination kept with restic
+        if: ${{ !matrix.engine_only && env.RESTIC_TAG != '' }}
+        run: |
+          set -euo pipefail
+          version="$(restic version | sed -n 1p)"
+          echo "restic: ${version}"
+          case "${version}" in "restic ${RESTIC_TAG#v} "*) ;; *) echo "not the pinned restic"; exit 1 ;; esac
+          sudo mkdir -p /var/tmp/casaos-backup-smoke-restic
+          curl -fsS -X PUT "${CASA_URL}/v2/app_management/backup/destinations/smokerestic" \
+            -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
+            -d '{"backend":"alias","parameters":{"remote":"/var/tmp/casaos-backup-smoke-restic"}}' | jq .
+          state="$(curl -fsS "${CASA_URL}/v2/app_management/backup/destinations/smokerestic/restic" -H "Authorization: ${CASA_TOKEN}")"
+          echo "${state}" | jq -c .data
+          jq -e '.data.available == true and .data.enabled == false' <<<"${state}" >/dev/null
+          # the password comes back once, from the call that makes the repository
+          answer="$(curl -fsS -X PUT "${CASA_URL}/v2/app_management/backup/destinations/smokerestic/restic" \
+            -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' -d '{}')"
+          password="$(jq -r '.data.password' <<<"${answer}")"
+          test "${#password}" -ge 32
+          curl -fsS "${CASA_URL}/v2/app_management/backup/destinations/smokerestic/restic" -H "Authorization: ${CASA_TOKEN}" \
+            | jq -e '.data.enabled == true' >/dev/null
+          sudo test -f /var/tmp/casaos-backup-smoke-restic/casaos-restic/config
+          test "$(sudo stat -c '%a %U' /var/lib/casaos/backups/restic/smokerestic.key)" = "600 root"
+          test "$(sudo cat /var/lib/casaos/backups/restic/smokerestic.key)" = "${password}"
+          # a destination switched already is refused, not made again
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PUT "${CASA_URL}/v2/app_management/backup/destinations/smokerestic/restic" \
+            -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' -d '{}')" = 400
+
+      - name: Two backups of it, with restic, and a restore of the first
+        if: ${{ !matrix.engine_only && env.RESTIC_TAG != '' }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          runs() { api "${CASA_URL}/v2/app_management/backup/runs" | jq -c --arg d smokerestic '.data // [] | map(select(.destination == $d and .restore != true)) | sort_by(.stamp)'; }
+          # One backup, asked for until it is taken: the app can still be busy with its last operation
+          take() {
+            local before run error=""
+            before="$(runs | jq length)"
+            for attempt in $(seq 1 6); do
+              api -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" -H 'content-type: application/json' \
+                -d '{"destination":"smokerestic","hold_still":true}' >/dev/null
+              run=""
+              for _ in $(seq 1 60); do
+                run="$(runs | jq -c --argjson n "${before}" 'if length > $n then last else empty end')"
+                [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
+                run=""
+                sleep 3
+              done
+              echo "attempt ${attempt} run: ${run}"
+              test -n "${run}"
+              error="$(jq -r '.error // ""' <<<"${run}")"
+              case "${error}" in
+                *"is busy"*) echo "refused: ${error}"; before="$(runs | jq length)"; sleep 5 ;;
+                *) break ;;
+              esac
+            done
+            test "${error}" = ""
+          }
+
+          html=/DATA/AppData/smoke/html
+          echo "restic one" | sudo tee "${html}/index.html" >/dev/null
+          sudo chown 1234:1234 "${html}/index.html"
+          take
+          # what the destination holds is a repository: nothing of the app is readable there
+          test -z "$(sudo find /var/tmp/casaos-backup-smoke-restic -name 'index.html')"
+          ! sudo grep -rq "restic one" /var/tmp/casaos-backup-smoke-restic
+
+          echo "restic two" | sudo tee "${html}/index.html" >/dev/null
+          take
+          stamps="$(runs | jq -r 'map(.stamp) | join(" ")')"
+          echo "runs: ${stamps}"
+          test "$(runs | jq length)" = 2
+          # the destination lists both, from the repository
+          api "${CASA_URL}/v2/app_management/backup/destinations/smokerestic/runs" \
+            | jq -e '.data | map(select(.app == "smoke")) | first | .stamps | length == 2' >/dev/null
+
+          # back to the first: its content, the file added since gone, its owner kept
+          first="$(runs | jq -r '.[0].stamp')"
+          sudo chown root:root "${html}/index.html"
+          echo "changed after the backups" | sudo tee "${html}/index.html" >/dev/null
+          echo "an extra file" | sudo tee "${html}/extra.txt" >/dev/null
+          before="$(api "${CASA_URL}/v2/app_management/backup/runs" | jq '[.data // [] | .[] | select(.destination == "smokerestic" and .restore == true)] | length')"
+          api -X POST "${CASA_URL}/v2/app_management/backup/restore" -H 'content-type: application/json' \
+            -d "{\"destination\":\"smokerestic\",\"app\":\"smoke\",\"stamp\":\"${first}\"}" | jq .
+          run=""
+          for _ in $(seq 1 60); do
+            run="$(api "${CASA_URL}/v2/app_management/backup/runs" \
+              | jq -c --argjson n "${before}" '[.data // [] | .[] | select(.destination == "smokerestic" and .restore == true)] | if length > $n then first else empty end')"
+            [ -n "${run}" ] && break
+            sleep 3
+          done
+          echo "restore run: ${run}"
+          test -n "${run}"
+          test "$(jq -r '.error // ""' <<<"${run}")" = ""
+          test "$(cat "${html}/index.html")" = "restic one"
+          test ! -e "${html}/extra.txt"
+          # an rclone copy loses the owner; a restic restore puts it back
+          test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
+          docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
 
       # The copy of the catalogue this distribution keeps (github.com/ReCasaOS/
       # _appstore, IceWhale's store/main.zip taken every night) is what
