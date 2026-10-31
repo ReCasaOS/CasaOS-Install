@@ -4,7 +4,8 @@
 # the refusals, a third disk added (POST /v1/disks/raid/md1/disks) and rebuilt onto, the data on the array, then a second array MADE BY THE PRODUCT (POST /v1/disks/raid)
 # from two other blank disks, its refusals, its filesystem and mount, a RAID 0 made the same way from two more (refused without the consent that one failed disk loses
 # everything on it), a RAID 1 made the same way and CHANGED TO A RAID 5 with a third disk (POST /v1/disks/raid/<name>/level), its refusals, then the filesystem
-# grown into the room (POST /v1/disks/raid/<name>/filesystem), and a restart of the guest after which all four arrays and their data must be back.
+# grown into the room (POST /v1/disks/raid/<name>/filesystem), the same for a RAID 1 of THREE drives, which has no fourth to add and gives back its last one, and a
+# restart of the guest after which all five arrays and their data must be back.
 #
 # It runs ON THE CI RUNNER (raid-proof.yml boots the guest), like stats-proof.sh: it drives the guest over ssh and calls LocalStorage through the gateway (QEMU
 # forwards the runner's GW_PORT to the guest's port 80) with the token of a user of the box's own. The same file is copied to the guest, where
@@ -12,9 +13,9 @@
 # status 1 when a check failed. Its own notes go to standard error, prefixed with #.
 #
 # Needs, on the runner: bash, curl, jq, ssh, scp, timeout. Environment: INSTALL_SH (published/install.sh, the published installer, named install.sh), SSH_CONFIG
-# (ssh_config, with a host named vm), GW_PORT (8080). The guest has ten blank disks with the virtio serials rp1 to rp10.
+# (ssh_config, with a host named vm), GW_PORT (8080). The guest has thirteen blank disks with the virtio serials rp1 to rp13.
 # shellcheck disable=SC2016
-# (the jq filters name their variables, $d1 to $d10, in single quotes on purpose)
+# (the jq filters name their variables, $d1 to $d13, in single quotes on purpose)
 set -uo pipefail
 export LC_ALL=C
 
@@ -29,8 +30,8 @@ guest() {
         # apt's own timers would take dpkg's lock in the middle of the run
         systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service >/dev/null 2>&1 || true
         bash install.sh --no-telemetry >install.log 2>&1 || { tail -n 40 install.log; return 1; } ;;
-    disks) # the kernel's names of the ten blank disks (by their serials), and of the disk that holds /
-        for s in rp1 rp2 rp3 rp4 rp5 rp6 rp7 rp8 rp9 rp10; do
+    disks) # the kernel's names of the thirteen blank disks (by their serials), and of the disk that holds /
+        for s in rp1 rp2 rp3 rp4 rp5 rp6 rp7 rp8 rp9 rp10 rp11 rp12 rp13; do
             p="$(readlink -e "/dev/disk/by-id/virtio-${s}")" || return 1
             out="${out}${p#/dev/} "
         done
@@ -87,7 +88,7 @@ GW="http://127.0.0.1:${GW_PORT:-8080}"
 PROOF_USER=raidproof
 # the array is whole: two active members and nothing missing
 OK='.state == "ok" and .level == "raid1" and .disks == 2 and .missing == 0 and .component_size > 0 and (.members | length) == 2 and all(.members[]; .state == "active")'
-FAILS=0 TOKEN="" PASSWORD="" CODE=000 WORK="" D1="" D2="" D3="" D4="" D5="" D6="" D7="" D8="" D9="" D10="" SYS=""
+FAILS=0 TOKEN="" PASSWORD="" CODE=000 WORK="" D1="" D2="" D3="" D4="" D5="" D6="" D7="" D8="" D9="" D10="" D11="" D12="" D13="" SYS=""
 # the array raid() looks for: the one that has PICK_DISK as a member (the proof's mirror, which has disk1, to begin with)
 PICK_DISK=""
 
@@ -129,9 +130,9 @@ raid() {
         jq -c --arg d "${PICK_DISK:-${D1}}" '[.data[] | select(any(.members[]?; .disk == $d))][0] // empty' "${WORK}/body.json" >"${WORK}/md.json" 2>/dev/null &&
         [ -s "${WORK}/md.json" ]
 }
-# holds <jq test>: the test on the array, with the disks' names as $d1 to $d10
+# holds <jq test>: the test on the array, with the disks' names as $d1 to $d13
 holds() {
-    jq -e --arg d1 "${D1}" --arg d2 "${D2}" --arg d3 "${D3}" --arg d4 "${D4}" --arg d5 "${D5}" --arg d6 "${D6}" --arg d7 "${D7}" --arg d8 "${D8}" --arg d9 "${D9}" --arg d10 "${D10}" "$1" "${WORK}/md.json" >/dev/null 2>&1
+    jq -e --arg d1 "${D1}" --arg d2 "${D2}" --arg d3 "${D3}" --arg d4 "${D4}" --arg d5 "${D5}" --arg d6 "${D6}" --arg d7 "${D7}" --arg d8 "${D8}" --arg d9 "${D9}" --arg d10 "${D10}" --arg d11 "${D11}" --arg d12 "${D12}" --arg d13 "${D13}" "$1" "${WORK}/md.json" >/dev/null 2>&1
 }
 seen() {
     if [ -s "${WORK}/md.json" ]; then jq -c '{name, state, level, disks, missing, component_size, size, bitmap, action, members}' "${WORK}/md.json"; else echo "GET /v1/disks/raid answered ${CODE}: $(body)"; fi
@@ -169,7 +170,7 @@ same_data() { local now; now="$(g sum)"; if [ "${now}" = "$2" ]; then pass "$1";
 member_of() { jq -r --arg d "$1" '.members[]? | select(.disk == $d) | .name' "${WORK}/md.json" 2>/dev/null; }
 
 run() {
-    local key sum msum fsum gsum made fast now both pair two had m1 m2 old id end fastname gname bitmapped size_before size_after fs_before fs_after
+    local key sum msum fsum gsum made fast now both pair two had m1 m2 old id end fastname gname bitmapped size_before size_after fs_before fs_after three tname tsum tlast tfirst tsize_before tsize_after tfs_before tfs_after
     WORK="$(mktemp -d)"
     PASSWORD="Aa1-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
@@ -185,9 +186,9 @@ run() {
         -d "$(printf '{"username":"%s","password":"%s","key":"%s"}' "${PROOF_USER}" "${PASSWORD}" "${key}")" >/dev/null
     login || die login "the box's user could not log in"
 
-    read -r D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 SYS <<<"$(g disks)"
-    [ -n "${SYS}" ] || die disks "the blank disks (serials rp1 to rp10) or the system disk were not found: '${D1} ${D2} ${D3} ${D4} ${D5} ${D6} ${D7} ${D8} ${D9} ${D10}'"
-    log "disk1 ${D1}, disk2 ${D2}, disk3 ${D3}, disk4 ${D4}, disk5 ${D5}, disk6 ${D6}, disk7 ${D7}, disk8 ${D8}, disk9 ${D9}, disk10 ${D10}, the system disk ${SYS}"
+    read -r D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11 D12 D13 SYS <<<"$(g disks)"
+    [ -n "${SYS}" ] || die disks "the blank disks (serials rp1 to rp13) or the system disk were not found: '${D1} ${D2} ${D3} ${D4} ${D5} ${D6} ${D7} ${D8} ${D9} ${D10} ${D11} ${D12} ${D13}'"
+    log "disk1 ${D1}, disk2 ${D2}, disk3 ${D3}, disk4 ${D4}, disk5 ${D5}, disk6 ${D6}, disk7 ${D7}, disk8 ${D8}, disk9 ${D9}, disk10 ${D10}, disk11 ${D11}, disk12 ${D12}, disk13 ${D13}, the system disk ${SYS}"
 
     log "0. a RAID 1 of ${D4} and ${D5}, made by the product before anything installs mdadm; what it refuses first"
     if g has_mdadm >/dev/null 2>&1; then had=1; log "mdadm is already on this image: the product's installation of it is not exercised on this leg"; else had=0; fi
@@ -308,6 +309,45 @@ run() {
     if [ -z "$(g backups)" ]; then pass reshape-backup-file-gone; else fail reshape-backup-file-gone "left behind: $(g backups | tr '\n' ' ')"; fi
     PICK_DISK=""
 
+    log "7d. a RAID 1 of three drives ${D11}, ${D12} and ${D13}, made by the product, changed to a RAID 5 with no drive to add: its last drive comes out and goes back in"
+    three="[\"/dev/${D11}\",\"/dev/${D12}\",\"/dev/${D13}\"]"
+    api POST /v1/disks/raid "$(create_body Trio raid1 "${three}" Trio)"
+    code_is create-trio 200
+    PICK_DISK="${D11}"
+    check trio-whole 180 '.level == "raid1" and .disks == 3 and .missing == 0 and .state == "ok" and .action == "idle" and (.members | length) == 3 and all(.members[]; .state == "active")'
+    tname="$(jq -r .name "${WORK}/md.json" 2>/dev/null)"
+    # mdadm can only take out the member in the last slot when it cuts a mirror down: the array tells which that is
+    tlast="$(jq -r '.members[] | select(.slot == 2) | .disk' "${WORK}/md.json" 2>/dev/null)"
+    tfirst="$(jq -r '.members[] | select(.slot == 0) | .disk' "${WORK}/md.json" 2>/dev/null)"
+    if [ -n "${tlast}" ] && [ -n "${tfirst}" ] && [ "${tlast}" != "${tfirst}" ]; then pass trio-slots-told; else die trio-slots-told "no member in slot 0 and slot 2: $(seen)"; fi
+    tsum="$(g made_write Trio)" && [ -n "${tsum}" ] || fail trio-written "no file could be written on /media/Trio"
+    tfs_before="$(g made_size Trio)"
+    tsize_before="$(jq -r .size "${WORK}/md.json" 2>/dev/null)"
+
+    log "7d. what must be refused, leaving the mirror as it was"
+    refuse refuse-trio-first-drive POST "/v1/disks/raid/${tname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${tfirst}" "${tfirst}")"
+    refuse refuse-trio-wrong-confirm POST "/v1/disks/raid/${tname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"not-%s"}' "${tlast}" "${tlast}")"
+    refuse refuse-trio-blank-drive-instead POST "/v1/disks/raid/${tname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${D2}" "${D2}")"
+    refuse refuse-trio-raid6 POST "/v1/disks/raid/${tname}/level" "$(printf '{"level":"raid6","path":"/dev/%s","confirm":"%s"}' "${tlast}" "${tlast}")"
+
+    log "7d. the change, then the filesystem"
+    api POST "/v1/disks/raid/${tname}/level" "$(printf '{"level":"raid5","path":"/dev/%s","confirm":"%s"}' "${tlast}" "${tlast}")"
+    code_is change-trio-to-raid5 200
+    check trio-changed-to-raid5 600 '.level == "raid5" and .disks == 3 and .missing == 0 and .state == "ok" and .action == "idle" and (.members | length) == 3 and all(.members[]; .state == "active") and any(.members[]; .disk == $d11) and any(.members[]; .disk == $d12) and any(.members[]; .disk == $d13)'
+    now="$(g made_sum Trio)"
+    if [ -n "${tsum:-}" ] && [ "${now}" = "${tsum}" ]; then pass trio-data-after-change; else fail trio-data-after-change "sha256 ${now:-none}, ${tsum:-none} was written"; fi
+    tsize_after="$(jq -r .size "${WORK}/md.json" 2>/dev/null)"
+    # a RAID 5 of three holds two drives' worth, a mirror of three held one
+    if [ "${tsize_before:-0}" -gt 0 ] && [ "${tsize_after:-0}" -gt $((tsize_before * 3 / 2)) ]; then pass trio-array-holds-more; else fail trio-array-holds-more "${tsize_before:-none} bytes before, ${tsize_after:-none} after"; fi
+    api POST "/v1/disks/raid/${tname}/filesystem" '{}'
+    code_is grow-trio-filesystem 200
+    tfs_after="$(g made_size Trio)"
+    if [ "${tfs_before:-0}" -gt 0 ] && [ "${tfs_after:-0}" -gt $((tfs_before * 3 / 2)) ]; then pass trio-filesystem-grown; else fail trio-filesystem-grown "${tfs_before:-none} bytes before, ${tfs_after:-none} after"; fi
+    now="$(g made_sum Trio)"
+    if [ -n "${tsum:-}" ] && [ "${now}" = "${tsum}" ]; then pass trio-data-after-grow; else fail trio-data-after-grow "sha256 ${now:-none}, ${tsum:-none} was written"; fi
+    if [ -z "$(g backups)" ]; then pass trio-backup-file-gone; else fail trio-backup-file-gone "left behind: $(g backups | tr '\n' ' ')"; fi
+    PICK_DISK=""
+
     log "8. the guest restarts"
     old="$(g boot_id)"
     [ -n "${old}" ] || die reboot "the guest gave no boot id"
@@ -318,7 +358,7 @@ run() {
         sleep 5
     done
     # the kernel may name the disks otherwise after a restart
-    read -r D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 SYS <<<"$(g disks)"
+    read -r D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11 D12 D13 SYS <<<"$(g disks)"
     check reboot-assembled 300 "${OK}"' and any(.members[]; .disk == $d1) and any(.members[]; .disk == $d3)'
     [ "$(jq -r .name "${WORK}/md.json" 2>/dev/null)" = md1 ] || log "the array came back as $(jq -r .name "${WORK}/md.json" 2>/dev/null): accepted by its members"
     same_data data-after-reboot "${sum}"
@@ -339,6 +379,13 @@ run() {
     if [ -n "${gsum:-}" ] && [ "${now}" = "${gsum}" ]; then pass raid5-data-after-reboot; else fail raid5-data-after-reboot "sha256 ${now:-none} (the storage was not mounted again within 2 minutes?), ${gsum:-none} was written"; fi
     now="$(g made_size Grown)"
     if [ "${now}" = "${fs_after:-none}" ]; then pass raid5-filesystem-after-reboot; else fail raid5-filesystem-after-reboot "${now:-none} bytes, ${fs_after:-none} before the restart"; fi
+    # the RAID 5 made of a mirror of three: the same three drives, its file and its grown filesystem
+    PICK_DISK="${D11}"
+    check trio-raid5-reassembled 300 '.level == "raid5" and .disks == 3 and .missing == 0 and .state == "ok" and any(.members[]; .disk == $d11) and any(.members[]; .disk == $d12) and any(.members[]; .disk == $d13)'
+    now="$(g made_sum Trio)"
+    if [ -n "${tsum:-}" ] && [ "${now}" = "${tsum}" ]; then pass trio-data-after-reboot; else fail trio-data-after-reboot "sha256 ${now:-none} (the storage was not mounted again within 2 minutes?), ${tsum:-none} was written"; fi
+    now="$(g made_size Trio)"
+    if [ "${now}" = "${tfs_after:-none}" ]; then pass trio-filesystem-after-reboot; else fail trio-filesystem-after-reboot "${now:-none} bytes, ${tfs_after:-none} before the restart"; fi
 
     log "${FAILS} check(s) failed"
     [ "${FAILS}" -eq 0 ]
