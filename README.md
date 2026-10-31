@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.66
+
+**A backup destination can keep its backups with restic** (Settings, Backups, Destinations, **Keep with restic...**): each backup costs only what changed since the last, and files keep their owners and permissions. Opt-in, and the password of the repository is shown once: write it down.
+
 ## What is in v0.5.65
 
 **A RAID 1 of three drives can be changed to a RAID 5 too**, with no drive to add: its last drive comes out and goes back in as the third. A RAID 5 survives one failed drive where the mirror of three survived two, and holds twice as much.

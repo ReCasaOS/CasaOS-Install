@@ -88,6 +88,7 @@ readonly GITHUB_OWNER="${GITHUB_OWNER:-ReCasaOS}"
 readonly CHECKSUMS_BASE_URL="${CHECKSUMS_BASE_URL:-https://github.com/${GITHUB_OWNER}}"
 readonly UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-https://github.com/IceWhaleTech}"
 readonly RCLONE_BASE_URL="${RCLONE_BASE_URL:-https://github.com/rclone}"
+readonly RESTIC_BASE_URL="${RESTIC_BASE_URL:-https://github.com/restic}"
 readonly MODULES_GIT_BASE_URL="${MODULES_GIT_BASE_URL:-${CHECKSUMS_BASE_URL}}"
 readonly PYTHON="${PYTHON:-python3}"
 
@@ -455,6 +456,18 @@ fill_installer() {
         rclone_arch="${arch/arm-7/arm-v7}"
         sum="$(fetch_checksum "${RCLONE_BASE_URL}" rclone "${RCLONE_TAG}" "rclone-${RCLONE_TAG}-linux-${rclone_arch}.zip" SHA256SUMS)"
         sed -i "s|__RCLONE_SHA256_${upper}__|${sum}|g" "${target}"
+    done
+
+    # restic, from its own release, for the backup destinations that are switched
+    # to it. Its archives are named for the version without the v, and it calls the
+    # 32-bit ARM build arm where the components say arm-7. It publishes SHA256SUMS.
+    local restic_arch
+    for arch in amd64 arm64 arm-7; do
+        upper="${arch//-/}"
+        upper="${upper^^}"
+        restic_arch="${arch/arm-7/arm}"
+        sum="$(fetch_checksum "${RESTIC_BASE_URL}" restic "${RESTIC_TAG}" "restic_${RESTIC_TAG#v}_linux_${restic_arch}.bz2" SHA256SUMS)"
+        sed -i "s|__RESTIC_SHA256_${upper}__|${sum}|g" "${target}"
     done
     sum="$(compute_checksum "${UPSTREAM_BASE_URL}" CasaOS-AppStore "${CASAOS_APPSTORE_TAG}" "${APPSTORE_SEED_FILE}" "${OUTPUT_DIR}")"
     sed -i "s|__CASAOS_APPSTORE_SHA256__|${sum}|g" "${target}"

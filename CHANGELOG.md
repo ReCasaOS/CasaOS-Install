@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.66] - 2026-10-31
+
+Components: CasaOS-AppManagement `v0.4.78`, CasaOS-UI `v0.4.116`, and a new one, restic `v0.19.1`. Unchanged from v0.5.65: CasaOS `v0.4.88`, CasaOS-LocalStorage `v0.4.53`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **A backup destination can keep its backups with restic.** In Settings, Backups, Destinations, **Keep with restic...** switches a destination: from then on a backup there goes into a restic repository (folder `casaos-restic`, reached through the same rclone remote, so credentials and backends are configured once). A backup costs what changed since the last one instead of another full copy, and files keep their owners and permissions, which an rclone copy loses. It is opt-in per destination; the runs, schedules, retention and restores are the same ones. Backups already at the destination stay where they are and can still be restored, but are no longer listed once it is switched, and there is no way back yet.
+- **The password of the repository is shown once**, in a dialog that has to be acknowledged. It is kept on the box in `/var/lib/casaos/backups/restic/<name>.key` (root only). **The box's own backup does not hold it**: a key kept inside the repository it opens would not open anything on a new box. Write it down; without it the repository cannot be read. Giving the dialog the password of a repository that is already there attaches the destination to it, which is how backups are reached again from another box.
+- `GET` and `PUT /v2/app_management/backup/destinations/{name}/restic` ([ReCasaOS/CasaOS-AppManagement#28](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/28), [ReCasaOS/CasaOS-UI#75](https://github.com/ReCasaOS/CasaOS-UI/pull/75)).
+- **restic is installed at a pinned version**, from its own release, with one digest per architecture checked before it is unpacked, like rclone. It is optional: if it cannot be downloaded the install goes on with a warning and the switch answers that restic is not installed. A digest that does not match ends the install. `bzip2` joins the dependencies, since restic is published as `.bz2`.
+
+### Proof
+
+The commands are tested with a faked restic, and once with the real restic 0.19.1 on Linux (back a folder up twice, change it, restore, purge one run). The install check, which runs against this release, switches an `alias` destination, takes two backups of an app with restic, finds a repository on disk with nothing of the app readable in it, restores the first and expects the first content back, the file added since gone and the file's owner (set to 1234) kept. What it does not show: a real S3 or SFTP remote under restic.
+
 ## [0.5.65] - 2026-10-31
 
 Components: CasaOS-LocalStorage `v0.4.53`, CasaOS-UI `v0.4.115`. Unchanged from v0.5.64: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
