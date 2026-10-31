@@ -2,7 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.67] - 2026-10-31
+
+Components: CasaOS-AppManagement `v0.4.79`. Unchanged from v0.5.66: CasaOS `v0.4.88`, CasaOS-LocalStorage `v0.4.53`, CasaOS-UI `v0.4.116`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A backup to a destination kept with restic works.** In v0.5.66 a destination could be switched to restic but the first backup to it failed with `unable to locate cache directory: neither $XDG_CACHE_HOME nor $HOME are defined`: the service has neither variable, creating the repository does not need a cache and a backup does. restic is now told to keep its cache in `/var/cache/casaos/restic` ([ReCasaOS/CasaOS-AppManagement#29](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/29)). Backups to destinations that are not switched were never affected.
+
+### Proof
+
+The install check of v0.5.66 is what found it, on three legs with the same error; nothing after the first backup had run. The real-binary test now runs without those two variables, as the service does, and fails with that message when the setting is left out. The install check of this release is the first to take two backups with restic, restore the first and look at the owner of the file. Its result is added here.
+
 ## [0.5.66] - 2026-10-31
+
+**Known problem, fixed in 0.5.67:** a backup to a destination switched to restic fails (no cache directory); switching itself works.
 
 Components: CasaOS-AppManagement `v0.4.78`, CasaOS-UI `v0.4.116`, and a new one, restic `v0.19.1`. Unchanged from v0.5.65: CasaOS `v0.4.88`, CasaOS-LocalStorage `v0.4.53`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
 
