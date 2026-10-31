@@ -3,10 +3,10 @@ name: raid-proof
 # Proof of the software RAID repair and creation of a published release on a real machine: a RAID 1 made with mdadm on two blank virtual disks, its status through
 # LocalStorage (GET /v1/disks/raid), a failed disk, its removal, the refusals, a third disk added and rebuilt onto, the data on it; then a second RAID 1 made by the
 # product (POST /v1/disks/raid) from two other disks, its refusals, its mount and its data; a RAID 0; a RAID 1 changed to a RAID 5 with a third disk and its filesystem
-# grown; and a restart of the guest.
+# grown, then the same for a RAID 1 of three drives, which gives back its last one; and a restart of the guest.
 #
-# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with ten blank 64 MiB disks (virtio serials rp1 to
-# rp10) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
+# Each leg is a QEMU guest booted with KVM from the distribution's cloud image, the way stats-proof.yml boots its own, with thirteen blank 64 MiB disks (virtio serials rp1 to
+# rp13) and two forwards: ssh, and the gateway of ReCasaOS. scripts/raid-proof.sh runs on the runner: it installs the release with its installer, drives the guest over ssh,
 # calls LocalStorage through the gateway, prints PASS or FAIL for each check and fails the job on any FAIL.
 #
 #   d12  Debian 12 amd64            u24  Ubuntu 24.04 amd64
@@ -82,7 +82,7 @@ jobs:
           # Debian lists "<sum>  name", Ubuntu "<sum> *name"
           curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
 
-      - name: Boot it, with ten blank disks
+      - name: Boot it, with thirteen blank disks
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
@@ -107,7 +107,7 @@ jobs:
           cloud-localds seed.img user-data
           qemu-img resize disk.img 30G
           # the disks of the RAID: the guest finds them by their serials (/dev/disk/by-id/virtio-rp1...), not by the order of the kernel's names
-          for n in 1 2 3 4 5 6 7 8 9 10; do qemu-img create -q -f qcow2 "raid${n}.qcow2" 64M; done
+          for n in 1 2 3 4 5 6 7 8 9 10 11 12 13; do qemu-img create -q -f qcow2 "raid${n}.qcow2" 64M; done
           cat > ssh_config <<EOF
           Host vm
             HostName 127.0.0.1
@@ -134,6 +134,9 @@ jobs:
             -drive file=raid8.qcow2,if=none,id=rp8,format=qcow2 -device virtio-blk-pci,drive=rp8,serial=rp8 \
             -drive file=raid9.qcow2,if=none,id=rp9,format=qcow2 -device virtio-blk-pci,drive=rp9,serial=rp9 \
             -drive file=raid10.qcow2,if=none,id=rp10,format=qcow2 -device virtio-blk-pci,drive=rp10,serial=rp10 \
+            -drive file=raid11.qcow2,if=none,id=rp11,format=qcow2 -device virtio-blk-pci,drive=rp11,serial=rp11 \
+            -drive file=raid12.qcow2,if=none,id=rp12,format=qcow2 -device virtio-blk-pci,drive=rp12,serial=rp12 \
+            -drive file=raid13.qcow2,if=none,id=rp13,format=qcow2 -device virtio-blk-pci,drive=rp13,serial=rp13 \
             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8080-:80 -device virtio-net-pci,netdev=n0 \
             -serial file:serial.log
           for _ in $(seq 1 90); do
