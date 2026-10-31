@@ -124,6 +124,10 @@ Any one of these; an upgrade never turns them back on.
 - **In the dashboard**: the *Anonymous usage statistics* switch in the settings. It takes effect at once.
 - **By hand**: stop the core (`sudo systemctl stop casaos`), set `"enabled": false` in `/var/lib/casaos/telemetry.json` (or create the file holding `{"enabled": false}` if it is not there yet), and start it again (`sudo systemctl start casaos`).
 
+## What is in v0.5.65
+
+**A RAID 1 of three drives can be changed to a RAID 5 too**, with no drive to add: its last drive comes out and goes back in as the third. A RAID 5 survives one failed drive where the mirror of three survived two, and holds twice as much.
+
 ## What is in v0.5.64
 
 **A RAID 1 can be changed to a RAID 5** with a third blank drive, from Storage: the array stays usable while it reorganizes, then **Use the new space** grows its filesystem. Only RAID 1 to RAID 5 for now.

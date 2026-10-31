@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.65] - 2026-10-31
+
+Components: CasaOS-LocalStorage `v0.4.53`, CasaOS-UI `v0.4.115`. Unchanged from v0.5.64: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
+
+### Added
+
+- **A RAID 1 of three drives can be changed to a RAID 5 too, with no drive to add.** The **Change to RAID 5** button shows on a healthy mirror of three active drives (no spare). The window names the last drive of the mirror, which comes out, is erased and goes back in as the third drive of the RAID 5, and goes only once that drive's name is typed again. It also says what is lost: **a mirror of three survives two failed drives, a RAID 5 survives one**. What is gained is room, twice what the mirror held. As for a mirror of two, the array stays usable while it reorganizes, and **Use the new space** grows the filesystem afterwards.
+- mdadm can only take out the member in the **last slot** when it cuts a RAID 1 down from three drives to two, so `GET /v1/disks/raid` now tells each member's `slot` (-1 for a spare), and the call refuses (400) any other drive, naming the right one. It is also refused for a mirror that is degraded or resynchronizing (409), for a spare in the array, and for a disk that holds anything besides that drive and the array (another partition, the system disk).
+- A step that fails says what state the array is left in and puts the drive back in the mirror while that is possible. A drive that has just been failed is given a few seconds to be let go by the kernel before it is taken out (up to ten tries).
+
+### Proof
+
+The commands are tested with a simulated `mdadm`. The RAID proof (`raid-proof`, dispatch only) now has thirteen blank drives and a step 7d: a RAID 1 of three drives made by the product, four refusals that leave it as it was (the first drive, a wrong confirmation, a blank drive that is not a member, RAID 6), the change to a RAID 5 of the same three drives with its file unchanged, the filesystem grown, and after a restart of the guest the RAID 5, its file and its filesystem size ([ReCasaOS/CasaOS-Install#75](https://github.com/ReCasaOS/CasaOS-Install/pull/75)). Its result on this release is added here. What it cannot show: giving the bitmap back on a RAID 5 of 100 GiB or more, since its drives are 64 MiB.
+
 ## [0.5.64] - 2026-10-31
 
 Components: CasaOS-LocalStorage `v0.4.52`, CasaOS-UI `v0.4.114`. Unchanged from v0.5.63: CasaOS `v0.4.88`, CasaOS-AppManagement `v0.4.77`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`.
