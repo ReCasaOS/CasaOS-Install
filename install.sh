@@ -1056,6 +1056,7 @@ Write_Telemetry_Markers() {
     local previous
     previous="$(Previous_Release)"
     Show 2 "Previous release: ${previous}"
+    PREVIOUS_RELEASE="${previous}"
 
     ${sudo_cmd} mkdir -p "${CASA_STATE_DIR}" || Show 1 "Failed to create ${CASA_STATE_DIR}"
     ${sudo_cmd} install -m 0600 /dev/null "${CASA_STATE_DIR}/upgraded-from" || Show 1 "Failed to write ${CASA_STATE_DIR}/upgraded-from"
@@ -1287,6 +1288,10 @@ Welcome_Banner() {
     echo -e " ${aCOLOUR[2]}Distribution    : https://github.com/ReCasaOS/CasaOS-Install"
     echo -e " ${aCOLOUR[2]}Upstream        : https://github.com/IceWhaleTech/CasaOS"
     echo -e " ${aCOLOUR[2]}Special Thanks  : Sabitech  Cp0204"
+    # Asked once, on the first contact: a new box, or one coming from IceWhale's CasaOS.
+    if [[ "${PREVIOUS_RELEASE:-}" == new || "${PREVIOUS_RELEASE:-}" == upstream ]]; then
+        echo -e " ${aCOLOUR[2]}Star            : https://github.com/ReCasaOS/CasaOS  (a star helps others find it)"
+    fi
     echo -e ""
     echo -e " ${COLOUR_RESET}${aCOLOUR[1]}Uninstall       ${COLOUR_RESET}: casaos-uninstall"
     echo -e "${COLOUR_RESET}"
