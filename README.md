@@ -11,7 +11,7 @@
 
 **ReCasaOS** is a maintained release of CasaOS, the personal-cloud OS, after upstream [IceWhaleTech/CasaOS](https://github.com/IceWhaleTech/CasaOS) stopped shipping in 2025. It builds on [alvins82's fork](https://github.com/alvins82/CasaOS-Install), which kept CasaOS installable on Docker 29 and Ubuntu 26, and goes on from there: backups, alerts, apps from git, RAID, virtual machines, statistics, a safer account and network model, and a release pipeline that installs every release from scratch in CI before anyone else does.
 
-This repository holds the installer, the release pipeline and the documentation. The parts of CasaOS live in their own repositories ([Components](#components)). Every change since the fork is in the [changelog](CHANGELOG.md).
+This repository holds the installer, the release pipeline and the documentation. The parts of CasaOS live in their own repositories ([Components](#components)). Every change since the fork is in the [changelog](CHANGELOG.md). What comes next is in the [roadmap](ROADMAP.md).
 
 <p align="center">
   <img src="docs/screenshots/settings.png" alt="The settings panel, grouped under Display, System and Updates" width="300">
