@@ -23,7 +23,7 @@ Components: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.82`, CasaOS-UI `v0.4.11
 
 ### Proof
 
-The install check of this release (result added after the check) is the first to make an S3 destination with a bucket and to keep a restic repository in it, to run a repository check on demand over SFTP and over S3 and read its record back, to name a bucket that is not there, and to uninstall an app that has a named volume twice: once without deleting the data, where the volume and what is in it must still be there for the next install, and once deleting it, where the volume must be gone. What it does not show: a provider's own S3, and the weekly pass itself (an hour ticker; the check it runs is the one the button runs).
+The install check of this release ([run 41319405609](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41319405609)) is the first to make an S3 destination with a bucket and to keep a restic repository in it, to run a repository check on demand over SFTP and over S3 and read its record back, to name a bucket that is not there, and to uninstall an app that has a named volume twice: once without deleting the data, where the volume and what is in it must still be there for the next install, and once deleting it, where the volume must be gone. Result: every leg is green, the five QEMU legs and the four others, and the three new steps ran and passed on the three legs that run them (amd64 with the preinstalled Docker, amd64 with the current Docker, arm64 with the preinstalled Docker; the arm64 leg with the current Docker only checks the engine and skips them). What it does not show: a provider's own S3, and the weekly pass itself (an hour ticker; the check it runs is the one the button runs).
 
 ## [0.5.67] - 2026-10-31
 
