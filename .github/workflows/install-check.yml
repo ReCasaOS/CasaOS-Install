@@ -837,7 +837,7 @@ jobs:
         run: |
           set -euo pipefail
           api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
-          sudo mkdir -p /var/tmp/casaos-remote-sftp /var/tmp/casaos-remote-s3
+          sudo mkdir -p /var/tmp/casaos-remote-sftp /var/tmp/casaos-remote-s3/proofbucket
           sudo sh -c 'rclone serve sftp /var/tmp/casaos-remote-sftp --addr 127.0.0.1:22222 --user proof --pass proofpass123 >/var/tmp/serve-sftp.log 2>&1 &'
           sudo sh -c 'rclone serve s3 /var/tmp/casaos-remote-s3 --addr 127.0.0.1:19000 --auth-key proofkeyid12345,proofsecretkey1234567890 >/var/tmp/serve-s3.log 2>&1 &'
           trap 'sudo pkill -f "rclone serve (sftp|s3) /var/tmp/casaos-remote" || true' EXIT
@@ -845,12 +845,11 @@ jobs:
 
           html=/DATA/AppData/smoke/html
           prove() {
-            local dest="$1" backend="$2" parameters="$3" holds="$4" check="$5" before run error="" first
+            local dest="$1" backend="$2" parameters="$3" holds="$4" root="${5:-}" before run error="" first seen now
             api -X PUT "${CASA_URL}/v2/app_management/backup/destinations/${dest}" -H 'content-type: application/json' \
-              -d "{\"backend\":\"${backend}\",\"parameters\":${parameters}}" >/dev/null
-            if [ "${check}" = check ]; then
-              api -X POST "${CASA_URL}/v2/app_management/backup/destinations/${dest}/check" | jq -c .
-            fi
+              -d "$(jq -nc --arg b "${backend}" --arg r "${root}" --argjson p "${parameters}" \
+                '{backend: $b, parameters: $p} + (if $r != "" then {root: $r} else {} end)')" >/dev/null
+            api -X POST "${CASA_URL}/v2/app_management/backup/destinations/${dest}/check" | jq -c .
             api -X PUT "${CASA_URL}/v2/app_management/backup/destinations/${dest}/restic" -H 'content-type: application/json' -d '{}' \
               | jq -e '(.data.password | length) >= 32' >/dev/null
             sudo test -f "${holds}/casaos-restic/config"
@@ -900,15 +899,96 @@ jobs:
             test "$(cat "${html}/index.html")" = "${backend} one"
             test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
             docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
+
+            # the repository is checked on demand and says how it went. The check runs apart
+            # from the call, so wait for a record other than the one there was (the weekly
+            # pass may have made one already)
+            last() { api "${CASA_URL}/v2/app_management/backup/destinations/${dest}/restic" | jq -c '.data.last_check // null'; }
+            seen="$(last)"
+            api -X POST "${CASA_URL}/v2/app_management/backup/destinations/${dest}/restic/check" >/dev/null
+            now=""
+            for _ in $(seq 1 60); do
+              now="$(last)"
+              [ "${now}" != "${seen}" ] && [ "${now}" != null ] && break
+              sleep 2
+            done
+            echo "${dest} repository check: ${now}"
+            jq -e '.ok == true and ((.error // "") == "")' <<<"${now}" >/dev/null
           }
 
-          # The check of an S3 destination answers 500 up to AppManagement v0.4.80: S3 has no
-          # About, which rclone reports as an error (CasaOS-AppManagement#31). Make it `check`
-          # once the pinned AppManagement carries that fix.
           prove smokeresticsftp sftp \
-            '{"host":"127.0.0.1","port":"22222","user":"proof","pass":"proofpass123"}' /var/tmp/casaos-remote-sftp check
+            '{"host":"127.0.0.1","port":"22222","user":"proof","pass":"proofpass123"}' /var/tmp/casaos-remote-sftp
+          # S3 has no About, and a bucket is named by the person: the repository lies in it
           prove smokerestics3 s3 \
-            '{"provider":"Other","access_key_id":"proofkeyid12345","secret_access_key":"proofsecretkey1234567890","endpoint":"http://127.0.0.1:19000"}' /var/tmp/casaos-remote-s3 nocheck
+            '{"provider":"Other","access_key_id":"proofkeyid12345","secret_access_key":"proofsecretkey1234567890","endpoint":"http://127.0.0.1:19000"}' \
+            /var/tmp/casaos-remote-s3/proofbucket proofbucket
+          sudo test -d /var/tmp/casaos-remote-s3/proofbucket/casaos-restic/snapshots
+          # a bucket that is not there is said in words, not as a bare 500
+          api -X PUT "${CASA_URL}/v2/app_management/backup/destinations/smokenobucket" -H 'content-type: application/json' \
+            -d '{"backend":"s3","root":"nosuchbucket","parameters":{"provider":"Other","access_key_id":"proofkeyid12345","secret_access_key":"proofsecretkey1234567890","endpoint":"http://127.0.0.1:19000"}}' >/dev/null
+          answer="$(curl -sS -X POST "${CASA_URL}/v2/app_management/backup/destinations/smokenobucket/check" -H "Authorization: ${CASA_TOKEN}")"
+          echo "missing bucket: ${answer}"
+          jq -e '(.message // "") | test("does not exist")' <<<"${answer}" >/dev/null
+          api -X DELETE "${CASA_URL}/v2/app_management/backup/destinations/smokenobucket" >/dev/null
+
+      # An uninstall used to take the app's named volumes (a database) with it whatever the
+      # box said (CasaOS-AppManagement#30). They now go with the config folder, not before.
+      - name: An uninstall keeps the named volumes unless the data goes too
+        if: ${{ !matrix.engine_only }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          cat > volproof.yml <<'YAML'
+          name: volproof
+          services:
+            web:
+              image: nginx:alpine
+              container_name: volproof
+              volumes:
+                - data:/usr/share/nginx/html
+          volumes:
+            data: {}
+          x-casaos:
+            main: web
+            title:
+              en_us: Volume proof
+          YAML
+          install() {
+            api -X POST "${CASA_URL}/v2/app_management/compose" -H 'content-type: application/yaml' --data-binary @volproof.yml >/dev/null
+            for _ in $(seq 1 60); do
+              docker ps --format '{{.Names}} {{.Status}}' | grep '^volproof Up' >/dev/null && break
+              sleep 3
+            done
+            docker ps --format '{{.Names}} {{.Status}}' | grep '^volproof Up'
+          }
+          uninstall() {
+            api -X DELETE "${CASA_URL}/v2/app_management/compose/volproof?delete_config_folder=$1" >/dev/null
+            for _ in $(seq 1 60); do
+              docker ps -a --format '{{.Names}}' | grep '^volproof$' >/dev/null || break
+              sleep 2
+            done
+            docker ps -a --format '{{.Names}}' | grep '^volproof$' >/dev/null && { echo "volproof is still there"; exit 1; }
+            # the volume goes after the container: give it time to go, or to be seen staying
+            if [ "$1" = true ]; then
+              for _ in $(seq 1 15); do
+                docker volume ls -q | grep -x volproof_data >/dev/null || break
+                sleep 2
+              done
+            else
+              sleep 6
+            fi
+          }
+
+          install
+          docker exec volproof sh -c 'echo kept > /usr/share/nginx/html/marker'
+          uninstall false
+          docker volume ls -q | grep -x volproof_data
+          # the next install of the app finds its data
+          install
+          test "$(docker exec volproof cat /usr/share/nginx/html/marker)" = kept
+          uninstall true
+          ! docker volume ls -q | grep -x volproof_data
+          sudo rm -rf /DATA/AppData/volproof
 
       # The copy of the catalogue this distribution keeps (github.com/ReCasaOS/
       # _appstore, IceWhale's store/main.zip taken every night) is what
