@@ -827,7 +827,118 @@ jobs:
           test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
           docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
 
-      # The two steps above keep the repository in a local folder, behind an `alias`.
+      # A destination goes back to stamped copies and on to restic again, and nothing it
+      # held is lost on the way: the repository is still listed and restored from while
+      # the copies are stamped, the key never leaves the box, and a retention counts both
+      # kinds as one set. It runs on `smokerestic`, which the step above left with two
+      # snapshots, "restic one" and "restic two".
+      - name: Back to rclone from restic, and on to restic again
+        if: ${{ !matrix.engine_only && env.RESTIC_TAG != '' }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          dest="${CASA_URL}/v2/app_management/backup/destinations/smokerestic"
+          key=/var/lib/casaos/backups/restic/smokerestic.key
+          holds=/var/tmp/casaos-backup-smoke-restic
+          html=/DATA/AppData/smoke/html
+          runs() { api "${CASA_URL}/v2/app_management/backup/runs" | jq -c --arg d smokerestic '.data // [] | map(select(.destination == $d and .restore != true)) | sort_by(.stamp)'; }
+          listed() { api "${dest}/runs" | jq -r '.data | map(select(.app == "smoke")) | first | .stamps | length'; }
+          take() {
+            local keep="$1" before run error=""
+            before="$(runs | jq length)"
+            for attempt in $(seq 1 6); do
+              api -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" -H 'content-type: application/json' \
+                -d "$(jq -nc --argjson k "${keep}" '{destination: "smokerestic", hold_still: true} + (if $k > 0 then {keep: $k} else {} end)')" >/dev/null
+              run=""
+              for _ in $(seq 1 60); do
+                run="$(runs | jq -c --argjson n "${before}" 'if length > $n then last else empty end')"
+                [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
+                run=""
+                sleep 3
+              done
+              echo "attempt ${attempt} run: ${run}"
+              test -n "${run}"
+              error="$(jq -r '.error // ""' <<<"${run}")"
+              case "${error}" in
+                *"is busy"*) before="$(runs | jq length)"; sleep 5 ;;
+                *) break ;;
+              esac
+            done
+            test "${error}" = ""
+          }
+          restore() {
+            local stamp="$1" before run=""
+            before="$(api "${CASA_URL}/v2/app_management/backup/runs" | jq '[.data // [] | .[] | select(.destination == "smokerestic" and .restore == true)] | length')"
+            api -X POST "${CASA_URL}/v2/app_management/backup/restore" -H 'content-type: application/json' \
+              -d "{\"destination\":\"smokerestic\",\"app\":\"smoke\",\"stamp\":\"${stamp}\"}" >/dev/null
+            for _ in $(seq 1 60); do
+              run="$(api "${CASA_URL}/v2/app_management/backup/runs" \
+                | jq -c --argjson n "${before}" '[.data // [] | .[] | select(.destination == "smokerestic" and .restore == true)] | if length > $n then first else empty end')"
+              [ -n "${run}" ] && break
+              sleep 3
+            done
+            echo "restore of ${stamp}: ${run}"
+            test -n "${run}"
+            test "$(jq -r '.error // ""' <<<"${run}")" = ""
+          }
+
+          password="$(sudo cat "${key}")"
+          first="$(runs | jq -r '.[0].stamp')"
+
+          # back: the next backups are stamped copies, and the key and the repository stay
+          api -X DELETE "${dest}/restic" | jq -c .
+          api "${dest}/restic" | jq -e '.data.enabled == false and .data.kept == true' >/dev/null
+          test "$(sudo cat "${key}")" = "${password}"
+          sudo test -f /var/lib/casaos/backups/restic/smokerestic.key.off
+          sudo test -f "${holds}/casaos-restic/config"
+          # asked twice, it is still back; and a password is not taken for a repository this box holds
+          api -X DELETE "${dest}/restic" >/dev/null
+          test "$(code -X PUT "${dest}/restic" -H 'content-type: application/json' -d '{"password":"another-password-entirely"}')" = 400
+          test "$(sudo cat "${key}")" = "${password}"
+          # what the repository holds is still what the destination lists
+          test "$(listed)" = 2
+
+          echo "stamped three" | sudo tee "${html}/index.html" >/dev/null
+          take 0
+          test "$(runs | jq length)" = 3
+          test "$(listed)" = 3
+          # this one is a copy of the app, readable on the destination: not a repository
+          sudo find "${holds}" -name index.html | grep -q .
+          third="$(runs | jq -r '.[-1].stamp')"
+
+          # the first snapshot is restored from the repository while the copies are stamped
+          sudo chown root:root "${html}/index.html"
+          echo "changed after the backups" | sudo tee "${html}/index.html" >/dev/null
+          restore "${first}"
+          test "$(cat "${html}/index.html")" = "restic one"
+          test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
+          # and the stamped one, from where it was copied
+          restore "${third}"
+          test "$(cat "${html}/index.html")" = "stamped three"
+
+          # on: no password to type, none to write down, and the same repository
+          answer="$(api -X PUT "${dest}/restic" -H 'content-type: application/json' -d '{}')"
+          test "$(jq -r '.data.password // ""' <<<"${answer}")" = ""
+          api "${dest}/restic" | jq -e '.data.enabled == true and .data.kept == true' >/dev/null
+          test "$(sudo cat "${key}")" = "${password}"
+          sudo test ! -e /var/lib/casaos/backups/restic/smokerestic.key.off
+          test "$(listed)" = 3
+
+          # one retention for both kinds: after a backup that keeps one, neither the two
+          # snapshots nor the stamped copy are left
+          echo "restic four" | sudo tee "${html}/index.html" >/dev/null
+          take 1
+          for _ in $(seq 1 60); do
+            [ "$(listed)" = 1 ] && break
+            sleep 3
+          done
+          test "$(listed)" = 1
+          test "$(api "${dest}/runs" | jq -r '.data | map(select(.app == "smoke")) | first | .stamps[0]')" = "$(runs | jq -r 'last.stamp')"
+          test -z "$(sudo find "${holds}" -name index.html)"
+          docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
+
+      # The steps above keep the repository in a local folder, behind an `alias`.
       # SFTP and S3 are other protocols: no rename in place, no folder, a bucket made on
       # first use. rclone, which the box has, serves both on loopback, so each destination
       # is made the way a person makes one (backend and rclone's own fields) and restic
