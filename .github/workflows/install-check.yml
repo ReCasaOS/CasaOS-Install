@@ -827,6 +827,89 @@ jobs:
           test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
           docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
 
+      # The two steps above keep the repository in a local folder, behind an `alias`.
+      # SFTP and S3 are other protocols: no rename in place, no folder, a bucket made on
+      # first use. rclone, which the box has, serves both on loopback, so each destination
+      # is made the way a person makes one (backend and rclone's own fields) and restic
+      # reaches it through that remote. A provider's own S3 or SFTP is still not shown.
+      - name: A destination kept with restic, over SFTP and over S3
+        if: ${{ !matrix.engine_only && env.RESTIC_TAG != '' }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          sudo mkdir -p /var/tmp/casaos-remote-sftp /var/tmp/casaos-remote-s3
+          sudo sh -c 'rclone serve sftp /var/tmp/casaos-remote-sftp --addr 127.0.0.1:22222 --user proof --pass proofpass123 >/var/tmp/serve-sftp.log 2>&1 &'
+          sudo sh -c 'rclone serve s3 /var/tmp/casaos-remote-s3 --addr 127.0.0.1:19000 --auth-key proofkeyid12345,proofsecretkey1234567890 >/var/tmp/serve-s3.log 2>&1 &'
+          trap 'sudo pkill -f "rclone serve (sftp|s3) /var/tmp/casaos-remote" || true' EXIT
+          sleep 3
+
+          html=/DATA/AppData/smoke/html
+          prove() {
+            local dest="$1" backend="$2" parameters="$3" holds="$4" check="$5" before run error="" first
+            api -X PUT "${CASA_URL}/v2/app_management/backup/destinations/${dest}" -H 'content-type: application/json' \
+              -d "{\"backend\":\"${backend}\",\"parameters\":${parameters}}" >/dev/null
+            if [ "${check}" = check ]; then
+              api -X POST "${CASA_URL}/v2/app_management/backup/destinations/${dest}/check" | jq -c .
+            fi
+            api -X PUT "${CASA_URL}/v2/app_management/backup/destinations/${dest}/restic" -H 'content-type: application/json' -d '{}' \
+              | jq -e '(.data.password | length) >= 32' >/dev/null
+            sudo test -f "${holds}/casaos-restic/config"
+
+            echo "${backend} one" | sudo tee "${html}/index.html" >/dev/null
+            sudo chown 1234:1234 "${html}/index.html"
+            runs() { api "${CASA_URL}/v2/app_management/backup/runs" | jq -c --arg d "${dest}" '.data // [] | map(select(.destination == $d and .restore != true)) | sort_by(.stamp)'; }
+            before="$(runs | jq length)"
+            for attempt in $(seq 1 6); do
+              api -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" -H 'content-type: application/json' \
+                -d "{\"destination\":\"${dest}\",\"hold_still\":true}" >/dev/null
+              run=""
+              for _ in $(seq 1 60); do
+                run="$(runs | jq -c --argjson n "${before}" 'if length > $n then last else empty end')"
+                [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
+                run=""
+                sleep 3
+              done
+              echo "${dest} attempt ${attempt} run: ${run}"
+              test -n "${run}"
+              error="$(jq -r '.error // ""' <<<"${run}")"
+              case "${error}" in
+                *"is busy"*) before="$(runs | jq length)"; sleep 5 ;;
+                *) break ;;
+              esac
+            done
+            test "${error}" = ""
+            # the server holds a repository, with nothing of the app readable in it
+            ! sudo grep -rq "${backend} one" "${holds}"
+
+            first="$(runs | jq -r '.[0].stamp')"
+            sudo chown root:root "${html}/index.html"
+            echo "changed after the backup" | sudo tee "${html}/index.html" >/dev/null
+            before="$(api "${CASA_URL}/v2/app_management/backup/runs" | jq --arg d "${dest}" '[.data // [] | .[] | select(.destination == $d and .restore == true)] | length')"
+            api -X POST "${CASA_URL}/v2/app_management/backup/restore" -H 'content-type: application/json' \
+              -d "{\"destination\":\"${dest}\",\"app\":\"smoke\",\"stamp\":\"${first}\"}" >/dev/null
+            run=""
+            for _ in $(seq 1 60); do
+              run="$(api "${CASA_URL}/v2/app_management/backup/runs" \
+                | jq -c --arg d "${dest}" --argjson n "${before}" '[.data // [] | .[] | select(.destination == $d and .restore == true)] | if length > $n then first else empty end')"
+              [ -n "${run}" ] && break
+              sleep 3
+            done
+            echo "${dest} restore run: ${run}"
+            test -n "${run}"
+            test "$(jq -r '.error // ""' <<<"${run}")" = ""
+            test "$(cat "${html}/index.html")" = "${backend} one"
+            test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
+            docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
+          }
+
+          # The check of an S3 destination answers 500 up to AppManagement v0.4.80: S3 has no
+          # About, which rclone reports as an error (CasaOS-AppManagement#31). Make it `check`
+          # once the pinned AppManagement carries that fix.
+          prove smokeresticsftp sftp \
+            '{"host":"127.0.0.1","port":"22222","user":"proof","pass":"proofpass123"}' /var/tmp/casaos-remote-sftp check
+          prove smokerestics3 s3 \
+            '{"provider":"Other","access_key_id":"proofkeyid12345","secret_access_key":"proofsecretkey1234567890","endpoint":"http://127.0.0.1:19000"}' /var/tmp/casaos-remote-s3 nocheck
+
       # The copy of the catalogue this distribution keeps (github.com/ReCasaOS/
       # _appstore, IceWhale's store/main.zip taken every night) is what
       # AppManagement fetches when IceWhale's URL stops answering. It has to be a
