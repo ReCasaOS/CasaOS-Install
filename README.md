@@ -50,9 +50,9 @@ The installer accepts Docker 20 or later and leaves a Docker that is already the
 
 ### Backups and restore
 
-- **Apps and the box itself**, to S3, SFTP, FTP, WebDAV, OneDrive, Google Drive, Dropbox or anything else rclone speaks, optionally encrypted, on a schedule with a retention, with a history and a restore. An app that is no longer installed is put back from the compose file its backup holds. The box's own backup carries its users, shares and their accounts, schedules and destinations.
+- **Apps and the box itself**, to S3 (in a bucket you name), SFTP, FTP, WebDAV, OneDrive, Google Drive, Dropbox or anything else rclone speaks, optionally encrypted, on a schedule with a retention, with a history and a restore. An app that is no longer installed is put back from the compose file its backup holds. The box's own backup carries its users, shares and their accounts, schedules and destinations.
 - **A backup that is a consistent copy.** The app is held still for the copy and started again whatever happened; a DNS server such as AdGuard Home or Pi-hole is copied running instead, so the network keeps resolving. A backup asked for while the app is busy waits for its turn, and one that failed in the night is said at the next open of the dashboard.
-- **restic, if you want it.** A destination can be switched to a [restic](https://restic.net) repository (*Keep with restic...* in the destinations). Each backup then costs only what changed since the last one, and files keep their owners and permissions, which a plain copy loses. The password is made on the box and shown once: write it down, without it the repository cannot be read. Opt-in per destination; the runs, schedules, retention and restores are the same.
+- **restic, if you want it.** A destination can be switched to a [restic](https://restic.net) repository (*Keep with restic...* in the destinations). Each backup then costs only what changed since the last one, and files keep their owners and permissions, which a plain copy loses. The password is made on the box and shown once: write it down, without it the repository cannot be read. The repository is checked once a week and an alert says when it does not check out. Opt-in per destination; the runs, schedules, retention and restores are the same.
 
 ### Alerts
 

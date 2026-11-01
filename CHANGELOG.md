@@ -2,6 +2,29 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.68] - 2026-11-01
+
+Components: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.82`, CasaOS-UI `v0.4.118`. Unchanged from v0.5.67: CasaOS-LocalStorage `v0.4.53`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An S3 destination can name its bucket.** Until now the bucket of an S3 backup was the name of the app, which providers that share one namespace for every customer refuse. The destination form has a **Bucket** field (**Folder (optional)** for the other backends): the backups lie inside it, encrypted or not, and with restic the repository is `<bucket>/casaos-restic`. A destination without one is made as before ([ReCasaOS/CasaOS-AppManagement#32](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/32), [ReCasaOS/CasaOS-UI#76](https://github.com/ReCasaOS/CasaOS-UI/pull/76)).
+- **A restic repository is checked once a week, and you are told when it is not sound.** The box runs `restic check` on every destination switched to restic: a week after the last good check, a day after a failed one, one at a time, and not while the move to another Debian is open. A repository that does not check out raises an alert, in the same place as a failed backup: *The restic repository at "nas" does not check out*. The check reads the index, the snapshots and the list of packs with their sizes; it does not read the data inside the packs, which would mean downloading the whole repository every week. Settings, Backups, Destinations shows how the last check went and has a **Check repository** button for a check now ([ReCasaOS/CasaOS-AppManagement#33](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/33), [ReCasaOS/CasaOS#65](https://github.com/ReCasaOS/CasaOS/pull/65), [ReCasaOS/CasaOS-UI#77](https://github.com/ReCasaOS/CasaOS-UI/pull/77)).
+- **The installer asks for a GitHub star once**, in its last lines, on the first install only ([ReCasaOS/CasaOS-Install#82](https://github.com/ReCasaOS/CasaOS-Install/pull/82)).
+
+### Fixed
+
+- **Uninstalling an app no longer deletes its named volumes when the data is not to go.** `Delete userdata` governed the config folder only, and a successful uninstall removed the volumes of the app (a database) whatever it said. They now go with the config folder and stay without it, and the next install of the app finds its data. The dialog says so ([ReCasaOS/CasaOS-AppManagement#30](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/30), [ReCasaOS/CasaOS-UI#76](https://github.com/ReCasaOS/CasaOS-UI/pull/76)).
+- **Checking an S3 destination works.** S3 has no *About*, which rclone reports as an error, so the check answered 500 for a destination that worked. It lists the destination instead, and a bucket that is not there says so ([ReCasaOS/CasaOS-AppManagement#31](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/31)).
+
+### Changed
+
+- The photographs of the 2022 dashboard and the contributors file are out of the CasaOS repository ([ReCasaOS/CasaOS#64](https://github.com/ReCasaOS/CasaOS/pull/64)). A development stack that relocates its data with `DataPath` takes the restic keys and the check records along, which changes nothing on a box ([ReCasaOS/CasaOS-AppManagement#27](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/27), by [nightfullstar](https://github.com/nightfullstar)).
+
+### Proof
+
+The install check of this release (result added after the check) is the first to make an S3 destination with a bucket and to keep a restic repository in it, to run a repository check on demand over SFTP and over S3 and read its record back, to name a bucket that is not there, and to uninstall an app that has a named volume twice: once without deleting the data, where the volume and what is in it must still be there for the next install, and once deleting it, where the volume must be gone. What it does not show: a provider's own S3, and the weekly pass itself (an hour ticker; the check it runs is the one the button runs).
+
 ## [0.5.67] - 2026-10-31
 
 Components: CasaOS-AppManagement `v0.4.79`. Unchanged from v0.5.66: CasaOS `v0.4.88`, CasaOS-LocalStorage `v0.4.53`, CasaOS-UI `v0.4.116`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
