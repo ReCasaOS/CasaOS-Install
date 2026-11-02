@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.72] - 2026-11-02
+
+Components: CasaOS-LocalStorage `v0.4.56`, CasaOS-UI `v0.4.122`. Unchanged from v0.5.71: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Create a SnapRAID in one dialog.** Merging drives and protecting them with a parity drive were two features in two places, and nothing said the merge had to come first. The Storage manager now has a "Create SnapRAID" button (a banner on the Storage tab, and a button on the empty Merged Storage tab): tick the drives to merge, the biggest drive left is suggested to hold the protection, and one confirmation ("I AM SURE") does the rest, step by step on screen: a drive that is not a storage yet becomes one (mounted as it is when it holds a filesystem, erased only when it has to be formatted, and the dialog says which), SnapRAID is set up (a protection drive that is too small is refused before anything is merged), the drives are merged, and the first sync starts. If the first sync cannot start, the storage is made anyway and the daily sync does it ([ReCasaOS/CasaOS-UI#83](https://github.com/ReCasaOS/CasaOS-UI/pull/83)).
+- **The merged storage appears in a folder you choose**, `/media/Pool` by default. There, your apps keep running and nothing has to be initialized. Typing `/DATA` keeps the previous behaviour: the apps are stopped for a moment and started again, even when the merge fails. The folder has to be an absolute path of plain names that is not a storage, does not hold one and does not lie inside one. The Merged Storage tab, its edit dialog and the SnapRAID panel follow the real folder of the merge ([ReCasaOS/CasaOS-UI#83](https://github.com/ReCasaOS/CasaOS-UI/pull/83)).
+
+### Fixed
+
+- **A merged storage that is not on `/DATA` survives a restart and can be removed.** At boot, only a merge on `/DATA` was looked for: with any other merge, mergerfs was switched off and the choice was saved, so the merge was not mounted again after a restart. Removing a merge was only recognised on `/DATA` too, and it switched mergerfs off even when another merge was left. Boot now looks at every merge, removal works on any folder, and mergerfs goes off only with the last merge ([ReCasaOS/CasaOS-LocalStorage#21](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/21)).
+- Editing or removing such a merge from the dashboard no longer stops the apps, and no longer writes a second merge on `/DATA`.
+
+### Proof
+
+The install check of this release makes a merged storage on `/media/Pool` through the API, from a plain directory, then loses its mount and starts `casaos-local-storage` again as a reboot does: the merge is found again, mounted again with its files readable, and listed. It then removes the merge from the same place: nothing is left mounted or listed, and the files are still where they were. Result: added after the check. What it does not show: merges of real drives (the step merges a directory), SnapRAID on that merge, an actual reboot, and a box with several merges.
+
 ## [0.5.71] - 2026-11-02
 
 Components: CasaOS-LocalStorage `v0.4.55`, CasaOS-UI `v0.4.121`. Unchanged from v0.5.70: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.

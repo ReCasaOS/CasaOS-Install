@@ -1951,6 +1951,55 @@ jobs:
           done
           echo "SnapRAID proven on the installed box"
 
+      # A merged storage in a folder of its own, not on /DATA (the folder the
+      # SnapRAID wizard proposes since CasaOS-UI v0.4.122 is /media/Pool): made
+      # through the API from a plain directory, then its mount is lost and
+      # local-storage started again, as a reboot does. The merge is found again and
+      # mounted again, and mergerfs is still on. Before CasaOS-LocalStorage v0.4.56
+      # boot only looked for a merge on /DATA, switched mergerfs off and persisted
+      # that, so such a merge was gone after a restart. Then it is removed from the
+      # same place: unmounted, and not listed any more, its files still where they were.
+      - name: A merged storage outside /DATA is mounted again after a restart and can be removed
+        if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          json=(-H 'content-type: application/json')
+          base="${CASA_URL}/v2/local_storage/merge"
+          pool=/media/Pool
+          src=/mnt/pool-src
+          listed() { curl -s "${base}" -H "Authorization: ${CASA_TOKEN}" | jq '[.data // [] | .[] | select(.mount_point == "/media/Pool")] | length'; }
+          sudo mkdir -p "${src}"
+          echo kept | sudo tee "${src}/kept.txt" >/dev/null
+
+          api -X POST "${base}" "${json[@]}" -d "{\"fstype\":\"fuse.mergerfs\",\"mount_point\":\"${pool}\",\"source_base_path\":\"${src}\"}" | jq -e '.data.mount_point == "/media/Pool"' >/dev/null
+          mountpoint -q "${pool}"
+          test "$(sudo cat "${pool}/kept.txt")" = kept
+          test "$(listed)" -eq 1
+
+          # the mount is lost and the service starts again, as after a reboot
+          sudo umount "${pool}"
+          # "! cmd" is not checked by set -e: these are tests
+          test "$(mountpoint -q "${pool}" && echo mounted || echo free)" = free
+          sudo systemctl restart casaos-local-storage
+          for _ in $(seq 1 60); do
+            mountpoint -q "${pool}" && [ "$(listed)" = 1 ] && break
+            sleep 2
+          done
+          mountpoint -q "${pool}"
+          test "$(listed)" -eq 1
+          test "$(sudo cat "${pool}/kept.txt")" = kept
+          echo "the merge on ${pool} is mounted again after a restart"
+
+          # removed from where it is: nothing is left mounted or listed, the files stay
+          api -X POST "${base}" "${json[@]}" -d "{\"fstype\":\"fuse.mergerfs\",\"mount_point\":\"${pool}\",\"source_base_path\":\"\",\"source_volume_uuids\":[]}" | jq -e '.message == "merge removed"' >/dev/null
+          test "$(mountpoint -q "${pool}" && echo mounted || echo free)" = free
+          test "$(listed)" -eq 0
+          test "$(sudo cat "${src}/kept.txt")" = kept
+          sudo rm -rf "${src}"
+          echo "a merged storage outside /DATA is proven on the installed box"
+
       # Statistics on, sent to a capture server on this runner, never to PostHog.
       # PostHog's host resolves to this runner, as a net under the endpoint
       # check: a core that ignored the test endpoint fails here instead. The
