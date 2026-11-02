@@ -14,7 +14,7 @@ v0.5.69 was published as a pre-release and is not offered to anyone; this releas
 
 ### Proof
 
-The install check of v0.5.69 is what found it: SnapRAID passed its first sync, its sync held back after thirty files were removed and its repair, and the step failed only when the script read a repaired file without `sudo`. That script now reads it with `sudo` and prints the owner and the mode of a repaired file next to those of a file that was never lost. Result of this release's check: added after the check.
+The install check of v0.5.69 is what found it: SnapRAID passed its first sync, its sync held back after thirty files were removed and its repair, and the step failed only when the script read a repaired file without `sudo`. That script now reads it with `sudo` and prints the owner and the mode of a repaired file next to those of a file that was never lost. Result ([run 41430165416](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41430165416)): every leg is green, the SnapRAID step included. The first sync adds 52 files, the sync after thirty removals is held back, the repair brings the files back and a deleted 5 MB file comes back with the same SHA-256, the full check passes and a disk that is not mounted stops everything. A repaired file is `600 root:root` where a file that was never lost is `644 root:root`, which is what the dialog now says. What it does not show: removing a data disk from an existing setup, a parity disk on a RAID array or an encrypted storage, real drives, and a restic repository on a real S3 or SFTP remote.
 
 ## [0.5.69] - 2026-11-02
 
