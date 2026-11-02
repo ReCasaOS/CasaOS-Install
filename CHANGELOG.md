@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.70] - 2026-11-02
+
+Components: CasaOS-UI `v0.4.120`. Unchanged from v0.5.69: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.54`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+v0.5.69 was published as a pre-release and is not offered to anyone; this release replaces it and carries everything it described (SnapRAID for the merged storage, the way back from restic, choosing the files to put back).
+
+### Changed
+
+- **The Repair dialog of SnapRAID says what a repaired file looks like.** `snapraid fix` puts the bytes of a lost file back but keeps neither its owner nor its permissions: a file that was `644` and owned by user 1234 comes back `600` and owned by root. An app that runs as another user cannot read what was repaired until its owner and permissions are set again, so the dialog says it before the name of the disk is typed, in English and in French. Putting the owner and the permissions back by itself is not done ([ReCasaOS/CasaOS-UI#81](https://github.com/ReCasaOS/CasaOS-UI/pull/81)).
+
+### Proof
+
+The install check of v0.5.69 is what found it: SnapRAID passed its first sync, its sync held back after thirty files were removed and its repair, and the step failed only when the script read a repaired file without `sudo`. That script now reads it with `sudo` and prints the owner and the mode of a repaired file next to those of a file that was never lost. Result of this release's check: added after the check.
+
 ## [0.5.69] - 2026-11-02
 
 Components: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.54`, CasaOS-UI `v0.4.119`. Unchanged from v0.5.68: CasaOS `v0.4.89`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
@@ -14,7 +28,7 @@ Components: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.54`, CasaO
 
 ### Proof
 
-The install check of this release (result added after the check) is the first to protect two disks with SnapRAID on loop devices: a refused setup, a first sync, a sync held back when thirty files are gone, a repair that needs the disk typed again and brings a deleted file back byte for byte, a full check of the disks, and a disk that is not mounted. It also takes a destination from restic back to rclone and reads the backups of both kinds, and looks inside a backup to put back a folder and a file. What it does not show: removing a data disk from an existing SnapRAID setup, a parity disk on a RAID array or an encrypted storage, real drives, and a restic repository on a real S3 or SFTP remote.
+The install check of this release (result added after the check) is the first to protect two disks with SnapRAID on loop devices: a refused setup, a first sync, a sync held back when thirty files are gone, a repair that needs the disk typed again and brings a deleted file back byte for byte, a full check of the disks, and a disk that is not mounted. It also takes a destination from restic back to rclone and reads the backups of both kinds, and looks inside a backup to put back a folder and a file. What it does not show: removing a data disk from an existing SnapRAID setup, a parity disk on a RAID array or an encrypted storage, real drives, and a restic repository on a real S3 or SFTP remote. Result ([run 41412454351](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41412454351)): every leg is green except the SnapRAID step on the amd64 leg with the preinstalled Docker, which is described under 0.5.70; the steps that take a destination back to rclone from restic and that browse a backup passed on that leg.
 
 ## [0.5.68] - 2026-11-01
 
