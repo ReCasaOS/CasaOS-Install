@@ -1795,6 +1795,62 @@ jobs:
           test "$(jq -r '.data[] | select(any(.children[]; .mount_point == "/mnt/raidcheck")) | .path' <<<"${list}")" = "${array}"
           echo "the array is one storage: ${array}"
 
+      # Remove on a RAID array, on the array the step above made (four virtual
+      # disks, mounted): a wrong name is refused (400), so is an array that is not
+      # there (404), and so is an array an app holds open (409: still mounted, the
+      # file still there, still in /proc/mdstat). Then it is deleted: unmounted,
+      # stopped, gone from the storage list, its four disks without a RAID header
+      # or a signature, and good for a new array.
+      - name: A RAID array is deleted and its disks come back blank
+        if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
+        run: |
+          set -euo pipefail
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          json=(-H 'content-type: application/json')
+          array="$(readlink -f /dev/md/raidcheck)"
+          name="$(basename "${array}")"
+          base="${CASA_URL}/v1/disks/raid"
+          mapfile -t members < <(lsblk -dn -o PATH,MODEL | awk '$2 == "scsi_debug" {print $1}')
+          test "${#members[@]}" -eq 4
+          echo "deleting ${name}, made of ${members[*]}"
+          echo kept | sudo tee /mnt/raidcheck/kept.txt >/dev/null
+
+          test "$(code -X DELETE "${base}/${name}" "${json[@]}" -d '{"confirm":"other"}')" = 400
+          test "$(code -X DELETE "${base}/${name}" "${json[@]}" -d '{}')" = 400
+          test "$(code -X DELETE "${base}/md998" "${json[@]}" -d '{"confirm":"md998"}')" = 404
+          grep -q "^${name} " /proc/mdstat
+
+          # something holds the array: refused, and nothing was erased
+          (cd /mnt/raidcheck && exec sleep 300) &
+          holder=$!
+          sleep 1
+          answer="$(code -X DELETE "${base}/${name}" "${json[@]}" -d "{\"confirm\":\"${name}\"}")"
+          kill "${holder}"
+          wait "${holder}" 2>/dev/null || true
+          echo "while held: ${answer}"
+          test "${answer}" = 409
+          mountpoint -q /mnt/raidcheck
+          test "$(cat /mnt/raidcheck/kept.txt)" = kept
+          grep -q "^${name} " /proc/mdstat
+
+          curl -fsS -X DELETE "${base}/${name}" "${json[@]}" -d "{\"confirm\":\"${name}\"}" -H "Authorization: ${CASA_TOKEN}" | jq -e '.success == 200' >/dev/null
+          # "! cmd" is not checked by set -e: these are tests
+          test "$(mountpoint -q /mnt/raidcheck && echo mounted || echo free)" = free
+          test "$(grep -c "^${name} " /proc/mdstat || true)" -eq 0
+          test ! -e "${array}"
+          list="$(curl -fsS "${CASA_URL}/v1/storage" -H "Authorization: ${CASA_TOKEN}")"
+          test "$(jq --arg a "${array}" '[.data[] | select(.path == $a)] | length' <<<"${list}")" -eq 0
+          for member in "${members[@]}"; do
+            if sudo mdadm --examine "${member}" >/dev/null 2>&1; then echo "${member} is still a member of an array"; exit 1; fi
+            test -z "$(sudo wipefs --no-act "${member}")"
+          done
+
+          # the disks are free again
+          sudo mdadm --create /dev/md/again --run --metadata=1.2 --level=1 --raid-devices=2 "${members[0]}" "${members[1]}"
+          sudo mdadm --stop /dev/md/again
+          sudo mdadm --zero-superblock "${members[0]}" "${members[1]}"
+          echo "the array is deleted and its disks are blank"
+
       # SnapRAID on the real box: three disks of their own (a file each, behind a
       # loop device, formatted and mounted), the setup that installs snapraid with
       # apt, a first sync, a sync held back because 30 files were removed (more
