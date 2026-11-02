@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.69] - 2026-11-02
+
+Components: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.54`, CasaOS-UI `v0.4.119`. Unchanged from v0.5.68: CasaOS `v0.4.89`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **SnapRAID protects the merged storage against the loss of a disk.** In Storage manager, on the Merged Storage tab, pick one or two storages of their own as parity: if a merged disk dies, a new one is rebuilt from the parity, while every disk stays an ordinary disk that can be read anywhere. `snapraid` is installed from the Debian archive the first time, as `mdadm` is for a RAID array. The box syncs every night at 3 (the hour is a setting of the API, not yet of the panel) and checks the disks on Sundays after a good sync; files written after the last sync are not protected until the next one. A sync that finds more than 40 files removed since the last one is held back, with the reason on screen and a **Sync anyway** button, so a deleted folder or an unmounted disk does not wipe out the protection of what it held. Nothing runs while a data or parity disk is not mounted where it was set up. **Repair…** puts back the files lost from a disk, as they were at the last sync, and asks for the name of the disk to be typed again. Removing the protection leaves the disks, their files and the parity files alone ([ReCasaOS/CasaOS-LocalStorage#19](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/19), [ReCasaOS/CasaOS-UI#80](https://github.com/ReCasaOS/CasaOS-UI/pull/80)).
+- **A destination kept with restic can go back to rclone, and be resumed.** **Switch back to rclone…** in Settings, Backups, Destinations makes the next backups stamped copies again. Nothing is deleted: the repository stays on the destination, the box keeps its password, what the repository holds stays listed and restorable, and a schedule's retention counts the copies of both kinds. **Resume restic** switches the destination to restic again with the password it already has ([ReCasaOS/CasaOS-AppManagement#34](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/34), [ReCasaOS/CasaOS-UI#78](https://github.com/ReCasaOS/CasaOS-UI/pull/78)).
+- **Choose the files to put back from a backup.** **Choose files…** in the restore dialog opens the backup folder by folder and puts back only what is ticked, over the files that are there and deleting nothing else; the app is stopped while they are copied. The backup of the box itself is still restored whole ([ReCasaOS/CasaOS-AppManagement#35](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/35), [ReCasaOS/CasaOS-UI#79](https://github.com/ReCasaOS/CasaOS-UI/pull/79)).
+
+### Proof
+
+The install check of this release (result added after the check) is the first to protect two disks with SnapRAID on loop devices: a refused setup, a first sync, a sync held back when thirty files are gone, a repair that needs the disk typed again and brings a deleted file back byte for byte, a full check of the disks, and a disk that is not mounted. It also takes a destination from restic back to rclone and reads the backups of both kinds, and looks inside a backup to put back a folder and a file. What it does not show: removing a data disk from an existing SnapRAID setup, a parity disk on a RAID array or an encrypted storage, real drives, and a restic repository on a real S3 or SFTP remote.
+
 ## [0.5.68] - 2026-11-01
 
 Components: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.82`, CasaOS-UI `v0.4.118`. Unchanged from v0.5.67: CasaOS-LocalStorage `v0.4.53`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
