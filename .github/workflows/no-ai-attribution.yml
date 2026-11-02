@@ -27,7 +27,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -u
-          pattern='(co-authored-by:.*(claude|anthropic|copilot|chatgpt|openai|gemini)|generated (with|by) .*(claude|copilot|chatgpt|gemini)|noreply@anthropic\.com)'
+          pattern='(co-authored-by:.*(claude|anthropic|copilot|chatgpt|openai|gemini|cursor|codex|\baider\b|windsurf|devin-ai|codeium|tabnine)|generated (with|by) .*(claude|copilot|chatgpt|gemini)|noreply@anthropic\.com|cursoragent@cursor\.com)'
           found=0
 
           if printf '%s\n' "${PR_BODY}" | grep -i -E -q "${pattern}"; then
