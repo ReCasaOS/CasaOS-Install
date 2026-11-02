@@ -12,7 +12,7 @@ Components: CasaOS-LocalStorage `v0.4.55`, CasaOS-UI `v0.4.121`. Unchanged from 
 
 ### Proof
 
-The install check of this release deletes, on four virtual disks, the array its RAID step makes: a wrong name is refused, so is an array that is not there, and so is an array a process holds open (the file is still there, the array is still listed); then the deletion unmounts it, stops it, takes it off the storage list and leaves the four disks without a RAID header or a signature, and two of them make a new mirror. Result: added after the check. What it does not show: an array mounted again after a stop that was refused, real drives, and an array under LVM or encryption, which is refused and not taken down.
+The install check of this release deletes, on four virtual disks, the array its RAID step makes: a wrong name is refused, so is an array that is not there, and so is an array a process holds open (the file is still there, the array is still listed); then the deletion unmounts it, stops it, takes it off the storage list and leaves the four disks without a RAID header or a signature, and two of them make a new mirror. Result ([run 41446539719](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41446539719)): every leg is green, the new step included. Held open by a process, the array answers 409 and stays as it was; then `md127`, made of four disks, is deleted, and no disk is left with a RAID header or a signature. What it does not show: an array mounted again after a stop that was refused, real drives, and an array under LVM or encryption, which is refused and not taken down.
 
 ## [0.5.70] - 2026-11-02
 
