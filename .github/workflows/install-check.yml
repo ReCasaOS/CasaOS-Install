@@ -1864,7 +1864,9 @@ jobs:
           echo "fix: $(last fix)"
           jq -e '.ok == true' <<<"$(last fix)" >/dev/null
           test "$(ls /mnt/sr-d1/many | wc -l)" -eq 50
-          test "$(cat /mnt/sr-d1/many/f7.txt)" = "file 7"
+          # the bytes come back, not the owner or the mode: a repaired file is root-only, so it is read with sudo
+          test "$(sudo cat /mnt/sr-d1/many/f7.txt)" = "file 7"
+          echo "repaired file: $(sudo stat -c '%a %U:%G' /mnt/sr-d1/many/f7.txt), file that was never lost: $(sudo stat -c '%a %U:%G' /mnt/sr-d1/many/f40.txt)"
 
           # a disk that lost a file: the bytes are back, identical
           sudo rm /mnt/sr-d1/a.bin
