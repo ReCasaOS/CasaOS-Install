@@ -827,7 +827,231 @@ jobs:
           test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
           docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
 
-      # The two steps above keep the repository in a local folder, behind an `alias`.
+      # A destination goes back to stamped copies and on to restic again, and nothing it
+      # held is lost on the way: the repository is still listed and restored from while
+      # the copies are stamped, the key never leaves the box, and a retention counts both
+      # kinds as one set. It runs on `smokerestic`, which the step above left with two
+      # snapshots, "restic one" and "restic two".
+      - name: Back to rclone from restic, and on to restic again
+        if: ${{ !matrix.engine_only && env.RESTIC_TAG != '' }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          dest="${CASA_URL}/v2/app_management/backup/destinations/smokerestic"
+          key=/var/lib/casaos/backups/restic/smokerestic.key
+          holds=/var/tmp/casaos-backup-smoke-restic
+          html=/DATA/AppData/smoke/html
+          runs() { api "${CASA_URL}/v2/app_management/backup/runs" | jq -c --arg d smokerestic '.data // [] | map(select(.destination == $d and .restore != true)) | sort_by(.stamp)'; }
+          listed() { api "${dest}/runs" | jq -r '.data | map(select(.app == "smoke")) | first | .stamps | length'; }
+          take() {
+            local keep="$1" before run error=""
+            before="$(runs | jq length)"
+            for attempt in $(seq 1 6); do
+              api -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" -H 'content-type: application/json' \
+                -d "$(jq -nc --argjson k "${keep}" '{destination: "smokerestic", hold_still: true} + (if $k > 0 then {keep: $k} else {} end)')" >/dev/null
+              run=""
+              for _ in $(seq 1 60); do
+                run="$(runs | jq -c --argjson n "${before}" 'if length > $n then last else empty end')"
+                [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
+                run=""
+                sleep 3
+              done
+              echo "attempt ${attempt} run: ${run}"
+              test -n "${run}"
+              error="$(jq -r '.error // ""' <<<"${run}")"
+              case "${error}" in
+                *"is busy"*) before="$(runs | jq length)"; sleep 5 ;;
+                *) break ;;
+              esac
+            done
+            test "${error}" = ""
+          }
+          restore() {
+            local stamp="$1" before run=""
+            before="$(api "${CASA_URL}/v2/app_management/backup/runs" | jq '[.data // [] | .[] | select(.destination == "smokerestic" and .restore == true)] | length')"
+            api -X POST "${CASA_URL}/v2/app_management/backup/restore" -H 'content-type: application/json' \
+              -d "{\"destination\":\"smokerestic\",\"app\":\"smoke\",\"stamp\":\"${stamp}\"}" >/dev/null
+            for _ in $(seq 1 60); do
+              run="$(api "${CASA_URL}/v2/app_management/backup/runs" \
+                | jq -c --argjson n "${before}" '[.data // [] | .[] | select(.destination == "smokerestic" and .restore == true)] | if length > $n then first else empty end')"
+              [ -n "${run}" ] && break
+              sleep 3
+            done
+            echo "restore of ${stamp}: ${run}"
+            test -n "${run}"
+            test "$(jq -r '.error // ""' <<<"${run}")" = ""
+          }
+
+          password="$(sudo cat "${key}")"
+          first="$(runs | jq -r '.[0].stamp')"
+
+          # back: the next backups are stamped copies, and the key and the repository stay
+          api -X DELETE "${dest}/restic" | jq -c .
+          api "${dest}/restic" | jq -e '.data.enabled == false and .data.kept == true' >/dev/null
+          test "$(sudo cat "${key}")" = "${password}"
+          sudo test -f /var/lib/casaos/backups/restic/smokerestic.key.off
+          sudo test -f "${holds}/casaos-restic/config"
+          # asked twice, it is still back; and a password is not taken for a repository this box holds
+          api -X DELETE "${dest}/restic" >/dev/null
+          test "$(code -X PUT "${dest}/restic" -H 'content-type: application/json' -d '{"password":"another-password-entirely"}')" = 400
+          test "$(sudo cat "${key}")" = "${password}"
+          # what the repository holds is still what the destination lists
+          test "$(listed)" = 2
+
+          echo "stamped three" | sudo tee "${html}/index.html" >/dev/null
+          take 0
+          test "$(runs | jq length)" = 3
+          test "$(listed)" = 3
+          # this one is a copy of the app, readable on the destination: not a repository
+          sudo find "${holds}" -name index.html | grep -q .
+          third="$(runs | jq -r '.[-1].stamp')"
+
+          # the first snapshot is restored from the repository while the copies are stamped
+          sudo chown root:root "${html}/index.html"
+          echo "changed after the backups" | sudo tee "${html}/index.html" >/dev/null
+          restore "${first}"
+          test "$(cat "${html}/index.html")" = "restic one"
+          test "$(sudo stat -c '%u:%g' "${html}/index.html")" = "1234:1234"
+          # and the stamped one, from where it was copied
+          restore "${third}"
+          test "$(cat "${html}/index.html")" = "stamped three"
+
+          # on: no password to type, none to write down, and the same repository
+          answer="$(api -X PUT "${dest}/restic" -H 'content-type: application/json' -d '{}')"
+          test "$(jq -r '.data.password // ""' <<<"${answer}")" = ""
+          api "${dest}/restic" | jq -e '.data.enabled == true and .data.kept == true' >/dev/null
+          test "$(sudo cat "${key}")" = "${password}"
+          sudo test ! -e /var/lib/casaos/backups/restic/smokerestic.key.off
+          test "$(listed)" = 3
+
+          # one retention for both kinds: after a backup that keeps one, neither the two
+          # snapshots nor the stamped copy are left
+          echo "restic four" | sudo tee "${html}/index.html" >/dev/null
+          take 1
+          for _ in $(seq 1 60); do
+            [ "$(listed)" = 1 ] && break
+            sleep 3
+          done
+          test "$(listed)" = 1
+          test "$(api "${dest}/runs" | jq -r '.data | map(select(.app == "smoke")) | first | .stamps[0]')" = "$(runs | jq -r 'last.stamp')"
+          test -z "$(sudo find "${holds}" -name index.html)"
+          docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
+
+      # Looking inside a backup and putting back only a part of it, from a repository
+      # and from a stamped copy: a folder, then a file, over what is there, and
+      # nothing else touched or deleted. The files are found the way the screen finds
+      # them, by walking down from the top of the backup.
+      - name: Look inside a backup, and put back a folder and a file of it
+        if: ${{ !matrix.engine_only && env.RESTIC_TAG != '' }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          dest="${CASA_URL}/v2/app_management/backup/destinations/smokerestic"
+          html=/DATA/AppData/smoke/html
+          runs() { api "${CASA_URL}/v2/app_management/backup/runs" | jq -c --arg d smokerestic '.data // [] | map(select(.destination == $d and .restore != true)) | sort_by(.stamp)'; }
+          restores() { api "${CASA_URL}/v2/app_management/backup/runs" | jq -c '[.data // [] | .[] | select(.destination == "smokerestic" and .restore == true)]'; }
+          take() {
+            local before run error=""
+            before="$(runs | jq length)"
+            for attempt in $(seq 1 6); do
+              api -X POST "${CASA_URL}/v2/app_management/compose/smoke/backup" -H 'content-type: application/json' \
+                -d '{"destination":"smokerestic","hold_still":true}' >/dev/null
+              run=""
+              for _ in $(seq 1 60); do
+                run="$(runs | jq -c --argjson n "${before}" 'if length > $n then last else empty end')"
+                [ -n "${run}" ] && [ "$(jq -r '.finished_at' <<<"${run}")" != "0001-01-01T00:00:00Z" ] && break
+                run=""
+                sleep 3
+              done
+              echo "attempt ${attempt} run: ${run}"
+              test -n "${run}"
+              error="$(jq -r '.error // ""' <<<"${run}")"
+              case "${error}" in
+                *"is busy"*) before="$(runs | jq length)"; sleep 5 ;;
+                *) break ;;
+              esac
+            done
+            test "${error}" = ""
+          }
+          # the path of index.html inside the backup, found by opening folders
+          find_file() {
+            local stamp="$1" dir="$2" depth="$3" listing entry
+            [ "${depth}" -le 8 ] || return 1
+            listing="$(api -G "${dest}/runs/smoke/${stamp}/files" --data-urlencode "path=${dir}")"
+            if jq -e '.data[] | select(.name == "index.html" and .directory == false)' <<<"${listing}" >/dev/null; then
+              echo "${dir:+${dir}/}index.html"
+              return 0
+            fi
+            for entry in $(jq -r '.data[] | select(.directory) | .name' <<<"${listing}"); do
+              find_file "${stamp}" "${dir:+${dir}/}${entry}" $((depth + 1)) && return 0
+            done
+            return 1
+          }
+          put_back() {
+            local stamp="$1" wanted="$2" before run=""
+            before="$(restores | jq length)"
+            api -X POST "${CASA_URL}/v2/app_management/backup/restore" -H 'content-type: application/json' \
+              -d "$(jq -nc --arg s "${stamp}" --arg p "${wanted}" '{destination: "smokerestic", app: "smoke", stamp: $s, paths: [$p]}')" >/dev/null
+            for _ in $(seq 1 60); do
+              run="$(restores | jq -c --argjson n "${before}" 'if length > $n then first else empty end')"
+              [ -n "${run}" ] && break
+              sleep 3
+            done
+            echo "put back ${wanted}: ${run}"
+            test -n "${run}"
+            test "$(jq -r '.error // ""' <<<"${run}")" = ""
+          }
+
+          prove() {
+            local label="$1" stamp where folder
+            echo "${label} one" | sudo tee "${html}/index.html" >/dev/null
+            sudo mkdir -p "${html}/sub"
+            echo "${label} inner" | sudo tee "${html}/sub/inner.txt" >/dev/null
+            sudo chown -R 1234:1234 "${html}/index.html" "${html}/sub"
+            take
+            stamp="$(runs | jq -r 'last.stamp')"
+            where="$(find_file "${stamp}" "" 0)"
+            folder="$(dirname "${where}")/sub"
+            echo "${label}: index.html is at ${where}"
+            api -G "${dest}/runs/smoke/${stamp}/files" --data-urlencode "path=$(dirname "${where}")" \
+              | jq -e '.data | map(.name) | index("sub") != null and index("index.html") != null' >/dev/null
+
+            # changed since, and a file that was never in the backup
+            echo "changed" | sudo tee "${html}/index.html" >/dev/null
+            echo "changed" | sudo tee "${html}/sub/inner.txt" >/dev/null
+            echo "added later" | sudo tee "${html}/sub/new.txt" >/dev/null
+            echo "added later" | sudo tee "${html}/extra.txt" >/dev/null
+
+            # the folder only: its file is back, nothing else was touched, nothing deleted
+            put_back "${stamp}" "${folder}"
+            test "$(cat "${html}/sub/inner.txt")" = "${label} inner"
+            test "$(sudo stat -c '%u:%g' "${html}/sub/inner.txt")" = "1234:1234" || test "${label}" = stamped
+            test "$(cat "${html}/index.html")" = "changed"
+            test "$(cat "${html}/sub/new.txt")" = "added later"
+            test "$(cat "${html}/extra.txt")" = "added later"
+
+            # then the file
+            put_back "${stamp}" "${where}"
+            test "$(cat "${html}/index.html")" = "${label} one"
+            test "$(cat "${html}/extra.txt")" = "added later"
+            docker ps --format '{{.Names}} {{.Status}}' | grep '^smoke Up'
+          }
+
+          # a path that climbs out of the backup is refused, before anything starts
+          test "$(code -X POST "${CASA_URL}/v2/app_management/backup/restore" -H 'content-type: application/json' \
+            -d '{"destination":"smokerestic","app":"smoke","stamp":"x","paths":["../../etc/passwd"]}')" = 400
+          test "$(code -G "${dest}/runs/smoke/x/files" --data-urlencode 'path=../..')" = 400
+
+          # kept in the repository ...
+          api "${dest}/restic" | jq -e '.data.enabled == true' >/dev/null
+          prove restic
+          # ... and as a stamped copy, once the destination is back to rclone
+          api -X DELETE "${dest}/restic" >/dev/null
+          prove stamped
+
+      # The steps above keep the repository in a local folder, behind an `alias`.
       # SFTP and S3 are other protocols: no rename in place, no folder, a bucket made on
       # first use. rclone, which the box has, serves both on loopback, so each destination
       # is made the way a person makes one (backend and rclone's own fields) and restic
@@ -1570,6 +1794,104 @@ jobs:
           test "$(jq '[.data[] | .children[] | select(.mount_point == "/mnt/raidcheck")] | length' <<<"${list}")" -eq 1
           test "$(jq -r '.data[] | select(any(.children[]; .mount_point == "/mnt/raidcheck")) | .path' <<<"${list}")" = "${array}"
           echo "the array is one storage: ${array}"
+
+      # SnapRAID on the real box: three disks of their own (a file each, behind a
+      # loop device, formatted and mounted), the setup that installs snapraid with
+      # apt, a first sync, a sync held back because 30 files were removed (more
+      # than the 10 allowed), the files put back from the parity, a disk that lost
+      # a file (the bytes come back as they were), a disk that is not mounted
+      # (nothing runs), and the setup forgotten.
+      - name: SnapRAID protects a disk, holds back a sync that forgets many files, and puts them back
+        if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
+        run: |
+          set -euo pipefail
+          api() { curl -fsS "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@" -H "Authorization: ${CASA_TOKEN}"; }
+          base="${CASA_URL}/v1/disks/snapraid"
+          json=(-H 'content-type: application/json')
+          for n in d1 d2 p1; do
+            sudo truncate -s 128M "/tmp/sr-${n}.img"
+            dev="$(sudo losetup --find --show "/tmp/sr-${n}.img")"
+            echo "${dev}" > "/tmp/sr-${n}.loop"
+            sudo mkfs.ext4 -q -L "sr${n}" "${dev}"
+            sudo mkdir -p "/mnt/sr-${n}"
+            sudo mount "${dev}" "/mnt/sr-${n}"
+          done
+          # the action at work ends when the state shows no job; the result is read from "last"
+          idle() {
+            for _ in $(seq 1 90); do
+              [ "$(api "${base}" | jq '.data.job == null')" = true ] && return 0
+              sleep 2
+            done
+            echo "SnapRAID still at work"; api "${base}" | jq -c .data; return 1
+          }
+          last() { api "${base}" | jq -c ".data.last.$1"; }
+
+          sudo head -c 5000000 /dev/urandom | sudo tee /mnt/sr-d1/a.bin >/dev/null
+          sudo mkdir -p /mnt/sr-d1/many
+          for i in $(seq 1 50); do echo "file ${i}" | sudo tee "/mnt/sr-d1/many/f${i}.txt" >/dev/null; done
+          sudo head -c 3000000 /dev/urandom | sudo tee /mnt/sr-d2/b.bin >/dev/null
+          want="$(sudo sha256sum /mnt/sr-d1/a.bin | cut -d' ' -f1)"
+
+          # refused before anything is written
+          test "$(code -X PUT "${base}" "${json[@]}" -d '{"data":["/mnt/sr-d1"],"parity":[]}')" = 400
+          test "$(code -X PUT "${base}" "${json[@]}" -d '{"data":["/tmp"],"parity":["/mnt/sr-p1"]}')" = 409
+          api "${base}" | jq -e '.data.configured == false' >/dev/null
+
+          api -X PUT "${base}" "${json[@]}" -d '{"data":["/mnt/sr-d1","/mnt/sr-d2"],"parity":["/mnt/sr-p1"],"max_removed":10}' | jq -e '.data.data | length == 2' >/dev/null
+          api "${base}" | jq -e '.data.configured == true and .data.installed == true' >/dev/null
+          command -v snapraid
+
+          api -X POST "${base}/sync" | jq -e '.data.action == "sync"' >/dev/null
+          idle
+          echo "first sync: $(last sync)"
+          jq -e '.ok == true' <<<"$(last sync)" >/dev/null
+          test -s /mnt/sr-p1/snapraid.parity
+
+          # 30 files removed, 10 allowed: held back, and nothing was written over the parity
+          sudo rm /mnt/sr-d1/many/f{1..30}.txt
+          api -X POST "${base}/sync" >/dev/null
+          idle
+          echo "sync after removals: $(last sync)"
+          jq -e '.ok == false and .blocked == true and .diff.removed == 30' <<<"$(last sync)" >/dev/null
+          # one at a time, and fix wants the disk typed again
+          test "$(code -X POST "${base}/fix" "${json[@]}" -d '{"disk":"d1"}')" = 400
+          test "$(code -X POST "${base}/format")" = 400
+
+          # the files come back from the parity as they were at the last sync
+          api -X POST "${base}/fix" "${json[@]}" -d '{"disk":"d1","confirm":"d1"}' >/dev/null
+          idle
+          echo "fix: $(last fix)"
+          jq -e '.ok == true' <<<"$(last fix)" >/dev/null
+          test "$(ls /mnt/sr-d1/many | wc -l)" -eq 50
+          test "$(cat /mnt/sr-d1/many/f7.txt)" = "file 7"
+
+          # a disk that lost a file: the bytes are back, identical
+          sudo rm /mnt/sr-d1/a.bin
+          api -X POST "${base}/fix" "${json[@]}" -d '{"confirm":"all"}' >/dev/null
+          idle
+          jq -e '.ok == true' <<<"$(last fix)" >/dev/null
+          test "$(sudo sha256sum /mnt/sr-d1/a.bin | cut -d' ' -f1)" = "${want}"
+
+          api -X POST "${base}/scrub" "${json[@]}" -d '{"full":true}' >/dev/null
+          idle
+          jq -e '.ok == true' <<<"$(last scrub)" >/dev/null
+
+          # a disk that is not mounted: nothing runs, and the state says which
+          sudo umount /mnt/sr-d2
+          test "$(code -X POST "${base}/sync")" = 409
+          api "${base}" | jq -e '.data.missing == ["d2"]' >/dev/null
+          sudo mount "$(cat /tmp/sr-d2.loop)" /mnt/sr-d2
+          api "${base}" | jq -e '.data.missing == null' >/dev/null
+
+          api -X DELETE "${base}" >/dev/null
+          api "${base}" | jq -e '.data.configured == false' >/dev/null
+          test -s /mnt/sr-p1/snapraid.parity
+          for n in d1 d2 p1; do
+            sudo umount "/mnt/sr-${n}"
+            sudo losetup -d "$(cat "/tmp/sr-${n}.loop")"
+          done
+          echo "SnapRAID proven on the installed box"
 
       # Statistics on, sent to a capture server on this runner, never to PostHog.
       # PostHog's host resolves to this runner, as a net under the endpoint
