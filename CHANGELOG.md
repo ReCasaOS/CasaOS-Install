@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.71] - 2026-11-02
+
+Components: CasaOS-LocalStorage `v0.4.55`, CasaOS-UI `v0.4.121`. Unchanged from v0.5.70: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **Remove on a RAID array deletes the array.** The button answered "done" and did nothing: the array stayed mounted and its disks stayed locked in it, so Create RAID would not take them. It now asks for the array's name typed again, unmounts the array, stops it and erases the RAID header of each disk, so the disks read blank. Everything on the array is lost. It is refused, and nothing is erased, while the system, the merged storage or SnapRAID is on the array, while volumes are stacked on it (LVM, encryption), or while an app holds it open ([ReCasaOS/CasaOS-LocalStorage#20](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/20), [ReCasaOS/CasaOS-UI#82](https://github.com/ReCasaOS/CasaOS-UI/pull/82)).
+
+### Proof
+
+The install check of this release deletes, on four virtual disks, the array its RAID step makes: a wrong name is refused, so is an array that is not there, and so is an array a process holds open (the file is still there, the array is still listed); then the deletion unmounts it, stops it, takes it off the storage list and leaves the four disks without a RAID header or a signature, and two of them make a new mirror. Result: added after the check. What it does not show: an array mounted again after a stop that was refused, real drives, and an array under LVM or encryption, which is refused and not taken down.
+
 ## [0.5.70] - 2026-11-02
 
 Components: CasaOS-UI `v0.4.120`. Unchanged from v0.5.69: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.54`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
