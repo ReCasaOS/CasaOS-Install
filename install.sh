@@ -227,6 +227,8 @@ INSTALL_COMPLETED=0
 # fork-release as it was before the copy onto / replaced it (see onExit)
 PREVIOUS_FORK_RELEASE=""
 FORK_RELEASE_REPLACED=0
+# the policy-rc.d this run put in place while tailscale installs, if any (see onExit)
+POLICY_RC_D_ADDED=""
 
 trap 'onCtrlC' INT
 trap 'onExit $?' EXIT
@@ -238,6 +240,11 @@ onCtrlC() {
 onExit() {
     local exit_code="$1"
     local service
+
+    # left in place, it would keep every later package from starting its service
+    if [[ -n "${POLICY_RC_D_ADDED}" ]]; then
+        ${sudo_cmd} rm -f "${POLICY_RC_D_ADDED}"
+    fi
 
     if ((exit_code == 0)); then
         return
@@ -982,16 +989,30 @@ Install_Restic() {
 # that tailscale is not installed. Most systems do not ship it, so Tailscale's own
 # repository is added then, signed by its key, and taken away again if it does not
 # answer: a source that fails would fail every later apt-get update of the host.
-# tailscaled is left stopped and disabled. A tailscale that is already here is left
-# exactly as it is: it may be the owner's own network, or this box's fleet.
+# tailscaled is never started: on apt a policy-rc.d keeps the package from starting
+# it, and it is left stopped and disabled. A tailscale or a tailnet that is already
+# here (the host's CLI, a snap, a container on the host's network) is left exactly
+# as it is: it may be the owner's own network, or this box's fleet.
 Install_Tailscale() {
-    local status=0 pm=yum os="${ID:-}" codename="${VERSION_CODENAME:-}" added=()
+    local status=0 pm=yum os="${ID:-}" codename="${VERSION_CODENAME:-}" added=() p key=""
     local keyring=/usr/share/keyrings/tailscale-archive-keyring.gpg
     local list="${PREFIX}/etc/apt/sources.list.d/tailscale.list"
     local repo="${PREFIX}/etc/yum.repos.d/tailscale.repo"
     local url="https://pkgs.tailscale.com/stable/fedora/tailscale.repo"
+    local rcd="${PREFIX}/usr/sbin/policy-rc.d"
+    local fetch=(curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60)
 
     if [[ -x "$(command -v tailscale)" ]]; then
+        return 0
+    fi
+    for p in /run/tailscale /var/lib/tailscale /snap/bin/tailscale; do
+        if [[ -e "${PREFIX}${p}" ]]; then return 0; fi
+    done
+    if command -v ip >/dev/null 2>&1 && ip link show tailscale0 >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v systemctl >/dev/null 2>&1 &&
+        systemctl list-unit-files --no-legend tailscaled.service 'snap.tailscale.*' 2>/dev/null | grep -q tailscale; then
         return 0
     fi
     Show 2 "Install the optional private network of the Fleet: tailscale"
@@ -999,21 +1020,39 @@ Install_Tailscale() {
     if command -v apt-get >/dev/null 2>&1; then
         if ! apt-cache show tailscale >/dev/null 2>&1; then
             [[ -z "${UBUNTU_CODENAME:-}" ]] || os=ubuntu codename="${UBUNTU_CODENAME}"
-            added=("${PREFIX}${keyring}" "${list}")
+            for p in "${PREFIX}${keyring}" "${list}"; do
+                [[ -e "${p}" ]] || added+=("${p}")
+            done
+            # through a file of its own and install: the umask must not keep _apt from reading it
             {
-                ${sudo_cmd} curl -fsSL -o "${PREFIX}${keyring}" "https://pkgs.tailscale.com/stable/${os}/${codename}.noarmor.gpg" &&
+                key="$(mktemp)" &&
+                    ${sudo_cmd} "${fetch[@]}" -o "${key}" "https://pkgs.tailscale.com/stable/${os}/${codename}.noarmor.gpg" &&
+                    ${sudo_cmd} install -m 0644 -o root -g root "${key}" "${PREFIX}${keyring}" &&
                     echo "deb [signed-by=${keyring}] https://pkgs.tailscale.com/stable/${os} ${codename} main" | ${sudo_cmd} tee "${list}" >/dev/null &&
                     ${sudo_cmd} timeout "${APT_UPDATE_TIMEOUT}" apt-get update -qq -o Dir::Etc::sourcelist="${list}" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
             } || status=$?
+            if [[ -n "${key}" ]]; then ${sudo_cmd} rm -f "${key}"; fi
         fi
-        ((status)) || ${sudo_cmd} apt-get -y -qq install tailscale --no-upgrade || status=$?
+        if ((status == 0)); then
+            # the package's postinst would start tailscaled; 101 is "not allowed" (invoke-rc.d)
+            if [[ ! -e "${rcd}" ]]; then
+                POLICY_RC_D_ADDED="${rcd}"
+                { printf '#!/bin/sh\nexit 101\n' | ${sudo_cmd} tee "${rcd}" >/dev/null && ${sudo_cmd} chmod 0755 "${rcd}"; } || true
+            fi
+            ${sudo_cmd} apt-get -y -qq install tailscale --no-upgrade || status=$?
+            if [[ -n "${POLICY_RC_D_ADDED}" ]]; then
+                ${sudo_cmd} rm -f "${POLICY_RC_D_ADDED}"
+                POLICY_RC_D_ADDED=""
+            fi
+        fi
     elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        # the rpm does not start tailscaled (its %post only applies the presets)
         if command -v dnf >/dev/null 2>&1; then pm=dnf; fi
         if ! ${sudo_cmd} "${pm}" install -y tailscale; then
             # the RHEL one for the systems built from it (CentOS, Rocky, AlmaLinux...)
             [[ "${os}" == fedora ]] || url="https://pkgs.tailscale.com/stable/rhel/${VERSION_ID%%.*}/tailscale.repo"
-            added=("${repo}")
-            { ${sudo_cmd} curl -fsSL -o "${repo}" "${url}" && ${sudo_cmd} "${pm}" install -y tailscale; } || status=$?
+            [[ -e "${repo}" ]] || added=("${repo}")
+            { ${sudo_cmd} "${fetch[@]}" -o "${repo}" "${url}" && ${sudo_cmd} "${pm}" install -y tailscale; } || status=$?
         fi
     elif command -v zypper >/dev/null 2>&1; then
         ${sudo_cmd} zypper --non-interactive install tailscale || status=$?
