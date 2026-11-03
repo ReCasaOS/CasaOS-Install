@@ -73,7 +73,7 @@ ENV_KEY_RE = re.compile(r"MODULE_([A-Z][A-Z0-9_]*)_(TAG|COMMIT|COMPONENT|TIER)")
 TIERS = ("core", "community")
 RESERVED_ROUTES = (
     "sys", "users", "usb", "disks", "storage", "cloud", "recover", "other", "zt", "samba", "file", "folder", "image", "notify", "gateway", "casaos",
-    "app_management", "message_bus", "local_storage", "port", "driver", "batch", "test", "health", "apps", "container",
+    "app_management", "message_bus", "local_storage", "port", "driver", "batch", "test", "health", "apps", "container", "fleet",
 )
 BLANKS = "\u2800\u115f\u1160\u3164\uffa0"
 
