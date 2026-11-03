@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.80] - 2026-11-03
+
+Components: CasaOS-LocalStorage `v0.4.58`. Unchanged from v0.5.79: CasaOS `v0.4.92`, CasaOS-UI `v0.4.132`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A drive formatted from the dashboard is given back reliably.** After the filesystem was made, the storage service read its UUID before the system had it, and on a slow box gave up: the drive was formatted but not added, and the API answered with a failure. It now asks udev to read the partition again and waits for it ([ReCasaOS/CasaOS-LocalStorage#25](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/25)).
+
+### Proof
+
+The CI of the storage service builds it and the partition tests pass; the change is two calls to `udevadm`, which no unit test covers. It was found by the install check, whose leg that formats a blank drive (Docker preinstalled, amd64) was red on both runs of v0.5.77 and of v0.5.78 and green on the next dispatch of the same bundle: the failure was intermittent, and the one request that was timed took about 4 s against 1.8 s in a green run, which is what three retries running out would look like. The answer of the service in a failing run was never captured, so that cause is likely and not proven. The install check of this release: result added after the check, over several runs of that leg.
+
 ## [0.5.79] - 2026-11-03
 
 Components: CasaOS-UI `v0.4.132`. Unchanged from v0.5.78: CasaOS `v0.4.92`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
