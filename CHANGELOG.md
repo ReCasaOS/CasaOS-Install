@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.74] - 2026-11-03
+
+Components: CasaOS-LocalStorage `v0.4.57`, CasaOS-UI `v0.4.124`. Unchanged from v0.5.73: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A check of an empty SnapRAID is no longer a failure.** SnapRAID ends a check with an error and says "The array appears to be empty" when nothing has been synced yet. The box showed that as a red banner on the Merged Storage tab, and the weekly check would have raised an alert every Sunday. It is now a check that had nothing to check ([ReCasaOS/CasaOS-LocalStorage#23](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/23)).
+- **The drives SnapRAID holds can no longer be formatted or removed by mistake.** In the Storage manager, a data disk or the parity disk of a SnapRAID is tagged "SnapRAID" or "SnapRAID parity", and the Format, Rename and Remove buttons give way to a line saying to remove the protection first ([ReCasaOS/CasaOS-UI#89](https://github.com/ReCasaOS/CasaOS-UI/pull/89)). The box itself now refuses to format or remove such a storage (409, "this storage is part of SnapRAID: remove the protection first"), whoever asks ([ReCasaOS/CasaOS-LocalStorage#23](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/23)).
+
+### Proof
+
+The SnapRAID step of the install check has two more assertions. Before any sync, a check is asked for and has to come back without failure. After the first sync, the box is asked, through the calls the Storage manager makes, to format and to remove a data disk and the parity disk: every call is refused with 409, both disks are still mounted, and the parity file and a data file are still there. Result: added after the check. What it does not show: the tag and the hint in the Storage manager (unit tests only), and the dialogs on a real box.
+
 ## [0.5.73] - 2026-11-03
 
 Components: CasaOS-UI `v0.4.123`. Unchanged from v0.5.72: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.56`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
@@ -16,7 +29,7 @@ Components: CasaOS-UI `v0.4.123`. Unchanged from v0.5.72: CasaOS `v0.4.89`, Casa
 
 ### Proof
 
-The install check of this release takes one of the blank virtual disks its RAID steps leave behind and formats it through the call the dialog makes: the box makes a partition and a filesystem, mounts it, a file written there is read back, then the storage is removed and the disk wiped again, nothing left mounted or listed. Result: added after the check. What it does not show: the dialog itself on a real box, the rule that tells a blank drive from the others (the box does not list a virtual disk, so it is covered by unit tests only), and the beta dashboard (a page switch, also unit tests only).
+The install check of this release takes one of the blank virtual disks its RAID steps leave behind and formats it through the call the dialog makes: the box makes a partition and a filesystem, mounts it, a file written there is read back, then the storage is removed and the disk wiped again, nothing left mounted or listed. Result: green on every leg of the published v0.5.73 bundle (five QEMU guests, Docker current and preinstalled on amd64 and arm64), after a first run of the step on the v0.5.72 bundle that had failed only on the step itself (it looked for a virtual disk in a list the box does not put one in). What it does not show: the dialog itself on a real box, the rule that tells a blank drive from the others (the box does not list a virtual disk, so it is covered by unit tests only), and the beta dashboard (a page switch, also unit tests only).
 
 ## [0.5.72] - 2026-11-02
 

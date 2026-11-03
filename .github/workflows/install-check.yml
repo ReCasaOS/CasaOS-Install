@@ -1931,11 +1931,31 @@ jobs:
           api "${base}" | jq -e '.data.configured == true and .data.installed == true' >/dev/null
           command -v snapraid
 
+          # nothing is synced yet: SnapRAID ends a check with 1 and says the array
+          # appears to be empty, which is not a failure of the box (it used to be
+          # reported as one, and alerted every Sunday)
+          api -X POST "${base}/scrub" "${json[@]}" -d '{"full":true}' >/dev/null
+          idle
+          echo "check before any sync: $(last scrub)"
+          jq -e '.ok == true' <<<"$(last scrub)" >/dev/null
+
           api -X POST "${base}/sync" | jq -e '.data.action == "sync"' >/dev/null
           idle
           echo "first sync: $(last sync)"
           jq -e '.ok == true' <<<"$(last sync)" >/dev/null
           test -s /mnt/sr-p1/snapraid.parity
+
+          # a data disk and the parity disk can be neither formatted nor removed, by
+          # the calls the Storage manager makes: refused, and nothing is erased
+          for n in d1 p1; do
+            dev="$(cat "/tmp/sr-${n}.loop")"
+            test "$(code -X PUT "${CASA_URL}/v1/storage" "${json[@]}" -d "{\"path\":\"${dev}\",\"volume\":\"/mnt/sr-${n}\"}")" = 409
+            test "$(code -X DELETE "${CASA_URL}/v1/storage" "${json[@]}" -d "{\"path\":\"${dev}\",\"volume\":\"/mnt/sr-${n}\"}")" = 409
+            test "$(findmnt -rn --source "${dev}" >/dev/null && echo mounted || echo free)" = mounted
+          done
+          test -s /mnt/sr-p1/snapraid.parity
+          test -s /mnt/sr-d1/a.bin
+          echo "the disks SnapRAID holds are refused for format and removal"
 
           # 30 files removed, 10 allowed: held back, and nothing was written over the parity
           sudo rm /mnt/sr-d1/many/f{1..30}.txt
