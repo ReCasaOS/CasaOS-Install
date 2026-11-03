@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.76] - 2026-11-03
+
+Components: CasaOS-UI `v0.4.126`. Unchanged from v0.5.75: CasaOS `v0.4.90`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The beta dashboard has the layout that was proposed for it.** It is still opt-in (the "New dashboard (beta)" switch in the settings) and the classic dashboard stays the default. The side panels, "Needs attention", "Storage" (the system drive and the USB disks, with their SMART state) and "Backups" (the last good backup, where it went, and whether the last one failed), are on the left; the apps are on the right as one row each, with the icon, the name and whether the app is running, and filters by state (all, running, stopped, with an update). While a filter hides apps the grid cannot be dragged, so an order without them is never saved. On a narrow screen the apps come first. The backups tile of the strip shows the day and the time instead of a date cut short ([ReCasaOS/CasaOS-UI#91](https://github.com/ReCasaOS/CasaOS-UI/pull/91)).
+
+### Not in it
+
+The role and the temperature of each disk, the "back up now" and "restore" buttons, the memory each app uses and a row of favourites were in the proposal and are not here: the routes or the entry points they need do not exist yet.
+
+### Proof
+
+The dashboard's tests (7466) and the lint of the changed files pass, and the page was drawn against a stand-in for a box at a desktop and a phone width. What it does not show: the page on a real box, with its own icons, wallpaper and disks.
+
 ## [0.5.75] - 2026-11-03
 
 Components: CasaOS `v0.4.90`, CasaOS-UI `v0.4.125`. Unchanged from v0.5.74: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
