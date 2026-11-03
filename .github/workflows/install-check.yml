@@ -1969,32 +1969,35 @@ jobs:
           base="${CASA_URL}/v2/local_storage/merge"
           pool=/media/Pool
           src=/mnt/pool-src
+          # a mount made by the service belongs to root: mountpoint(1), run by the
+          # runner's user, cannot look into it, so the mount table is read instead
+          mounted() { findmnt -rn --mountpoint "${pool}" >/dev/null; }
           listed() { curl -s "${base}" -H "Authorization: ${CASA_TOKEN}" | jq '[.data // [] | .[] | select(.mount_point == "/media/Pool")] | length'; }
           sudo mkdir -p "${src}"
           echo kept | sudo tee "${src}/kept.txt" >/dev/null
 
           api -X POST "${base}" "${json[@]}" -d "{\"fstype\":\"fuse.mergerfs\",\"mount_point\":\"${pool}\",\"source_base_path\":\"${src}\"}" | jq -e '.data.mount_point == "/media/Pool"' >/dev/null
-          mountpoint -q "${pool}"
+          mounted
           test "$(sudo cat "${pool}/kept.txt")" = kept
           test "$(listed)" -eq 1
 
           # the mount is lost and the service starts again, as after a reboot
           sudo umount "${pool}"
           # "! cmd" is not checked by set -e: these are tests
-          test "$(mountpoint -q "${pool}" && echo mounted || echo free)" = free
+          test "$(mounted && echo mounted || echo free)" = free
           sudo systemctl restart casaos-local-storage
           for _ in $(seq 1 60); do
-            mountpoint -q "${pool}" && [ "$(listed)" = 1 ] && break
+            mounted && [ "$(listed)" = 1 ] && break
             sleep 2
           done
-          mountpoint -q "${pool}"
+          mounted
           test "$(listed)" -eq 1
           test "$(sudo cat "${pool}/kept.txt")" = kept
           echo "the merge on ${pool} is mounted again after a restart"
 
           # removed from where it is: nothing is left mounted or listed, the files stay
           api -X POST "${base}" "${json[@]}" -d "{\"fstype\":\"fuse.mergerfs\",\"mount_point\":\"${pool}\",\"source_base_path\":\"\",\"source_volume_uuids\":[]}" | jq -e '.message == "merge removed"' >/dev/null
-          test "$(mountpoint -q "${pool}" && echo mounted || echo free)" = free
+          test "$(mounted && echo mounted || echo free)" = free
           test "$(listed)" -eq 0
           test "$(sudo cat "${src}/kept.txt")" = kept
           sudo rm -rf "${src}"

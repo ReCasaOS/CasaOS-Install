@@ -18,7 +18,7 @@ Components: CasaOS-LocalStorage `v0.4.56`, CasaOS-UI `v0.4.122`. Unchanged from 
 
 ### Proof
 
-The install check of this release makes a merged storage on `/media/Pool` through the API, from a plain directory, then loses its mount and starts `casaos-local-storage` again as a reboot does: the merge is found again, mounted again with its files readable, and listed. It then removes the merge from the same place: nothing is left mounted or listed, and the files are still where they were. Result: added after the check. What it does not show: merges of real drives (the step merges a directory), SnapRAID on that merge, an actual reboot, and a box with several merges.
+The install check of this release makes a merged storage on `/media/Pool` through the API, from a plain directory, then loses its mount and starts `casaos-local-storage` again as a reboot does: the merge is found again, mounted again with its files readable, and listed. It then removes the merge from the same place: nothing is left mounted or listed, and the files are still where they were. Result: green on every leg (five QEMU guests, Docker current and preinstalled on amd64 and arm64) in the re-run of the published v0.5.72 bundle; the first run had failed only on the check itself, which tested a root-owned mount with `mountpoint` as the runner user. What it does not show: merges of real drives (the step merges a directory), SnapRAID on that merge, an actual reboot, and a box with several merges.
 
 ## [0.5.71] - 2026-11-02
 
