@@ -41,6 +41,8 @@ Architectures: amd64, arm64 and arm/v7, detected at run time. Running the same c
 - Ubuntu 24.04 and 26.04, Debian 12 and Debian 13, in virtual machines (amd64);
 - Debian 11 (amd64) is out of support and its security repository still lists packages it no longer serves, so a fresh install would stop at the first one it needs from there. The installer says so and offers to take that repository from archive.debian.org (`--use-debian-archive` answers yes in advance); CI installs it that way.
 
+The Fleet over a relay is checked on the Ubuntu runners too (the *Fleet relay* step: a `recasaos-relay` started on the runner, the master turned on over it, the box seen online), once the relay is published. To turn it on, set the repository variable `RELAY_REPO` (Settings, Secrets and variables, Actions, Variables) to the relay's `owner/name` on GitHub, and `RELAY_REF` to a branch or tag if not `main`; until then the step says it did not run. The release checked must have a core with the relay.
+
 The installer accepts Docker 20 or later and leaves a Docker that is already there as it is. Other versions are not tested on every release.
 
 The installer also installs tailscale and ships tailscaled **stopped and disabled**: only the Fleet turns it on, when the box joins a fleet or becomes its master over a relay, and turns it off when the box leaves. A tailscale already on the box is left as it is. It is optional: an install that cannot get it goes on without it, and the Fleet then works only with a master address typed by hand.
