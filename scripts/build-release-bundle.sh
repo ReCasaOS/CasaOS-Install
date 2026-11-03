@@ -519,7 +519,7 @@ write_version_manifest() {
     printf '%s\n' "${notes}" >"${OUTPUT_DIR}/release-notes.md"
 
     # published_at is when this bundle was built, in UTC: a box that updates
-    # itself installs a release only once it is 48 hours old, and never one
+    # itself installs a release only once it is 24 hours old, and never one
     # without it. Cores older than automatic updates ignore the key.
     printf '{\n  "version": "%s",\n  "published_at": "%s",\n  "change_log": %s\n}\n' \
         "${RELEASE_TAG}" \

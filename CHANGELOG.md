@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.75] - 2026-11-03
+
+Components: CasaOS `v0.4.90`, CasaOS-UI `v0.4.125`. Unchanged from v0.5.74: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **Automatic updates install again.** A box with the switch on never installed anything: the only target was the latest release, which had to be 48 hours old, and this repository publishes a release every few hours, so the latest was never old enough (v0.5.58 to v0.5.73 in five days, the longest gap 23 hours). While the latest release is too young, the core now aims at the newest stable release that is old enough, read from the list of releases of this repository, and installs it with the `install.sh` that release carries. One attempt a night, so a box that is behind catches up one release per night. A feed set in the configuration or by the install check is left as it was, and the update button is unchanged ([ReCasaOS/CasaOS#70](https://github.com/ReCasaOS/CasaOS/pull/70)).
+- **The delay is 24 hours, not 48.** It is still time to notice and withdraw a bad release, and a box trails the latest by about a day. The dashboard says "one day" in English, French and Italian ([ReCasaOS/CasaOS-UI#90](https://github.com/ReCasaOS/CasaOS-UI/pull/90)).
+
+### Also in the core
+
+- **The core half of the fleet** (several boxes under one master) was merged into the core before this release and ships with it: the `/v1/fleet` routes and the member's outbound tunnel ([ReCasaOS/CasaOS#69](https://github.com/ReCasaOS/CasaOS/pull/69)). The dashboard half is not in this release's dashboard.
+
+### Proof
+
+The core's unit tests of the decision cover the latest release too young, the settled release already installed, a settled release that failed twice, and a latest release old enough; the pull request's CI ran the core's tests with coverage on Linux. What it does not show: the install check does not exercise the settled path (its fake feed has no list of releases, so the core keeps the old behaviour there), the call to the GitHub list, the per-release installer, and the dashboard text on a real box.
+
 ## [0.5.74] - 2026-11-03
 
 Components: CasaOS-LocalStorage `v0.4.57`, CasaOS-UI `v0.4.124`. Unchanged from v0.5.73: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
