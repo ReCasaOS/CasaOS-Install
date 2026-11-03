@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.78] - 2026-11-03
+
+Components: CasaOS `v0.4.92`, CasaOS-UI `v0.4.130`. Unchanged from v0.5.77: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The Virtual Machines module installs on Ubuntu 26.04.** apt 3 prints a `Solving dependencies...` line that the plan of the install did not know, so the plan failed with `apt_failed` before anything was installed. The line is now read as the progress line it is ([ReCasaOS/CasaOS#78](https://github.com/ReCasaOS/CasaOS/pull/78), [ReCasaOS/CasaOS#76](https://github.com/ReCasaOS/CasaOS/issues/76)).
+- **Markdown files open in Files.** A `.md` file offered a download instead of the editor ([ReCasaOS/CasaOS-UI#97](https://github.com/ReCasaOS/CasaOS-UI/pull/97), [ReCasaOS/CasaOS#75](https://github.com/ReCasaOS/CasaOS/issues/75)).
+
+### Added
+
+- **More plain-text files open in the Files editor:** `.m3u`, `.m3u8`, `.strm`, `.nfo`, `.vtt`, `.properties`, `.ovpn`, `.patch` and `README` ([ReCasaOS/CasaOS-UI#97](https://github.com/ReCasaOS/CasaOS-UI/pull/97), [ReCasaOS/CasaOS#74](https://github.com/ReCasaOS/CasaOS/issues/74)).
+
+### Proof
+
+The dashboard's tests (7586) pass and the build of the dashboard passes in CI, and so does the core's build with its tests. What none of it shows: the Virtual Machines module installed on a real Ubuntu 26.04 (the fix is tested on the line apt 3.2 prints, as the report quotes it), and the Files editor opened in a browser on a `.md` file. The install check of this release: result added after the check.
+
 ## [0.5.77] - 2026-11-03
 
 Components: CasaOS `v0.4.91`, CasaOS-UI `v0.4.129`. Unchanged from v0.5.76: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
