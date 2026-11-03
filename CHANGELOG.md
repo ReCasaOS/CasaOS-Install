@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.73] - 2026-11-03
+
+Components: CasaOS-UI `v0.4.123`. Unchanged from v0.5.72: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.56`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A new dashboard, as an option (beta).** A switch in Settings, "New dashboard (beta)", saved with the other system settings. The beta puts the widgets of the side bar in a health strip across the top, and Files and the App Store in a System row above the apps grid; a button brings the classic dashboard back at any time. The classic dashboard stays the default ([ReCasaOS/CasaOS-UI#84](https://github.com/ReCasaOS/CasaOS-UI/pull/84)).
+
+### Fixed
+
+- **Create SnapRAID formats a blank drive.** On a drive with no partition and no filesystem, the first step failed with only the drive's name on screen: the dialog chose the drives to erase from a field the box sets to false for every drive, so none was ever formatted. A drive with no partition and no filesystem the box can mount is now the one that is formatted (the dialog already says "Will be erased" before the confirmation); a drive with partitions or a filesystem is still mounted as it is ([ReCasaOS/CasaOS-UI#86](https://github.com/ReCasaOS/CasaOS-UI/pull/86)).
+
+### Proof
+
+The install check of this release takes one of the blank virtual disks its RAID steps leave behind and formats it through the call the dialog makes: the box makes a partition and a filesystem, mounts it, a file written there is read back, then the storage is removed and the disk wiped again, nothing left mounted or listed. Result: added after the check. What it does not show: the dialog itself on a real box, the rule that tells a blank drive from the others (the box does not list a virtual disk, so it is covered by unit tests only), and the beta dashboard (a page switch, also unit tests only).
+
 ## [0.5.72] - 2026-11-02
 
 Components: CasaOS-LocalStorage `v0.4.56`, CasaOS-UI `v0.4.122`. Unchanged from v0.5.71: CasaOS `v0.4.89`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.

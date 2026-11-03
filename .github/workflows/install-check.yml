@@ -1851,6 +1851,39 @@ jobs:
           sudo mdadm --zero-superblock "${members[0]}" "${members[1]}"
           echo "the array is deleted and its disks are blank"
 
+      # Create SnapRAID formats the drives it finds blank, through POST /v1/storage
+      # with format. One of the four disks the step above left blank is formatted
+      # that way, found mounted and written to, then taken out of the storage list
+      # and wiped again. The box does not list a scsi_debug disk in /v1/disks (it
+      # lists SATA, NVMe, USB and virtio drives), so what makes a drive "blank" for
+      # the dialog (children_number 0, supported false) is not read here.
+      - name: A blank drive is formatted into a storage
+        if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
+        run: |
+          set -euo pipefail
+          json=(-H 'content-type: application/json')
+          member="$(lsblk -dn -o PATH,MODEL | awk '$2 == "scsi_debug" {print $1; exit}')"
+          test -n "${member}"
+          echo "formatting ${member}"
+          curl -fsS -X POST "${CASA_URL}/v1/storage" "${json[@]}" -d "{\"path\":\"${member}\",\"name\":\"Blank\",\"format\":true}" -H "Authorization: ${CASA_TOKEN}" | jq -e '.success == 200' >/dev/null
+          part="$(lsblk -rn -o PATH,TYPE "${member}" | awk '$2 == "part" {print $1}')"
+          test -n "${part}"
+          mp="$(findmnt -rn -o TARGET --source "${part}")"
+          test -n "${mp}"
+          echo "${part} is mounted on ${mp}"
+          echo kept | sudo tee "${mp}/kept.txt" >/dev/null
+          test "$(sudo cat "${mp}/kept.txt")" = kept
+          list="$(curl -fsS "${CASA_URL}/v1/storage" -H "Authorization: ${CASA_TOKEN}")"
+          test "$(jq --arg m "${mp}" '[.data[] | .children[]? | select(.mount_point == $m)] | length' <<<"${list}")" -eq 1
+
+          curl -fsS -X DELETE "${CASA_URL}/v1/storage" "${json[@]}" -d "{\"path\":\"${part}\",\"volume\":\"${mp}\"}" -H "Authorization: ${CASA_TOKEN}" | jq -e '.success == 200' >/dev/null
+          test "$(findmnt -rn --source "${part}" >/dev/null && echo mounted || echo free)" = free
+          list="$(curl -fsS "${CASA_URL}/v1/storage" -H "Authorization: ${CASA_TOKEN}")"
+          test "$(jq --arg m "${mp}" '[.data[] | .children[]? | select(.mount_point == $m)] | length' <<<"${list}")" -eq 0
+          sudo wipefs -a "${member}" >/dev/null
+          test -z "$(sudo wipefs --no-act "${member}")"
+          echo "a blank drive is formatted, mounted and given back"
+
       # SnapRAID on the real box: three disks of their own (a file each, behind a
       # loop device, formatted and mounted), the setup that installs snapraid with
       # apt, a first sync, a sync held back because 30 files were removed (more
