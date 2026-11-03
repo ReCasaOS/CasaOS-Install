@@ -2,6 +2,25 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.77] - 2026-11-03
+
+Components: CasaOS `v0.4.91`, CasaOS-UI `v0.4.129`. Unchanged from v0.5.76: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The Fleet page.** On a box that is the master of a fleet, a Fleet card next to Statistics (and Fleet in the settings) opens one page for every box of the fleet: an overview with who is online, offline since when or never connected, the version and what runs on each box, then the containers, the virtual machines and the updates of all the boxes, with Start, Stop, Restart and Update applied to several at once. Fleet is also a category of the alerts settings ([ReCasaOS/CasaOS-UI#87](https://github.com/ReCasaOS/CasaOS-UI/pull/87)).
+- **The beta dashboard shows the fleet.** On a master, a Fleet panel lists the boxes with how many are online, a box that has been gone for ten minutes or more (the delay of the core's own alert) comes up in Needs attention, and a Beta strip at the foot of the panel opens the Fleet page. Nothing shows on a box that is not a master ([ReCasaOS/CasaOS-UI#93](https://github.com/ReCasaOS/CasaOS-UI/pull/93), [#95](https://github.com/ReCasaOS/CasaOS-UI/pull/95)).
+
+### Fixed
+
+- **A master with no gateway certificate can add boxes.** Adding a box read the gateway's certificate to put its fingerprint in the enrolment code and failed with a missing file when there was none, even with HTTPS off. A missing certificate now gives an empty fingerprint, and the chain check alone decides; a file that exists but holds no certificate is still an error ([ReCasaOS/CasaOS#72](https://github.com/ReCasaOS/CasaOS/pull/72)).
+- **Videos open again in Files.** Opening any video threw an error before the player started, because an old audio component was loaded for every file. Audio now plays through the browser's own player, under the title and the artist ([ReCasaOS/CasaOS-UI#92](https://github.com/ReCasaOS/CasaOS-UI/pull/92), [ReCasaOS/CasaOS#71](https://github.com/ReCasaOS/CasaOS/issues/71)).
+- **The text editor shows the file again.** Every file opened empty; saving was not affected ([ReCasaOS/CasaOS-UI#94](https://github.com/ReCasaOS/CasaOS-UI/pull/94), [ReCasaOS/CasaOS#73](https://github.com/ReCasaOS/CasaOS/issues/73)).
+
+### Proof
+
+The dashboard's tests (7566 at the Fleet link) and the lint pass, and the build of the dashboard passes. The Fleet page and the panel were run against the full core stack in Docker and against a stand-in for a box at a desktop and a phone width, which is how the certificate defect above was found. What none of it shows: a fleet of two real boxes (only the box itself was enrolled), the certificate pin over a real HTTPS master, the light theme, and the two Files fixes against a real backend (the video player was mounted on a generated file, the editor is covered by a unit test). The install check of this release: result added after the check.
+
 ## [0.5.76] - 2026-11-03
 
 Components: CasaOS-UI `v0.4.126`. Unchanged from v0.5.75: CasaOS `v0.4.90`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
