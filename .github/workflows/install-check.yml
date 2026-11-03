@@ -2150,7 +2150,7 @@ jobs:
           echo "the core logged heartbeat and version_changed as sent"
 
       # An automatic update is the dashboard's update, started by the core at
-      # night once a release is two days old. Here the night is now and the
+      # night once a release is one day old. Here the night is now and the
       # releases are fake: a server on this runner answers a version.json and an
       # installer, and the core is pointed at them with its test overrides and
       # checks every ten seconds. The feature is off after the install. Turned on
