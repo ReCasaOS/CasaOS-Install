@@ -43,7 +43,9 @@ Architectures: amd64, arm64 and arm/v7, detected at run time. Running the same c
 
 The installer accepts Docker 20 or later and leaves a Docker that is already there as it is. Other versions are not tested on every release.
 
-**What is verified.** Every package the installer downloads comes from a ReCasaOS release and is checked against a SHA-256 digest before extraction. The digests are written into `install.sh` at release time from the checksums each component publishes, or, for the dashboard and the App Store seed whose releases publish none, computed from the package as published; none is typed by hand. The uninstall script is checked the same way. Docker is the exception: when the box has none, the installer installs it with get.docker.com, apt verifies its packages against Docker's own key, and ReCasaOS neither pins nor checksums them.
+The installer also installs tailscale and ships tailscaled **stopped and disabled**: only the Fleet turns it on, when the box joins a fleet or becomes its master over a relay, and turns it off when the box leaves. A tailscale already on the box is left as it is. It is optional: an install that cannot get it goes on without it, and the Fleet then works only with a master address typed by hand.
+
+**What is verified.** Every package the installer downloads comes from a ReCasaOS release and is checked against a SHA-256 digest before extraction. The digests are written into `install.sh` at release time from the checksums each component publishes, or, for the dashboard and the App Store seed whose releases publish none, computed from the package as published; none is typed by hand. The uninstall script is checked the same way. Docker is the exception: when the box has none, the installer installs it with get.docker.com, apt verifies its packages against Docker's own key, and ReCasaOS neither pins nor checksums them. tailscale is the same: from the system's repositories, or from Tailscale's (added with Tailscale's key when the system has none), verified by the package manager.
 
 ## What ReCasaOS adds to CasaOS
 

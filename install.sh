@@ -976,6 +976,64 @@ Install_Restic() {
   Install_restic_from_source
 }
 
+# Install tailscale, which the Fleet runs over when it goes through a relay: the
+# core starts tailscaled when this box joins a fleet and stops it when it leaves.
+# It is optional: a box that cannot get it still installs, and the Fleet answers
+# that tailscale is not installed. Most systems do not ship it, so Tailscale's own
+# repository is added then, signed by its key, and taken away again if it does not
+# answer: a source that fails would fail every later apt-get update of the host.
+# tailscaled is left stopped and disabled. A tailscale that is already here is left
+# exactly as it is: it may be the owner's own network, or this box's fleet.
+Install_Tailscale() {
+    local status=0 pm=yum os="${ID:-}" codename="${VERSION_CODENAME:-}" added=()
+    local keyring=/usr/share/keyrings/tailscale-archive-keyring.gpg
+    local list="${PREFIX}/etc/apt/sources.list.d/tailscale.list"
+    local repo="${PREFIX}/etc/yum.repos.d/tailscale.repo"
+    local url="https://pkgs.tailscale.com/stable/fedora/tailscale.repo"
+
+    if [[ -x "$(command -v tailscale)" ]]; then
+        return 0
+    fi
+    Show 2 "Install the optional private network of the Fleet: tailscale"
+    GreyStart
+    if command -v apt-get >/dev/null 2>&1; then
+        if ! apt-cache show tailscale >/dev/null 2>&1; then
+            [[ -z "${UBUNTU_CODENAME:-}" ]] || os=ubuntu codename="${UBUNTU_CODENAME}"
+            added=("${PREFIX}${keyring}" "${list}")
+            {
+                ${sudo_cmd} curl -fsSL -o "${PREFIX}${keyring}" "https://pkgs.tailscale.com/stable/${os}/${codename}.noarmor.gpg" &&
+                    echo "deb [signed-by=${keyring}] https://pkgs.tailscale.com/stable/${os} ${codename} main" | ${sudo_cmd} tee "${list}" >/dev/null &&
+                    ${sudo_cmd} timeout "${APT_UPDATE_TIMEOUT}" apt-get update -qq -o Dir::Etc::sourcelist="${list}" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+            } || status=$?
+        fi
+        ((status)) || ${sudo_cmd} apt-get -y -qq install tailscale --no-upgrade || status=$?
+    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        if command -v dnf >/dev/null 2>&1; then pm=dnf; fi
+        if ! ${sudo_cmd} "${pm}" install -y tailscale; then
+            # the RHEL one for the systems built from it (CentOS, Rocky, AlmaLinux...)
+            [[ "${os}" == fedora ]] || url="https://pkgs.tailscale.com/stable/rhel/${VERSION_ID%%.*}/tailscale.repo"
+            added=("${repo}")
+            { ${sudo_cmd} curl -fsSL -o "${repo}" "${url}" && ${sudo_cmd} "${pm}" install -y tailscale; } || status=$?
+        fi
+    elif command -v zypper >/dev/null 2>&1; then
+        ${sudo_cmd} zypper --non-interactive install tailscale || status=$?
+    elif command -v pacman >/dev/null 2>&1; then
+        ${sudo_cmd} pacman --noconfirm --needed -S tailscale || status=$?
+    else
+        status=1
+    fi
+    ColorReset
+
+    if ((status != 0)) || [[ ! -x "$(command -v tailscale)" ]]; then
+        if ((${#added[@]})); then ${sudo_cmd} rm -f "${added[@]}"; fi
+        Show 3 "tailscale could not be installed; continuing without it. The Fleet cannot run over a relay on this box until it is (https://tailscale.com/download/linux)."
+        return 0
+    fi
+    # no systemd (a container) has no tailscaled to stop
+    ${sudo_cmd} systemctl disable --now tailscaled >/dev/null 2>&1 || true
+    Show 0 "tailscale installed; tailscaled is stopped and disabled until this box joins a fleet."
+}
+
 #Configuration Addons
 Configuration_Addons() {
     Show 2 "Configuration CasaOS Addons"
@@ -1206,6 +1264,8 @@ DownloadAndInstallCasaOS() {
     Install_Rclone
 
     Install_Restic
+
+    Install_Tailscale
 
     Install_Module_Catalogue
 

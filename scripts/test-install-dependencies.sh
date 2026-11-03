@@ -320,4 +320,71 @@ refresh_says ok 15
 grep -q 'Update package manager complete' <<<"${out}" || fail "refresh working: ${out}"
 grep -Fq 'timeout "${APT_UPDATE_TIMEOUT}" apt-get update -qq' "${INSTALL_SH}" || fail "install.sh does not bound apt-get update"
 
+# tailscale, for the Fleet over a relay: installed from Tailscale's repository when the
+# system's own have none, and left stopped and disabled; a repository that does not
+# answer is taken away again and the install goes on; a tailscale already here is not
+# touched (the owner's network, or this box's fleet). apt-get, apt-cache and systemctl
+# are scripts on a PATH of their own, writing what they are asked into calls.
+eval "$(sed -n '/^Install_Tailscale() {$/,/^}$/p' "${INSTALL_SH}")"
+declare -F Install_Tailscale >/dev/null || fail "install.sh defines no Install_Tailscale()"
+grep -q '^    Install_Tailscale$' "${INSTALL_SH}" || fail "install.sh does not call Install_Tailscale"
+TS="${WORK}/ts"
+mkdir -p "${TS}/bin"
+for c in apt-get apt-cache systemctl; do
+    printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\n' "${c}" "${TS}" >"${TS}/bin/${c}"
+done
+cat >>"${TS}/bin/apt-get" <<EOF
+case "\$*" in
+*update*) exit "\${FAKE_APT_UPDATE:-0}" ;;
+*install*) printf '#!/bin/sh\n' >"${TS}/bin/tailscale" && chmod +x "${TS}/bin/tailscale" ;;
+esac
+EOF
+echo 'exit 100' >>"${TS}/bin/apt-cache" # tailscale is in none of the system's repositories
+chmod +x "${TS}/bin/"*
+curl() { # writes "key" where -o says, or fails as on a 404 when FAKE_CURL=404
+    [[ "${FAKE_CURL:-}" != 404 ]] || return 22
+    while [[ "$1" != -o ]]; do shift; done
+    echo key >"$2"
+}
+tailscale_says() { # <ID> <VERSION_CODENAME> <UBUNTU_CODENAME>: the install never ends
+    rm -rf "${TS}/root" "${TS}/calls"
+    mkdir -p "${TS}/root/usr/share/keyrings" "${TS}/root/etc/apt/sources.list.d"
+    out="$(
+        exec 2>&1
+        set -e
+        unset -f apt-get
+        export PATH="${TS}/bin:/usr/bin:/bin" PREFIX="${TS}/root" ID="$1" VERSION_CODENAME="$2" UBUNTU_CODENAME="$3"
+        Install_Tailscale
+    )" || fail "tailscale on $1 $2: the install ended: ${out}"
+    calls="$(cat "${TS}/calls" 2>/dev/null || true)"
+}
+LIST="${TS}/root/etc/apt/sources.list.d/tailscale.list"
+KEYRING="${TS}/root/usr/share/keyrings/tailscale-archive-keyring.gpg"
+tailscale_says debian bookworm ""
+grep -q 'tailscale installed; tailscaled is stopped and disabled' <<<"${out}" || fail "tailscale: success not said: ${out}"
+[[ "$(cat "${LIST}")" == "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian bookworm main" ]] ||
+    fail "tailscale: the source is $(cat "${LIST}")"
+[[ "$(cat "${KEYRING}")" == key ]] || fail "tailscale: no keyring"
+grep -q "apt-get update -qq -o Dir::Etc::sourcelist=${LIST} -o Dir::Etc::sourceparts=- " <<<"${calls}" ||
+    fail "tailscale: apt refreshed more than Tailscale's repository: ${calls}"
+grep -q '^systemctl disable --now tailscaled$' <<<"${calls}" || fail "tailscale: tailscaled is not stopped and disabled: ${calls}"
+# Ubuntu and the systems built on it (Mint) take Ubuntu's repository
+rm -f "${TS}/bin/tailscale"
+tailscale_says linuxmint wilma noble
+grep -q 'stable/ubuntu noble main' "${LIST}" || fail "tailscale on Mint: the source is $(cat "${LIST}")"
+# a release Tailscale does not serve, or a repository that does not refresh: nothing left behind
+for fake in "FAKE_CURL=404" "FAKE_APT_UPDATE=100"; do
+    rm -f "${TS}/bin/tailscale"
+    export "${fake?}"
+    tailscale_says debian bookworm ""
+    unset FAKE_CURL FAKE_APT_UPDATE
+    grep -q 'tailscale could not be installed; continuing without it' <<<"${out}" || fail "tailscale, ${fake}: not said: ${out}"
+    [[ ! -e "${LIST}" && ! -e "${KEYRING}" ]] || fail "tailscale, ${fake}: the repository was left behind"
+    ! grep -q systemctl <<<"${calls}" || fail "tailscale, ${fake}: systemctl was asked: ${calls}"
+done
+# already here: not one command
+printf '#!/bin/sh\n' >"${TS}/bin/tailscale" && chmod +x "${TS}/bin/tailscale"
+tailscale_says debian bookworm ""
+[[ -z "${calls}" && -z "${out}" ]] || fail "tailscale already here: it was touched: ${calls} ${out}"
+
 echo "ok: what install.sh does when a dependency cannot be installed"

@@ -219,6 +219,26 @@ jobs:
           test "${version}" = "rclone ${RCLONE_TAG}"
           test -S /var/run/rclone/rclone.sock
 
+      # The Fleet runs over tailscale when it goes through a relay, and the core starts
+      # tailscaled only when the box joins a fleet: a fresh install has it, stopped and
+      # disabled. It is optional, so the command is asked for only when the installer said
+      # it installed it (a release before it says nothing); the daemon never runs either way.
+      - name: tailscale is here, tailscaled stopped and disabled
+        run: |
+          set -euo pipefail
+          if grep -q 'tailscale installed; tailscaled is stopped and disabled' install.log; then
+            command -v tailscale
+            tailscale version | sed -n 1p
+          else
+            echo "the installer did not install tailscale:"
+            grep -n 'tailscale' install.log || echo "  (it says nothing of it: a release before it)"
+          fi
+          state="$(systemctl is-active tailscaled.service || true)"
+          enabled="$(systemctl is-enabled tailscaled.service 2>/dev/null || true)"
+          echo "tailscaled: ${state}, ${enabled:-no unit}"
+          test "${state}" = inactive
+          test "${enabled}" != enabled
+
       # No service may fail its first start. Two did on every install until v0.4.78;
       # the journals are printed so a red run says which one, and why.
       - name: First-start journals

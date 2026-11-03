@@ -41,6 +41,16 @@ version="$(rclone --version | sed -n 1p)"
 echo "rclone: ${version}"
 test "${version}" = "rclone ${RCLONE_TAG}"
 
+# tailscale, for the Fleet over a relay: here when the installer says so, never running
+if grep -q 'tailscale installed; tailscaled is stopped and disabled' install.log; then
+  echo "tailscale: $(tailscale version | sed -n 1p)"
+fi
+state="$(systemctl is-active tailscaled.service || true)"
+enabled="$(systemctl is-enabled tailscaled.service 2>/dev/null || true)"
+echo "tailscaled: ${state}, ${enabled:-no unit}"
+test "${state}" = inactive
+test "${enabled}" != enabled
+
 if grep -n 'Job for' install.log; then
   echo 'a service failed its first start'
   exit 1
