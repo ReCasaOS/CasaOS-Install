@@ -94,7 +94,7 @@ A notification on your phone or an e-mail when a backup fails, a disk fails or f
 
 ### The dashboard
 
-Moved to Vue 3, with a dark theme, a complete French translation, a settings panel that is grouped and compact, dialogs that share one layout, and a home page that fits a phone. System apps (App Store, Files, Virtual Machines, Statistics) carry a small gear mark so they are not taken for apps you installed.
+Moved to Vue 3, with a dark theme, a complete French translation, a settings panel that is grouped and compact, dialogs that share one layout, and a home page that fits a phone. System apps (App Store, Files, Virtual Machines, Statistics) carry a small gear mark so they are not taken for apps you installed. A new dashboard is offered as a beta in Settings: a health strip across the top and the system apps in a row of their own; the classic one stays the default and comes back with one button.
 
 ## Optional modules
 
