@@ -2,6 +2,29 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.79] - 2026-11-03
+
+Components: CasaOS-UI `v0.4.132`. Unchanged from v0.5.78: CasaOS `v0.4.92`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The beta dashboard's Storage panel lists each disk with its role.** One row per disk: the system drive, the data disks and the parity disks of SnapRAID, with the size used, the temperature and the SMART state ([ReCasaOS/CasaOS-UI#98](https://github.com/ReCasaOS/CasaOS-UI/pull/98)).
+- **A click anywhere on an app card of the beta dashboard opens the app,** not only its icon ([ReCasaOS/CasaOS-UI#99](https://github.com/ReCasaOS/CasaOS-UI/pull/99)).
+- **The beta bar fits a phone:** the button to go back to the classic dashboard goes under the title instead of squeezing it ([ReCasaOS/CasaOS-UI#100](https://github.com/ReCasaOS/CasaOS-UI/pull/100)).
+- **Favorites and subtitles on the beta dashboard.** "Add to favorites" in an app's menu pins it in a Favorites row above the list (kept per user). The system cards have a second line: the updates waiting on the App Store, what Files and Statistics are for, the number of virtual machines ([ReCasaOS/CasaOS-UI#102](https://github.com/ReCasaOS/CasaOS-UI/pull/102)).
+
+### Added
+
+- **A Ko-fi link in the footer,** as a text link under the credits and as a cup icon on the right of the bar ([ReCasaOS/CasaOS-UI#101](https://github.com/ReCasaOS/CasaOS-UI/pull/101)).
+
+### Not in it
+
+The "back up now" and "restore" buttons, the memory each app uses, dragging the favorites to reorder them and a bottom tab bar on a phone were in the proposal and are not here.
+
+### Proof
+
+The dashboard's tests (7602) and the lint of the changed files pass, and the build passes in CI. The beta dashboard was drawn against a stand-in for a box. What it does not show: the page on a real box, with its own icons, wallpaper and disks. The install check of this release: result added after the check.
+
 ## [0.5.78] - 2026-11-03
 
 Components: CasaOS `v0.4.92`, CasaOS-UI `v0.4.130`. Unchanged from v0.5.77: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.57`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
