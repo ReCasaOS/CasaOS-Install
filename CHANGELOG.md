@@ -30,7 +30,7 @@ Components: CasaOS-LocalStorage `v0.4.57`, CasaOS-UI `v0.4.124`. Unchanged from 
 
 ### Proof
 
-The SnapRAID step of the install check has two more assertions. Before any sync, a check is asked for and has to come back without failure. After the first sync, the box is asked, through the calls the Storage manager makes, to format and to remove a data disk and the parity disk: every call is refused with 409, both disks are still mounted, and the parity file and a data file are still there. Result: added after the check. What it does not show: the tag and the hint in the Storage manager (unit tests only), and the dialogs on a real box.
+The SnapRAID step of the install check has two more assertions. Before any sync, a check is asked for and has to come back without failure. After the first sync, the box is asked, through the calls the Storage manager makes, to format and to remove a data disk and the parity disk: every call is refused with 409, both disks are still mounted, and the parity file and a data file are still there. Result: green on every leg of the published v0.5.74 bundle (five QEMU guests, Docker current and preinstalled on amd64 and arm64), at the first run: the check before any sync came back with `ok: true`, and the four calls were refused. What it does not show: the tag and the hint in the Storage manager (unit tests only), and the dialogs on a real box.
 
 ## [0.5.73] - 2026-11-03
 
