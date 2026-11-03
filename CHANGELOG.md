@@ -16,7 +16,7 @@ Components: CasaOS-UI `v0.4.123`. Unchanged from v0.5.72: CasaOS `v0.4.89`, Casa
 
 ### Proof
 
-The install check of this release takes one of the blank virtual disks its RAID steps leave behind and asks the box what the dialog asks: the drive is listed with no partition and no supported filesystem. It formats the drive through the call the dialog makes, finds it mounted and writes a file to it, then removes the storage and wipes the drive again: nothing is left mounted or listed. Result: added after the check. What it does not show: the dialog itself on a real box, a blank drive that is a real disk, and the beta dashboard (a page switch, covered by unit tests only).
+The install check of this release takes one of the blank virtual disks its RAID steps leave behind and formats it through the call the dialog makes: the box makes a partition and a filesystem, mounts it, a file written there is read back, then the storage is removed and the disk wiped again, nothing left mounted or listed. Result: added after the check. What it does not show: the dialog itself on a real box, the rule that tells a blank drive from the others (the box does not list a virtual disk, so it is covered by unit tests only), and the beta dashboard (a page switch, also unit tests only).
 
 ## [0.5.72] - 2026-11-02
 
