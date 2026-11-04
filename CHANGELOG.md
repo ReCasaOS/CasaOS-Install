@@ -2,6 +2,32 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.81] - 2026-11-04
+
+Components: CasaOS-UI `v0.4.133`. Unchanged from v0.5.80: CasaOS `v0.4.92`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+All on the beta dashboard (the "New dashboard (beta)" switch in the settings); the classic dashboard is unchanged.
+
+- **The panels and the alerts open the dialogs behind them.** The Storage panel and the SnapRAID tile open the Storage manager, the Backups panel and tile open the backups dialog (destinations, schedules, history, restore), and each line of Needs attention opens what it is about ([ReCasaOS/CasaOS-UI#103](https://github.com/ReCasaOS/CasaOS-UI/pull/103)).
+- **The app cards show the memory each app uses** beside "Running", and an app with an update carries a blue "Mise à jour" chip instead of the short corner badge; the NEW marker is gone ([ReCasaOS/CasaOS-UI#104](https://github.com/ReCasaOS/CasaOS-UI/pull/104), [#105](https://github.com/ReCasaOS/CasaOS-UI/pull/105)).
+- **A phone gets its own navigation:** a bottom tab bar (Home, Apps, Files, Settings), and the system and favorite apps as tiles of three ([ReCasaOS/CasaOS-UI#106](https://github.com/ReCasaOS/CasaOS-UI/pull/106), [#108](https://github.com/ReCasaOS/CasaOS-UI/pull/108)).
+- **The favorites can be reordered by dragging** ([ReCasaOS/CasaOS-UI#107](https://github.com/ReCasaOS/CasaOS-UI/pull/107)).
+
+### Added
+
+- **A bell in the beta bar** counts what needs a person and brings the Needs attention list into view ([ReCasaOS/CasaOS-UI#109](https://github.com/ReCasaOS/CasaOS-UI/pull/109)).
+- **Back up now** in the Backups panel backs the box up to where the last backup went, after the dialog that says the services holding its files are stopped for the copy ([ReCasaOS/CasaOS-UI#109](https://github.com/ReCasaOS/CasaOS-UI/pull/109)).
+
+### Not in it
+
+A "Widgets" setting for the beta, and a notification feed beyond the Needs attention list.
+
+### Proof
+
+The dashboard's tests (7622) and the lint pass, and the build passes in CI. The beta dashboard was drawn against a stand-in for a box, at a desktop and a phone width. What none of it shows: the page on a real box with its own icons, wallpaper and disks, and the Back up now call itself (the confirmation was opened, not confirmed: the stand-in has no services to stop). The install check of this release: result added after the check.
+
 ## [0.5.80] - 2026-11-03
 
 Components: CasaOS-LocalStorage `v0.4.58`. Unchanged from v0.5.79: CasaOS `v0.4.92`, CasaOS-UI `v0.4.132`, CasaOS-AppManagement `v0.4.83`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
