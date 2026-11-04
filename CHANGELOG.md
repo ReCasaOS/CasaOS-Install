@@ -22,7 +22,7 @@ The relay has not been proven on real boxes behind CGNAT, and its official addre
 
 ### Proof
 
-The dashboard's tests (7666) and the lint pass, and the build passes in CI; the core's build passes in CI and the new `pkg/cpufreq` has its own tests. The install check of this release: result added after the check.
+The dashboard's tests (7666) and the lint pass, and the build passes in CI; the core's build passes in CI and the new `pkg/cpufreq` has its own tests. The install check of this release passes on all 11 legs, among them the four Docker legs that now check the ReCasaOS catalogue instead of the Big Bear store (the step that failed on v0.5.81).
 
 ## [0.5.81] - 2026-11-04
 
