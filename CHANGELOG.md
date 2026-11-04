@@ -26,7 +26,7 @@ A "Widgets" setting for the beta, and a notification feed beyond the Needs atten
 
 ### Proof
 
-The dashboard's tests (7622) and the lint pass, and the build passes in CI. The beta dashboard was drawn against a stand-in for a box, at a desktop and a phone width. What none of it shows: the page on a real box with its own icons, wallpaper and disks, and the Back up now call itself (the confirmation was opened, not confirmed: the stand-in has no services to stop). The install check of this release: result added after the check.
+The dashboard's tests (7622) and the lint pass, and the build passes in CI. The beta dashboard was drawn against a stand-in for a box, at a desktop and a phone width. What none of it shows: the page on a real box with its own icons, wallpaper and disks, and the Back up now call itself (the confirmation was opened, not confirmed: the stand-in has no services to stop). The install check of this release: 8 of its 10 legs pass; the two amd64 Docker legs fail at the store step, because the Big Bear store (the second default `appstore`) has answered 404 since 2026-11-04, so the box lists 181 apps instead of about 421 and `ayon` is missing. This release changes the UI only; the cause is the dead source, not the release, and the fix is a catalogue of our own.
 
 ## [0.5.80] - 2026-11-03
 
