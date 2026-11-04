@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.83] - 2026-11-04
+
+Components: CasaOS-UI `v0.4.136`. Unchanged from v0.5.82: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The tiles of the beta dashboard's strip stay level in every browser.** The Storage, Backups and SnapRAID tiles were `<button>` elements, which some browsers do not stretch to the row, so they sat lower than CPU, Memory and Network. The tiles are now the same `div`s, the clickable ones with the button role, the keyboard (Enter and Space), a pointer and a focus ring ([ReCasaOS/CasaOS-UI#114](https://github.com/ReCasaOS/CasaOS-UI/pull/114)).
+
+### Not in it
+
+The cause was read from the pattern in screenshots of a real box and not reproduced: in Chromium the tiles were already level. If they still sit uneven, the browser is the thing to find out.
+
+### Proof
+
+The dashboard's tests (49 on the strip, with a new keyboard one) and the lint pass, and the build passes in CI. The install check of this release: result added after the check.
+
 ## [0.5.82] - 2026-11-04
 
 Components: CasaOS `v0.4.93`, CasaOS-UI `v0.4.135`. Unchanged from v0.5.81: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
