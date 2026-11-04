@@ -2,6 +2,28 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.82] - 2026-11-04
+
+Components: CasaOS `v0.4.93`, CasaOS-UI `v0.4.135`. Unchanged from v0.5.81: CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The CPU tile of the beta dashboard says more:** under the percentage, the number of cores, the frequency, the power draw and the temperature, each left out when the box does not report it. The power is the Intel RAPL energy counter turned into watts between two samples, so a virtual machine, an ARM or an AMD box shows none. The memory tile shows used over total, and the tiles of the strip stay level, with "No backup yet" wrapping instead of being cut ([ReCasaOS/CasaOS-UI#112](https://github.com/ReCasaOS/CasaOS-UI/pull/112), [#113](https://github.com/ReCasaOS/CasaOS-UI/pull/113)).
+- **The core sends the frequency:** `sys_cpu` carries `freq`, the mean of the cores' current frequency in MHz, 0 when the box has no cpufreq ([ReCasaOS/CasaOS#81](https://github.com/ReCasaOS/CasaOS/pull/81)).
+- **The editor opens 24 more text types** ([ReCasaOS/CasaOS-UI#111](https://github.com/ReCasaOS/CasaOS-UI/pull/111)).
+
+### Added
+
+- **A relay for the Fleet network:** a relay server setting in the Fleet modal and in the core, relay state and readable relay errors, boxes marked when a relay change needs a new code ([ReCasaOS/CasaOS#79](https://github.com/ReCasaOS/CasaOS/pull/79), [#80](https://github.com/ReCasaOS/CasaOS/pull/80), [ReCasaOS/CasaOS-UI#110](https://github.com/ReCasaOS/CasaOS-UI/pull/110)).
+
+### Not in it
+
+The relay has not been proven on real boxes behind CGNAT, and its official address `relay.recasaos.org` is not verified: treat the Fleet relay as untested in the field. The frequency has not been read on a real box.
+
+### Proof
+
+The dashboard's tests (7666) and the lint pass, and the build passes in CI; the core's build passes in CI and the new `pkg/cpufreq` has its own tests. The install check of this release: result added after the check.
+
 ## [0.5.81] - 2026-11-04
 
 Components: CasaOS-UI `v0.4.133`. Unchanged from v0.5.80: CasaOS `v0.4.92`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
