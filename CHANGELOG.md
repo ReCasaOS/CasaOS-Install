@@ -17,7 +17,7 @@ Components: CasaOS-UI `v0.4.137`. Unchanged from v0.5.83: CasaOS `v0.4.93`, Casa
 
 ### Proof
 
-The dashboard's tests (7672, with a new `starred.spec.js`) and the lint pass, and the build passes in CI. The install check of this release: result added after the check.
+The dashboard's tests (7672, with a new `starred.spec.js`) and the lint pass, and the build passes in CI. The install check of this release passes on all 9 legs: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled).
 
 ## [0.5.83] - 2026-11-04
 
