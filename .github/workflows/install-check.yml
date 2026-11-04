@@ -1236,8 +1236,9 @@ jobs:
 
       # The copy of the catalogue this distribution keeps (github.com/ReCasaOS/
       # _appstore, IceWhale's store/main.zip taken every night) is what
-      # AppManagement fetches when IceWhale's URL stops answering. It has to be a
-      # store: a zip with the apps in it.
+      # AppManagement fetches when IceWhale's URL stops answering, and the merged
+      # ReCasaOS catalogue (branch catalogue of the same repository). Both have to be
+      # a store: a zip with the apps in it.
       - name: The catalogue's copy is a store
         if: ${{ !matrix.engine_only }}
         run: |
@@ -1246,36 +1247,58 @@ jobs:
           apps="$(unzip -l mirror.zip | awk '{print $4}' | grep -c 'Apps/[^/]*/docker-compose.yml$')"
           echo "apps in the copy: ${apps}"
           test "${apps}" -gt 100
+          # and the ReCasaOS catalogue itself: the merged store, with its manifest
+          curl -fsSL -o catalogue.zip https://raw.githubusercontent.com/ReCasaOS/_appstore/catalogue/store/recasaos.zip
+          apps="$(unzip -l catalogue.zip | awk '{print $4}' | grep -c '^Apps/[^/]*/docker-compose.yml$')"
+          echo "apps in the catalogue: ${apps}"
+          test "${apps}" -gt 250
+          unzip -p catalogue.zip catalogue.json | jq -e '.sources | length > 1' >/dev/null
 
-      # Two catalogue entries quote numbers the specification types as integers
-      # (PsiTransfer's port target, ayon's healthcheck retries) and were refused
-      # by the parser, so they were not in the store at all. And the store has to
-      # stand on a third-party catalogue alone: upstream's grid goes blank with
-      # only a v2-schema store registered (IceWhaleTech/CasaOS#2537), so the box
-      # is switched to big-bear alone, restarted, and asked for its categories
-      # and its apps, then switched back.
-      - name: The store, with the apps that quote their numbers, and on a v2 catalogue alone
+      # The default store is the ReCasaOS catalogue (ReCasaOS/_appstore, branch
+      # catalogue): IceWhale's apps, RoqueOS's and the Big Bear fork's, merged every
+      # night. The box is pointed at it explicitly, whatever AppManagement release is
+      # installed, and has to show more apps than IceWhale's store alone (181), with an
+      # app from each source: PsiTransfer (IceWhale; it quotes its port target, which
+      # the parser used to refuse), big-bear-dockge (Big Bear fork) and beszel
+      # (RoqueOS). Arm64 hides the apps whose images are not built for it, so the
+      # count is the evidence there.
+      - name: The store, on the ReCasaOS catalogue
         if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
+          sudo cp /etc/casaos/app-management.conf /tmp/app-management.conf.orig
+          sudo sed -i '/^appstore = /d' /etc/casaos/app-management.conf
+          echo 'appstore = https://raw.githubusercontent.com/ReCasaOS/_appstore/catalogue/store/recasaos.zip' | sudo tee -a /etc/casaos/app-management.conf >/dev/null
+          grep '^appstore = ' /etc/casaos/app-management.conf
+          sudo systemctl restart casaos-app-management
+          apps=0
           for _ in $(seq 1 60); do
-            apps="$(curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" | jq -r '.data.list // {} | keys | length')"
-            [ "${apps}" -gt 50 ] && break
+            apps="$(curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" | jq -r '.data.list // {} | keys | length' || echo 0)"
+            [ "${apps}" -gt 200 ] && break
             sleep 5
           done
           echo "apps in the store: ${apps}"
-          test "${apps}" -gt 50
-          # The store hides an app whose images are not built for this machine,
-          # and the two apps this looks for are amd64-only: on arm64 the count
-          # above is the evidence (377 against 421 on the v0.4.85 run).
+          test "${apps}" -gt 200
           if [ "${{ matrix.arch }}" = amd64 ]; then
             curl -fsS "${CASA_URL}/v2/app_management/apps" -H "Authorization: ${CASA_TOKEN}" \
-              | jq -e '.data.list | (has("psitransfer") or has("PsiTransfer")) and (has("ayon") or has("big-bear-ayon"))' >/dev/null
-            echo "psitransfer and ayon are in the store"
+              | jq -e '.data.list | (has("psitransfer") or has("PsiTransfer")) and has("big-bear-dockge") and has("beszel")' >/dev/null
+            echo "psitransfer, big-bear-dockge and beszel are in the store"
           fi
-          sudo cp /etc/casaos/app-management.conf /tmp/app-management.conf.orig
-          sudo sed -i '/^appstore = .*IceWhaleTech/d' /etc/casaos/app-management.conf
-          grep -c '^appstore = ' /etc/casaos/app-management.conf
+          categories="$(curl -fsS "${CASA_URL}/v2/app_management/categories" -H "Authorization: ${CASA_TOKEN}")"
+          echo "${categories}" | jq -c '.data | map(.name)'
+          jq -e '.data | length > 1 and all(.name != null and .name != "")' <<<"${categories}" >/dev/null
+
+      # And the store has to stand on a third-party catalogue alone: upstream's grid
+      # goes blank with only a store on the v2 schema registered (IceWhaleTech/
+      # CasaOS#2537). The Big Bear fork is that kind of store (one category,
+      # BigBearCasaOS); the box is switched to it alone, restarted, and asked for its
+      # categories and its apps, then back to the ReCasaOS catalogue's configuration.
+      - name: A v2 catalogue alone
+        if: ${{ !matrix.engine_only }}
+        run: |
+          set -euo pipefail
+          sudo sed -i '/^appstore = /d' /etc/casaos/app-management.conf
+          echo 'appstore = https://github.com/ReCasaOS/big-bear-casaos/archive/refs/heads/master.zip' | sudo tee -a /etc/casaos/app-management.conf >/dev/null
           sudo systemctl restart casaos-app-management
           for _ in $(seq 1 60); do
             code="$(curl -s -o /dev/null -w '%{http_code}' "${CASA_URL}/v2/app_management/categories" -H "Authorization: ${CASA_TOKEN}" || true)"
