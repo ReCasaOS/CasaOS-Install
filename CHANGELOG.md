@@ -16,7 +16,7 @@ The cause was read from the pattern in screenshots of a real box and not reprodu
 
 ### Proof
 
-The dashboard's tests (49 on the strip, with a new keyboard one) and the lint pass, and the build passes in CI. The install check of this release: result added after the check.
+The dashboard's tests (49 on the strip, with a new keyboard one) and the lint pass, and the build passes in CI. The install check of this release passes on all 11 legs.
 
 ## [0.5.82] - 2026-11-04
 
