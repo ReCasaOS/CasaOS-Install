@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.84] - 2026-11-04
+
+Components: CasaOS-UI `v0.4.137`. Unchanged from v0.5.83: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Starred files and folders in Files.** Add to Starred / Remove from Starred in the menu of a file or a folder, and a Starred section in the sidebar with a remove button on each entry. A starred file opens its folder and the file; an entry that was moved or deleted shows greyed out instead of vanishing. It is the per-user list the sidebar already kept for folder shortcuts, so the new-folder dialog's checkbox (now "Add to Starred") feeds it too, and no core change is needed ([ReCasaOS/CasaOS-UI#115](https://github.com/ReCasaOS/CasaOS-UI/pull/115), [ReCasaOS/CasaOS#82](https://github.com/ReCasaOS/CasaOS/issues/82)).
+
+### Not in it
+
+- Not seen on a real box: checked in a browser against the dashboard's stub with a fake folder tree (star, unstar, open a starred file, a missing entry, the list after a reload), not against a core.
+- The `pin-sidepanel` CasaMOD writes the same list directly, so its pins show only after a reload and its injected buttons may land in the wrong place; the native feature replaces it.
+
+### Proof
+
+The dashboard's tests (7672, with a new `starred.spec.js`) and the lint pass, and the build passes in CI. The install check of this release: result added after the check.
+
 ## [0.5.83] - 2026-11-04
 
 Components: CasaOS-UI `v0.4.136`. Unchanged from v0.5.82: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
