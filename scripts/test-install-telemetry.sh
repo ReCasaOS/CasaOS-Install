@@ -53,6 +53,7 @@ line_of() {
 # What those functions take from install.sh's globals.
 sudo_cmd=""
 NO_TELEMETRY=0
+POLICY_RC_D_ADDED=""
 GREEN_LINE="-----"
 COLOUR_RESET=""
 aCOLOUR=('' '' '' '' '')
