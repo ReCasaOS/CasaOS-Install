@@ -219,6 +219,26 @@ jobs:
           test "${version}" = "rclone ${RCLONE_TAG}"
           test -S /var/run/rclone/rclone.sock
 
+      # The Fleet runs over tailscale when it goes through a relay, and the core starts
+      # tailscaled only when the box joins a fleet: a fresh install has it, stopped and
+      # disabled. It is optional, so the command is asked for only when the installer said
+      # it installed it (a release before it says nothing); the daemon never runs either way.
+      - name: tailscale is here, tailscaled stopped and disabled
+        run: |
+          set -euo pipefail
+          if grep -q 'tailscale installed; tailscaled is stopped and disabled' install.log; then
+            command -v tailscale
+            tailscale version | sed -n 1p
+          else
+            echo "the installer did not install tailscale:"
+            grep -n 'tailscale' install.log || echo "  (it says nothing of it: a release before it)"
+          fi
+          state="$(systemctl is-active tailscaled.service || true)"
+          enabled="$(systemctl is-enabled tailscaled.service 2>/dev/null || true)"
+          echo "tailscaled: ${state}, ${enabled:-no unit}"
+          test "${state}" = inactive
+          test "${enabled}" != enabled
+
       # No service may fail its first start. Two did on every install until v0.4.78;
       # the journals are printed so a red run says which one, and why.
       - name: First-start journals
@@ -2492,6 +2512,132 @@ jobs:
           # nothing the core logged since this step began, its failed sends included,
           # names a channel's topic
           unrevealed "the core's log" "$(sudo journalctl -u casaos.service --no-pager -o cat --since "@${since}")"
+
+      # The Fleet over a relay, on this box: a recasaos-relay started here from its own
+      # compose file, the master turned on over it (a fleet created there, tailscaled up on
+      # its private network), this box added and seen online, a route outside the table
+      # still refused, and tailscaled off again once the master is. Opt-in until the relay
+      # is published: the repository variable RELAY_REPO (owner/name on GitHub) turns it on,
+      # RELAY_REF picks a branch or tag (main otherwise); without it the step says so and
+      # passes. The release installed must have a core with the relay: an older one refuses
+      # the first PUT. The relay hands every box its control URL and accepts only an https
+      # one (LOGIN_SERVER, recasaos-relay internal/server/server.go), and the master wants
+      # that same URL as the relay's address, so the relay is reached at
+      # https://relay.test:8443: /etc/hosts sends the name to loopback, a Caddy with its own
+      # CA answers there in front of the relay's (as the relay's e2e test does), and that CA
+      # goes into this box's trust store, which the core and tailscaled read. 443 is the
+      # gateway's. Last of the steps, so nothing after it sees its containers or the CA.
+      - name: Fleet relay
+        if: ${{ !matrix.engine_only }}
+        env:
+          RELAY_REPO: ${{ vars.RELAY_REPO }}
+          RELAY_REF: ${{ vars.RELAY_REF || 'main' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELAY_REPO}" ]; then
+            echo "::notice title=Fleet relay::not run: the repository variable RELAY_REPO is not set (README, What is tested)"
+            exit 0
+          fi
+          [[ "${RELAY_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "RELAY_REPO is owner/name, not '${RELAY_REPO}'"; exit 1; }
+          relay=https://relay.test:8443
+          git clone -q --depth 1 --branch "${RELAY_REF}" "https://github.com/${RELAY_REPO}.git" relay
+          cd relay
+          cat > compose.check.yaml <<EOF
+          services:
+            headscale:
+              environment:
+                HEADSCALE_SERVER_URL: ${relay}
+            front:
+              ports: !override
+                - "127.0.0.1::8080"
+            enrolment:
+              environment:
+                LOGIN_SERVER: ${relay}
+            tlsfront:
+              image: caddy:2.10.0-alpine
+              depends_on:
+                - front
+              volumes:
+                - ./e2e/Caddyfile.tls:/etc/caddy/Caddyfile:ro
+              ports:
+                - "127.0.0.1:8443:443"
+          EOF
+          dc() { sudo docker compose -p relaycheck -f compose.yaml -f compose.check.yaml "$@"; }
+          cleanup() {
+            local rc=$?
+            if [ "${rc}" -ne 0 ]; then
+              dc ps -a || true
+              dc logs --no-color --tail 80 || true
+              sudo journalctl -u tailscaled.service --no-pager -n 60 || true
+            fi
+            dc down -v --remove-orphans >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          # Headscale first, for the API key the enrolment service needs (docs/self-hosting.md)
+          dc up -d headscale
+          key=""
+          for _ in $(seq 1 30); do
+            key="$(dc exec -T headscale headscale apikeys create 2>/dev/null | tail -n 1 | tr -d '\r')" && [ -n "${key}" ] && break
+            sleep 2
+          done
+          test -n "${key}"
+          echo "::add-mask::${key}"
+          printf 'HEADSCALE_API_KEY=%s\n' "${key}" > .env
+          dc up -d --build enrolment front tlsfront
+          for _ in $(seq 1 30); do
+            dc cp tlsfront:/data/caddy/pki/authorities/local/root.crt relay-ca.crt 2>/dev/null && break
+            sleep 2
+          done
+          sudo cp relay-ca.crt /usr/local/share/ca-certificates/recasaos-relay-check.crt
+          sudo update-ca-certificates >/dev/null
+          echo '127.0.0.1 relay.test' | sudo tee -a /etc/hosts >/dev/null
+          # the enrolment service answers once its deny-by-default policy is in place
+          code=000
+          for _ in $(seq 1 45); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "${relay}/v1/fleets/00000000000000000000000000000000" || true)"
+            [ "${code}" = 404 ] && break
+            sleep 2
+          done
+          echo "the relay, through its https front: ${code}"
+          test "${code}" = 404
+
+          # the core reads the trust store once: started again, it has the relay's CA
+          sudo systemctl restart casaos.service
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "${CASA_URL}/v1/fleet" -H "Authorization: ${CASA_TOKEN}" && break
+            sleep 2
+          done
+
+          out="$(curl -sS --max-time 150 -X PUT "${CASA_URL}/v1/fleet/master" -H "Authorization: ${CASA_TOKEN}" \
+            -H 'content-type: application/json' -d "{\"enabled\":true,\"relay\":\"${relay}\"}")"
+          jq -e --arg r "${relay}" '.data.role == "master" and .data.relay == $r and .data.net.connected == true and (.data.net.addr | startswith("100."))' <<<"${out}" >/dev/null ||
+            { echo "the master over the relay: ${out}"; exit 1; }
+          echo "master over ${relay}, at $(jq -r '.data.net.addr' <<<"${out}") on its private network"
+          test "$(systemctl is-active tailscaled.service)" = active
+
+          # the answer carries the box's code, and with it its key: never printed
+          id="$(curl -fsS -X POST "${CASA_URL}/v1/fleet/boxes" -H "Authorization: ${CASA_TOKEN}" \
+            -H 'content-type: application/json' -d '{"name":"this box","self":true}' | jq -r '.data.box.id')"
+          test -n "${id}" && test "${id}" != null
+          online=false
+          for _ in $(seq 1 15); do
+            online="$(curl -fsS "${CASA_URL}/v1/fleet" -H "Authorization: ${CASA_TOKEN}" | jq -r --arg id "${id}" '.data.master.boxes[] | select(.id == $id) | .online' || true)"
+            [ "${online}" = true ] && break
+            sleep 2
+          done
+          echo "box ${id} online: ${online}"
+          test "${online}" = true
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' "${CASA_URL}/v1/fleet/boxes/${id}/relay/v1/file/content?path=/etc/hostname" -H "Authorization: ${CASA_TOKEN}")"
+          echo "a route outside the table, relayed: ${code}"
+          test "${code}" = 403
+
+          curl -fsS --max-time 150 -X PUT "${CASA_URL}/v1/fleet/master" -H "Authorization: ${CASA_TOKEN}" \
+            -H 'content-type: application/json' -d '{"enabled":false}' | jq -e '.data.role == "none"' >/dev/null
+          state="$(systemctl is-active tailscaled.service || true)"
+          echo "tailscaled once the master is off: ${state}"
+          test "${state}" = inactive
 
       # What the box has to say for itself, when a step above failed: the
       # service logs, the daemon's job list, the containers. Without this a red

@@ -320,4 +320,121 @@ refresh_says ok 15
 grep -q 'Update package manager complete' <<<"${out}" || fail "refresh working: ${out}"
 grep -Fq 'timeout "${APT_UPDATE_TIMEOUT}" apt-get update -qq' "${INSTALL_SH}" || fail "install.sh does not bound apt-get update"
 
+# tailscale, for the Fleet over a relay: installed from Tailscale's repository when the
+# system's own have none, and left stopped and disabled; a repository that does not
+# answer is taken away again and the install goes on; a tailscale already here is not
+# touched (the owner's network, or this box's fleet). apt-get, apt-cache and systemctl
+# are scripts on a PATH of their own, writing what they are asked into calls.
+eval "$(sed -n '/^Install_Tailscale() {$/,/^}$/p' "${INSTALL_SH}")"
+declare -F Install_Tailscale >/dev/null || fail "install.sh defines no Install_Tailscale()"
+grep -q '^    Install_Tailscale$' "${INSTALL_SH}" || fail "install.sh does not call Install_Tailscale"
+TS="${WORK}/ts"
+mkdir -p "${TS}/bin"
+for c in apt-get apt-cache systemctl ip install; do
+    printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\n' "${c}" "${TS}" >"${TS}/bin/${c}"
+done
+# apt-get notes whether a policy-rc.d forbids starting services while it installs
+cat >>"${TS}/bin/apt-get" <<EOF
+case "\$*" in
+*update*) exit "\${FAKE_APT_UPDATE:-0}" ;;
+*install*)
+    "${TS}/root/usr/sbin/policy-rc.d" tailscaled start; echo "policy-rc.d \$?" >>"${TS}/calls"
+    [ -z "\${FAKE_APT_INSTALL:-}" ] || exit "\${FAKE_APT_INSTALL}"
+    printf '#!/bin/sh\n' >"${TS}/bin/tailscale" && chmod +x "${TS}/bin/tailscale" ;;
+esac
+EOF
+echo 'exit 100' >>"${TS}/bin/apt-cache" # tailscale is in none of the system's repositories
+# a tailnet seen as a tailscale0 interface, or a unit, as the test sets FAKE_TS0 / FAKE_UNIT
+echo '[ -n "${FAKE_TS0:-}" ]' >>"${TS}/bin/ip"
+echo 'case "$1" in list-unit-files) [ -z "${FAKE_UNIT:-}" ] || echo "${FAKE_UNIT} disabled enabled" ;; esac' >>"${TS}/bin/systemctl"
+# root cannot be asked for in a test: the owner and group are recorded and dropped
+echo 'while [ "$1" != -m ]; do shift; done; /usr/bin/install -m "$2" "$7" "$8"' >>"${TS}/bin/install"
+chmod +x "${TS}/bin/"*
+curl() { # writes "key" where -o says, or fails as on a 404 when FAKE_CURL=404
+    echo "curl $*" >>"${TS}/calls"
+    [[ "${FAKE_CURL:-}" != 404 ]] || return 22
+    while [[ "$1" != -o ]]; do shift; done
+    echo key >"$2"
+}
+tailscale_says() { # <ID> <VERSION_CODENAME> <UBUNTU_CODENAME>: the install never ends
+    rm -rf "${TS}/root" "${TS}/calls"
+    mkdir -p "${TS}/root/usr/share/keyrings" "${TS}/root/etc/apt/sources.list.d" "${TS}/root/usr/sbin"
+    if [[ -n "${KEEP:-}" ]]; then mkdir -p "${TS}/root${KEEP%/*}" && echo kept >"${TS}/root${KEEP}"; fi
+    out="$(
+        exec 2>&1
+        set -e
+        unset -f apt-get
+        export PATH="${TS}/bin:/usr/bin:/bin" PREFIX="${TS}/root" ID="$1" VERSION_CODENAME="$2" UBUNTU_CODENAME="$3"
+        POLICY_RC_D_ADDED=""
+        Install_Tailscale
+        [[ -z "${POLICY_RC_D_ADDED}" ]] || echo "POLICY_RC_D_ADDED still set"
+    )" || fail "tailscale on $1 $2: the install ended: ${out}"
+    calls="$(cat "${TS}/calls" 2>/dev/null || true)"
+}
+# only the read-only looks for a tailnet were made
+only_looked() {
+    ! grep -Ev '^(ip link show tailscale0|systemctl list-unit-files .*)$' <<<"${calls}" | grep -q . || fail "$1: it was touched: ${calls}"
+    [[ -z "${out}" ]] || fail "$1: said something: ${out}"
+}
+LIST="${TS}/root/etc/apt/sources.list.d/tailscale.list"
+KEYRING="${TS}/root/usr/share/keyrings/tailscale-archive-keyring.gpg"
+RCD="${TS}/root/usr/sbin/policy-rc.d"
+tailscale_says debian bookworm ""
+grep -q 'tailscale installed; tailscaled is stopped and disabled' <<<"${out}" || fail "tailscale: success not said: ${out}"
+[[ "$(cat "${LIST}")" == "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian bookworm main" ]] ||
+    fail "tailscale: the source is $(cat "${LIST}")"
+[[ "$(cat "${KEYRING}")" == key ]] || fail "tailscale: no keyring"
+grep -q "^install -m 0644 -o root -g root .* ${KEYRING}$" <<<"${calls}" || fail "tailscale: the keyring is not installed 0644 root:root: ${calls}"
+grep -q "^curl -fsSL --proto =https --tlsv1.2 --connect-timeout 15 --max-time 60 -o " <<<"${calls}" || fail "tailscale: the download is not bounded to https: ${calls}"
+grep -q "apt-get update -qq -o Dir::Etc::sourcelist=${LIST} -o Dir::Etc::sourceparts=- " <<<"${calls}" ||
+    fail "tailscale: apt refreshed more than Tailscale's repository: ${calls}"
+grep -q '^policy-rc.d 101$' <<<"${calls}" || fail "tailscale: the package was free to start tailscaled: ${calls}"
+[[ ! -e "${RCD}" ]] || fail "tailscale: the policy-rc.d was left behind"
+grep -q '^systemctl disable --now tailscaled$' <<<"${calls}" || fail "tailscale: tailscaled is not stopped and disabled: ${calls}"
+! grep -q 'POLICY_RC_D_ADDED' <<<"${out}" || fail "tailscale: onExit would still remove a policy-rc.d"
+# Ubuntu and the systems built on it (Mint) take Ubuntu's repository
+rm -f "${TS}/bin/tailscale"
+tailscale_says linuxmint wilma noble
+grep -q 'stable/ubuntu noble main' "${LIST}" || fail "tailscale on Mint: the source is $(cat "${LIST}")"
+# a release Tailscale does not serve, a repository that does not refresh, a package that
+# does not install: nothing left behind
+for fake in "FAKE_CURL=404" "FAKE_APT_UPDATE=100" "FAKE_APT_INSTALL=100"; do
+    rm -f "${TS}/bin/tailscale"
+    export "${fake?}"
+    tailscale_says debian bookworm ""
+    unset FAKE_CURL FAKE_APT_UPDATE FAKE_APT_INSTALL
+    grep -q 'tailscale could not be installed; continuing without it' <<<"${out}" || fail "tailscale, ${fake}: not said: ${out}"
+    [[ ! -e "${LIST}" && ! -e "${KEYRING}" && ! -e "${RCD}" ]] || fail "tailscale, ${fake}: the repository or the policy-rc.d was left behind"
+    ! grep -q '^systemctl disable' <<<"${calls}" || fail "tailscale, ${fake}: systemctl was asked: ${calls}"
+done
+# what this run did not put there stays when the install fails: an owner's policy-rc.d,
+# an older source
+for KEEP in /usr/sbin/policy-rc.d /etc/apt/sources.list.d/tailscale.list; do
+    FAKE_APT_INSTALL=100 tailscale_says debian bookworm ""
+    [[ -e "${TS}/root${KEEP}" ]] || fail "tailscale failing: ${KEEP}, which was there before, was removed"
+    [[ ! -e "${KEYRING}" ]] || fail "tailscale failing with ${KEEP} there: the keyring it added was left"
+done
+FAKE_APT_INSTALL=100 KEEP=/usr/sbin/policy-rc.d tailscale_says debian bookworm ""
+[[ "$(cat "${RCD}")" == kept ]] || fail "tailscale: an owner's policy-rc.d was replaced"
+unset KEEP
+# already here, as the host's CLI or a tailnet run some other way: not one change
+printf '#!/bin/sh\n' >"${TS}/bin/tailscale" && chmod +x "${TS}/bin/tailscale"
+tailscale_says debian bookworm ""
+[[ -z "${calls}" && -z "${out}" ]] || fail "tailscale already here: it was touched: ${calls} ${out}"
+rm -f "${TS}/bin/tailscale"
+for KEEP in /run/tailscale /var/lib/tailscale /snap/bin/tailscale; do
+    tailscale_says debian bookworm ""
+    only_looked "tailscale with ${KEEP}"
+done
+unset KEEP
+FAKE_TS0=1 tailscale_says debian bookworm ""
+only_looked "tailscale0 up"
+for unit in tailscaled.service snap.tailscale.tailscaled.service; do
+    FAKE_UNIT="${unit}" tailscale_says debian bookworm ""
+    only_looked "unit ${unit}"
+done
+# and on a box with none of those, the looks found nothing and it installs
+tailscale_says debian bookworm ""
+grep -q 'tailscale installed' <<<"${out}" || fail "tailscale: a box without a tailnet was taken for one: ${out}"
+
 echo "ok: what install.sh does when a dependency cannot be installed"
