@@ -18,7 +18,7 @@ Components: CasaOS-AppManagement `v0.4.84`, CasaOS-UI `v0.4.138`. Unchanged from
 
 ### Proof
 
-Both pull requests' CI passed (the dashboard's tests and build; AppManagement's build). The Go tests of `pkg/rclone` and `route/v2` pass on Linux, and four other tests (they need a Docker daemon or git) fail the same way on a clean `main` in the same container, so none comes from this change. Against the real rclone, `v1.61.1` and the `v1.75.1` this release ships, in a container: the link it prints, the redirect to the provider's page, a wrong state refused before it reaches rclone, and a second sign-in taking the place of the first. The install check of this release: result added after the check.
+Both pull requests' CI passed (the dashboard's tests and build; AppManagement's build). The Go tests of `pkg/rclone` and `route/v2` pass on Linux, and four other tests (they need a Docker daemon or git) fail the same way on a clean `main` in the same container, so none comes from this change. Against the real rclone, `v1.61.1` and the `v1.75.1` this release ships, in a container: the link it prints, the redirect to the provider's page, a wrong state refused before it reaches rclone, and a second sign-in taking the place of the first. The install check of this release: green on every leg of the published v0.5.85 bundle (five QEMU guests, Docker current and preinstalled on amd64 and arm64). The release job itself needed three re-runs, each time on a 504 from GitHub while fetching a `checksums.txt` of a component (a different one each time, all reachable again minutes later), not on anything in the release. The install check does not exercise the sign-in.
 
 ## [0.5.84] - 2026-11-04
 
