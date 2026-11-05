@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.85] - 2026-11-05
+
+Components: CasaOS-AppManagement `v0.4.84`, CasaOS-UI `v0.4.138`. Unchanged from v0.5.84: CasaOS `v0.4.93`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Sign in to Google Drive and Dropbox from the dashboard.** A box has no browser, so the token of a Google Drive or Dropbox backup destination had to come from `rclone authorize` run on another computer. The destination form now has a "Sign in" button: the box runs `rclone authorize` itself and gives the provider's sign-in page; once signed in, the browser lands on `127.0.0.1:53682`, a page that does not load on your computer, and its address is pasted back into the form, which fills in the token. Only that address's query is replayed, on the box's own loopback, and it must carry the state of the sign-in waiting; one sign-in at a time, expiring after ten minutes. Running `rclone authorize` elsewhere and pasting the token still works ([ReCasaOS/CasaOS-AppManagement#39](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/39), [ReCasaOS/CasaOS-UI#116](https://github.com/ReCasaOS/CasaOS-UI/pull/116)).
+
+### Not in it
+
+- OneDrive keeps its manual steps: its destination also needs a `drive_id` and a `drive_type`, which only `rclone config` finds out.
+- Not seen with a real sign-in: nobody has signed in to a real Google or Dropbox account through it yet, so the last step, reading the token rclone prints, is checked only against a stand-in rclone.
+- Not seen on a real box: whether the service's systemd unit lets AppManagement run `rclone` and listen on port 53682.
+
+### Proof
+
+Both pull requests' CI passed (the dashboard's tests and build; AppManagement's build). The Go tests of `pkg/rclone` and `route/v2` pass on Linux, and four other tests (they need a Docker daemon or git) fail the same way on a clean `main` in the same container, so none comes from this change. Against the real rclone, `v1.61.1` and the `v1.75.1` this release ships, in a container: the link it prints, the redirect to the provider's page, a wrong state refused before it reaches rclone, and a second sign-in taking the place of the first. The install check of this release: result added after the check.
+
 ## [0.5.84] - 2026-11-04
 
 Components: CasaOS-UI `v0.4.137`. Unchanged from v0.5.83: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.83`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
