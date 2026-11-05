@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.86] - 2026-11-05
+
+Components: CasaOS-UI `v0.4.139`. Unchanged from v0.5.85: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.84`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The SnapRAID parity disk no longer shows in the file manager.** It holds only parity files, and opening or editing them weakens the protection; the file manager's disk list now leaves out any partition SnapRAID holds as parity, also after a disk is plugged or unplugged. Data disks are unchanged ([ReCasaOS/CasaOS-UI#117](https://github.com/ReCasaOS/CasaOS-UI/pull/117)).
+- **Delete from the right-click menu works again.** The menu asked "Are you sure?" in place of its own Delete item, and closed before the second click could land, so nothing was deleted. It now asks in the same confirmation dialog as the toolbar's Delete ([ReCasaOS/CasaOS-UI#117](https://github.com/ReCasaOS/CasaOS-UI/pull/117)).
+
+### Proof
+
+The dashboard's lint and its filebrowser, Storage and dashboard specs (257) passed on the pull request, and the CasaOS-UI `v0.4.139` release run (tests and build) is green. The install check of this release: result added after the check.
+
 ## [0.5.85] - 2026-11-05
 
 Components: CasaOS-AppManagement `v0.4.84`, CasaOS-UI `v0.4.138`. Unchanged from v0.5.84: CasaOS `v0.4.93`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
