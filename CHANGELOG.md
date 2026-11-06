@@ -2,6 +2,30 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.88] - 2026-11-06
+
+Components: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-UI `v0.4.141`. Unchanged from v0.5.87: CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Logs: every app's lines and events, kept, live, searchable, across the fleet.** A new Logs page (a launcher card, "Logs" in an app's menu, the Logs tab of the terminal panel) shows the lines of one or several apps in one stream, with their Docker events (started, died with its exit code, out of memory, restarting, unhealthy, updated from one image to another…) in the same timeline, a search (text or regular expression), filters by service, stdout/stderr and level, time ranges, pause, and a download. The lines are kept on the box under `/DATA/AppData/casaos/logs` and survive a container's recreation, an update and an uninstall: 7 days and 2 GiB by default, adjustable in Settings › Logs, where "Other containers" also follows what was started outside ReCasaOS. A fleet master reads any box's logs through the relay (live within 3 s). The push alert for an app that died, is unhealthy or keeps restarting links to the Logs page at that minute. The old per-app log panel and `GET /v2/app_management/compose/{id}/logs` keep working ([ReCasaOS/CasaOS-AppManagement#42](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/42), [ReCasaOS/CasaOS#96](https://github.com/ReCasaOS/CasaOS/pull/96), [ReCasaOS/CasaOS-UI#125](https://github.com/ReCasaOS/CasaOS-UI/pull/125)).
+
+### Changed
+
+- **The install check proves the logs.** After the crash-check app exits, the check waits for its `died` event, finds the lines it wrote before dying in the day file and in the API, downloads them, and reads the default settings ([ReCasaOS/CasaOS-Install#128](https://github.com/ReCasaOS/CasaOS-Install/pull/128)).
+- CasaOS `v0.4.94` also carries everything merged on its `main` since `v0.4.93` (the OS upgrade to Debian 13 work, [ReCasaOS/CasaOS#90](https://github.com/ReCasaOS/CasaOS/pull/90)), not released before.
+
+### Not in it
+
+- Lines a box had already lost before the first start of this release are gone: the collector starts at `now − 7 days` of what Docker still holds.
+- A line read from the history is at least one second old; the live stream shows it at once. On a fleet box the live view is up to 3 s behind.
+- "Load older" stops once 20 000 lines are in memory; a custom range with an end date reaches older history.
+- Not seen on a real box or a phone: the page was tested in CI and in a headless Chromium at 1 000 lines/s (no frame over 70 ms, 51 rows in the DOM).
+
+### Proof
+
+The three pull requests' CI passed (Go tests with the race detector for the core and AppManagement; the dashboard's 7 754 tests and its build). The install check of this release: result added after the check.
+
 ## [0.5.87] - 2026-11-06
 
 Components: CasaOS-UI `v0.4.140`. Unchanged from v0.5.86: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.84`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
