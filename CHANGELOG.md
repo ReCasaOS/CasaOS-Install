@@ -20,7 +20,7 @@ Components: CasaOS-UI `v0.4.145`. Unchanged from v0.5.90: CasaOS `v0.4.94`, Casa
 
 ### Proof
 
-The dashboard's CI passed on both pull requests (the full suite and the build). The install check of this release: result added after the check.
+The dashboard's CI passed on both pull requests (the full suite and the build). The install check of this release passes on all 9 legs of the published bundle: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42213199776](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42213199776)).
 
 ## [0.5.90] - 2026-11-06
 
@@ -40,7 +40,7 @@ Components: CasaOS-UI `v0.4.144`. Unchanged from v0.5.89: CasaOS `v0.4.94`, Casa
 
 ### Proof
 
-The dashboard's CI passed on the three pull requests (the full suite and the build). The install check of this release: result added after the check.
+The dashboard's CI passed on the three pull requests (the full suite and the build). The install check of this release passes on all 9 legs of the published bundle: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42203927216](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42203927216)).
 
 ## [0.5.89] - 2026-11-06
 
@@ -57,7 +57,7 @@ Components: CasaOS-UI `v0.4.143`. Unchanged from v0.5.88: CasaOS `v0.4.94`, Casa
 
 ### Proof
 
-The dashboard's CI passed on both pull requests (the full suite and the build); the uninstaller's module checks pass under dash. The install check of this release: result added after the check.
+The dashboard's CI passed on both pull requests (the full suite and the build); the uninstaller's module checks pass under dash. The install check of this release: green on every leg of the published v0.5.89 bundle (five QEMU guests, Docker current and preinstalled on amd64 and arm64, [run 42181845491](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42181845491)), including the logs proof. The "amd64, Docker preinstalled" leg had to be rerun twice: it hung twice at the start of the RAID step with no output, before its first command had printed anything, and passed the third time; the step is being made to say what it waits for ([ReCasaOS/CasaOS-Install#133](https://github.com/ReCasaOS/CasaOS-Install/pull/133)).
 
 ## [0.5.88] - 2026-11-06
 
@@ -144,7 +144,7 @@ Components: CasaOS-UI `v0.4.137`. Unchanged from v0.5.83: CasaOS `v0.4.93`, Casa
 
 ### Proof
 
-The dashboard's tests (7672, with a new `starred.spec.js`) and the lint pass, and the build passes in CI. The install check of this release: result added after the check.
+The dashboard's tests (7672, with a new `starred.spec.js`) and the lint pass, and the build passes in CI. The install check of this release passes on all 9 legs: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 41882824101](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41882824101)).
 
 ## [0.5.83] - 2026-11-04
 
@@ -160,7 +160,7 @@ The cause was read from the pattern in screenshots of a real box and not reprodu
 
 ### Proof
 
-The dashboard's tests (49 on the strip, with a new keyboard one) and the lint pass, and the build passes in CI. The install check of this release: result added after the check.
+The dashboard's tests (49 on the strip, with a new keyboard one) and the lint pass, and the build passes in CI. The install check of this release passes on all 11 legs ([run 41837525197](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/41837525197)).
 
 ## [0.5.82] - 2026-11-04
 
