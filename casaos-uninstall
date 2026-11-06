@@ -41,6 +41,8 @@ readonly CASA_SERVICES=(
 "casaos-app-management.service"
 "rclone.service"
 "casaos.service"  # must be the last one so update from UI can work 
+    "casaos-wsdd.service"
+    "casaos-local-storage-first.service"
     "devmon@devmon.service"
 )
 
