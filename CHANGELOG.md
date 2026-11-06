@@ -2,6 +2,26 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.91] - 2026-11-06
+
+Components: CasaOS-UI `v0.4.145`. Unchanged from v0.5.90: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Fleet: update a box from its card.** The "Update available" tag on a box's card is a button: after a confirmation it starts the ReCasaOS update on that box, the same call as the Updates tab, and reads "Updating…" until the box is back with another version. A refusal shows the box's reason. The master's tag stays a label: it updates from its own settings ([ReCasaOS/CasaOS-UI#129](https://github.com/ReCasaOS/CasaOS-UI/pull/129)).
+- **Fleet: more on each card.** Under the meters, the cores, frequency and temperature of the CPU, and used / total memory and disk. A box with no virtual machines no longer shows an empty block, and the virtual machines tile hides when there are none in the fleet ([ReCasaOS/CasaOS-UI#129](https://github.com/ReCasaOS/CasaOS-UI/pull/129)).
+- **Fleet: Containers grouped by box, Virtual Machines as cards.** The Containers tab is a list with one group per box (its status and how many containers run), filter chips with counts (all, running, stopped, to update), a search, and buttons on each row to start, stop, restart or update one container; a box's header checkbox checks everything controllable in it. The Virtual Machines tab shows one card per machine (state, vCPUs, memory, system) with its own buttons and filter chips. A box that cannot be read is named once instead of a row. Stopped and paused states are now readable in the dark theme ([ReCasaOS/CasaOS-UI#130](https://github.com/ReCasaOS/CasaOS-UI/pull/130)).
+
+### Not in it
+
+- The Updates tab keeps its table, the tab labels have no counts, and the two new lists were not looked at on a phone-width screen.
+- The login page switch still cannot be saved: CasaOS-UserService `v0.4.33` does not have the setting (see v0.5.90).
+- Everything was checked in a browser against stubbed answers, not against real boxes through the relay.
+
+### Proof
+
+The dashboard's CI passed on both pull requests (the full suite and the build). The install check of this release: result added after the check.
+
 ## [0.5.90] - 2026-11-06
 
 Components: CasaOS-UI `v0.4.144`. Unchanged from v0.5.89: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
