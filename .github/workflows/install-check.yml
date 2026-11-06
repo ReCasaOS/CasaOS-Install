@@ -1798,7 +1798,14 @@ jobs:
         if: matrix.arch == 'amd64' && matrix.docker == 'preinstalled'
         run: |
           set -euo pipefail
-          sudo apt-get install -y -q mdadm >/dev/null
+          # apt waits silently for a lock the image's unattended upgrade may hold at boot: say so, and never wait past the job's own timeout
+          for _ in $(seq 1 60); do
+            sudo fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1 || break
+            echo "waiting for the apt lock"
+            sleep 10
+          done
+          echo "installing mdadm"
+          sudo timeout 600 apt-get install -y -q mdadm >/dev/null
           # One virtual host per disk, each with its own store: by default every
           # scsi_debug disk reads and writes the same memory, so the superblock
           # mdadm wrote on the first disk was on all of them, and the second was
@@ -1807,9 +1814,11 @@ jobs:
           sudo systemctl stop multipathd.socket multipathd.service 2>/dev/null || true
           debug="dev_size_mb=128 add_host=4 num_tgts=1 per_host_store=1"
           if ! sudo modprobe scsi_debug ${debug} 2>/dev/null; then
-            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" >/dev/null
+            echo "installing linux-modules-extra-$(uname -r) for scsi_debug"
+            sudo timeout 900 apt-get install -y -q "linux-modules-extra-$(uname -r)" >/dev/null
             sudo modprobe scsi_debug ${debug}
           fi
+          echo "scsi_debug loaded"
           members=()
           for _ in $(seq 1 20); do
             mapfile -t members < <(lsblk -dn -o PATH,MODEL | awk '$2 == "scsi_debug" {print $1}')
