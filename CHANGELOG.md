@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.92] - 2026-11-06
+
+Components: CasaOS-UI `v0.4.146`. Unchanged from v0.5.91: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The Logs tile no longer jumps to the end of the dashboard.** On a box with the Virtual Machines module, Logs moved to the last place about five seconds after a reload. The Virtual Machines, Fleet and Logs cards each appear when their own check answers; when one answered first, the order was saved without the cards still waiting, and the next read of the grid put them last. A save now keeps the saved place of every card that has not appeared yet ([ReCasaOS/CasaOS-UI#131](https://github.com/ReCasaOS/CasaOS-UI/pull/131), [ReCasaOS/CasaOS#97](https://github.com/ReCasaOS/CasaOS/issues/97)).
+
+### Not in it
+
+- The fix was checked by a test that replays the report (Virtual Machines answering first, then Logs, then a new read of the grid), not in a browser or on a box with the Virtual Machines module.
+- The login page switch still cannot be saved: CasaOS-UserService `v0.4.33` does not have the setting (see v0.5.90).
+
+### Proof
+
+The dashboard's CI passed on the pull request (the full suite and the build). The install check of this release: result added after the check.
+
 ## [0.5.91] - 2026-11-06
 
 Components: CasaOS-UI `v0.4.145`. Unchanged from v0.5.90: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
