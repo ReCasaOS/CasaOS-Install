@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.87] - 2026-11-05
+
+Components: CasaOS-UI `v0.4.140`. Unchanged from v0.5.86: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.84`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **Custom Install keeps what is typed.** Leaving the Docker Image field set it to `undefined`, leaving App Name cleared it, and a host port typed by hand was dropped, so the form could never be submitted. The three fields now keep their value, and the port fields say why they are invalid ([ReCasaOS/CasaOS#91](https://github.com/ReCasaOS/CasaOS/issues/91), [ReCasaOS/CasaOS-UI#124](https://github.com/ReCasaOS/CasaOS-UI/pull/124)).
+- **A refused install says why.** Install showed `[object Object]` when the box refused it; it now shows the reason, for example "there are ports in use", and opens the form on the ports ([ReCasaOS/CasaOS#91](https://github.com/ReCasaOS/CasaOS/issues/91), [ReCasaOS/CasaOS-UI#124](https://github.com/ReCasaOS/CasaOS-UI/pull/124)).
+- **Every interface name is readable in the Network status menu.** The unselected interface was white text on a white row ([ReCasaOS/CasaOS#92](https://github.com/ReCasaOS/CasaOS/issues/92), [ReCasaOS/CasaOS-UI#124](https://github.com/ReCasaOS/CasaOS-UI/pull/124)).
+- **The Free up notification is readable.** After old app versions were removed, the Storage widget's notification was dark text on a dark box; it now shows how much space was freed ([ReCasaOS/CasaOS#93](https://github.com/ReCasaOS/CasaOS/issues/93), [ReCasaOS/CasaOS-UI#124](https://github.com/ReCasaOS/CasaOS-UI/pull/124)).
+
+### Proof
+
+The dashboard's full test suite (147 files, 7676 tests) passed locally and CI passed on the pull request; two new specs fail before the fix and pass after it. The install check of this release: result added after the check.
+
 ## [0.5.86] - 2026-11-05
 
 Components: CasaOS-UI `v0.4.139`. Unchanged from v0.5.85: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.84`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
