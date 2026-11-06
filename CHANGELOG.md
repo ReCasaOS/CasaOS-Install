@@ -2,7 +2,7 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
-## [0.5.87] - 2026-11-05
+## [0.5.87] - 2026-11-06
 
 Components: CasaOS-UI `v0.4.140`. Unchanged from v0.5.86: CasaOS `v0.4.93`, CasaOS-AppManagement `v0.4.84`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
 
@@ -15,7 +15,7 @@ Components: CasaOS-UI `v0.4.140`. Unchanged from v0.5.86: CasaOS `v0.4.93`, Casa
 
 ### Proof
 
-The dashboard's full test suite (147 files, 7676 tests) passed locally and CI passed on the pull request; two new specs fail before the fix and pass after it. The install check of this release: result added after the check.
+The dashboard's full test suite (147 files, 7676 tests) passed locally and CI passed on the pull request; two new specs fail before the fix and pass after it. The install check of this release: green on every leg of the published v0.5.87 bundle (five QEMU guests, Docker current and preinstalled on amd64 and arm64, [run 42161336191](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42161336191)). It does not open the Custom Install form or the dashboard widgets in a browser.
 
 ## [0.5.86] - 2026-11-05
 
@@ -28,7 +28,7 @@ Components: CasaOS-UI `v0.4.139`. Unchanged from v0.5.85: CasaOS `v0.4.93`, Casa
 
 ### Proof
 
-The dashboard's lint and its filebrowser, Storage and dashboard specs (257) passed on the pull request, and the CasaOS-UI `v0.4.139` release run (tests and build) is green. The install check of this release: result added after the check.
+The dashboard's lint and its filebrowser, Storage and dashboard specs (257) passed on the pull request, and the CasaOS-UI `v0.4.139` release run (tests and build) is green. The install check of this release: green on every leg of the published v0.5.86 bundle (five QEMU guests, Docker current and preinstalled on amd64 and arm64, [run 42111124360](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42111124360)).
 
 ## [0.5.85] - 2026-11-05
 
