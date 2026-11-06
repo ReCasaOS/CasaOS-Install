@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.89] - 2026-11-06
+
+Components: CasaOS-UI `v0.4.143`. Unchanged from v0.5.88: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A master adds itself to its fleet.** Turning the master role on (relay or advanced address) enrols the box itself right away, so it shows on the Fleet page without "Add this box"; when that enrolment fails, the role stays on, the settings say why, and "Add this box" stays on the Fleet page to retry ([ReCasaOS/CasaOS-UI#126](https://github.com/ReCasaOS/CasaOS-UI/pull/126)).
+
+### Fixed
+
+- **The Logs page has room for its lines.** Opened from the dashboard, the page was a 640 px modal that cut every line after about 25 characters; it now takes the window. Apps without an icon, or whose icon does not load, show the default one instead of a broken image ([ReCasaOS/CasaOS-UI#128](https://github.com/ReCasaOS/CasaOS-UI/pull/128)).
+- **Uninstalling disables every unit.** `casaos-uninstall` left `casaos-wsdd.service` and `casaos-local-storage-first.service` enabled, with their symlinks pointing at removed unit files; both are now in the list it disables ([ReCasaOS/CasaOS-Install#126](https://github.com/ReCasaOS/CasaOS-Install/pull/126), by Vinz2168).
+
+### Proof
+
+The dashboard's CI passed on both pull requests (the full suite and the build); the uninstaller's module checks pass under dash. The install check of this release: result added after the check.
+
 ## [0.5.88] - 2026-11-06
 
 Components: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-UI `v0.4.141`. Unchanged from v0.5.87: CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
