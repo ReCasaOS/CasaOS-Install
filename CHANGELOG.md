@@ -2,6 +2,26 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.90] - 2026-11-06
+
+Components: CasaOS-UI `v0.4.144`. Unchanged from v0.5.89: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Fleet: the overview is a grid of cards.** Four tiles sum the fleet (boxes online, applications running, virtual machines running, boxes to update), chips filter the boxes (all, online, offline, to update) with their counts, and a sort puts the boxes that need a person first. Each box is a card with its status, version, system, applications and VMs, and CPU, memory and disk meters; the actions menu, the add-box dialogs and the 30 s refresh are unchanged. The Containers, Virtual Machines and Updates tabs keep their tables ([ReCasaOS/CasaOS-UI#127](https://github.com/ReCasaOS/CasaOS-UI/pull/127)).
+- **The Terminal asks for its login like a console.** `recasaos login:` offers the last user, the password is not echoed, `user:port` picks another SSH port, a wrong password asks again, and logging out returns to the prompt. A setting opens the Terminal full screen in this browser ([ReCasaOS/CasaOS-UI#121](https://github.com/ReCasaOS/CasaOS-UI/pull/121), by Vinz2168).
+- **A new login page, opt-in.** "New login page (beta)" in the settings menu, under "New dashboard (beta)", switches the box to a login card over the wallpaper; the classic page stays the default ([ReCasaOS/CasaOS-UI#123](https://github.com/ReCasaOS/CasaOS-UI/pull/123), by Vinz2168).
+
+### Not in it
+
+- **The login page switch cannot be saved yet.** The box keeps the setting in CasaOS-UserService, whose `v0.4.33` here does not have it (it is merged on its `main`, [ReCasaOS/CasaOS-UserService#11](https://github.com/ReCasaOS/CasaOS-UserService/pull/11), not released): until that service is released and pinned, the switch is refused and flips back.
+- **The terminal password is typed into xterm's hidden field**, not an `input type="password"`: a password manager cannot fill it, and a phone keyboard with prediction may learn it. The SSH login itself is unchanged.
+- The Fleet cards were checked in a browser against stubbed answers at 1 440 px and 390 px, not against real boxes through the relay.
+
+### Proof
+
+The dashboard's CI passed on the three pull requests (the full suite and the build). The install check of this release: result added after the check.
+
 ## [0.5.89] - 2026-11-06
 
 Components: CasaOS-UI `v0.4.143`. Unchanged from v0.5.88: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
