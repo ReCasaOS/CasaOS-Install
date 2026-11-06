@@ -24,7 +24,7 @@ Components: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-UI `v0.4.14
 
 ### Proof
 
-The three pull requests' CI passed (Go tests with the race detector for the core and AppManagement; the dashboard's 7 754 tests and its build). The install check of this release: result added after the check.
+The three pull requests' CI passed (Go tests with the race detector for the core and AppManagement; the dashboard's 7 754 tests and its build). The install check of this release: green on every leg of the published v0.5.88 bundle (five QEMU guests, Docker current and preinstalled on amd64 and arm64, [run 42168217663](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42168217663)), including the new logs proof: the crash-check app's lines before its death are in the day file and the API, its `died` event carries exit code 1, the export returns them and the settings answer the defaults. It does not open the Logs page in a browser.
 
 ## [0.5.87] - 2026-11-06
 
