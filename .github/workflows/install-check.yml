@@ -2508,7 +2508,7 @@ jobs:
             app:
               image: busybox
               container_name: crashcheck
-              command: ["sh", "-c", "trap 'exit 0' TERM; while [ ! -e /tmp/crash ]; do sleep 1; done; exit 1"]
+              command: ["sh", "-c", "echo logs-proof-marker; trap 'exit 0' TERM; while [ ! -e /tmp/crash ]; do sleep 1; done; echo logs-proof-last; exit 1"]
           x-casaos:
             main: app
             title:
@@ -2529,6 +2529,22 @@ jobs:
           test "${held}" = "[]"
           n="$(jq -s length alerts.jsonl)"
           docker exec crashcheck touch /tmp/crash
+          # The app's logs and its death are kept: what it wrote before dying and its
+          # died event outlive the container, and the export and settings routes answer.
+          # Here, not in a step of its own: the EXIT trap above removes the app.
+          died=""
+          for _ in $(seq 1 30); do
+            died="$(api "${CASA_URL}/v2/app_management/logs/events?app=crashcheck&kind=died" | jq -r '.data[0].exit_code // empty')"
+            [ "${died}" = "1" ] && break
+            sleep 2
+          done
+          [ "${died}" = "1" ]
+          api "${CASA_URL}/v2/app_management/logs?app=crashcheck&limit=50" | jq -e '[.data.lines[].text] | index("logs-proof-last") != null and index("logs-proof-marker") != null' >/dev/null
+          logfile="$(sudo sh -c "ls /DATA/AppData/casaos/logs/crashcheck/app/$(date -u +%F).*.log")"
+          sudo grep -q ' o logs-proof-last$' "${logfile}"
+          api "${CASA_URL}/v2/app_management/logs/export?app=crashcheck" | grep -q 'logs-proof-last'
+          api "${CASA_URL}/v2/app_management/logs/settings" | jq -e '.data.retention_days == 7 and .data.max_size_mb == 2048 and .data.include_others == false' >/dev/null
+          echo "logs: lines kept, died event with exit code 1, export ok" | tee -a "${GITHUB_STEP_SUMMARY}"
           arrived "${n}" 90 'test("apps"; "i") and test("crashcheck"; "i")'
           echo "crashcheck: $(docker inspect -f '{{.State.Status}}, exit code {{.State.ExitCode}}' crashcheck)"
           echo "the test, the failed backup and the crashed app each reached the channel"
