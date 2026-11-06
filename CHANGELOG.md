@@ -2,6 +2,27 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.93] - 2026-11-06
+
+Components: CasaOS-UI `v0.4.147`. Unchanged from v0.5.92: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **Virtual Machines, Statistics, Logs and Fleet on a phone.** Measured at 390 px wide, 16 of 19 controls on Virtual Machines, all of Statistics and Logs, and 9 of 20 on Fleet were below 44 px. On a phone or a touch screen they now all reach 44 px; a mouse keeps the compact size ([ReCasaOS/CasaOS-UI#132](https://github.com/ReCasaOS/CasaOS-UI/pull/132), [ReCasaOS/CasaOS-UI#133](https://github.com/ReCasaOS/CasaOS-UI/pull/133)).
+- **The plus and minus of the number fields have a name.** The CPU, memory and disk fields of a virtual machine and the retention fields of the logs settings read "Decrease" and "Increase" to a screen reader; they had none.
+- **Text below 12 px.** The axis labels of the Statistics charts (11 px) and two badges (11.2 px) are 12 px.
+
+### Not in it
+
+- Only Virtual Machines, Statistics, Logs and Fleet were done. Files, App Store, Terminal, Welcome and the settings, storage and backup windows were not checked (the stubbed answers do not fill them), and the Fleet Updates tab still is the old table, which scrolls sideways inside its box on a phone.
+- The two new texts exist in English and French only.
+- Checked in a narrowed browser window against stubbed answers, not on a touch device.
+- The login page switch still cannot be saved: CasaOS-UserService `v0.4.33` does not have the setting (see v0.5.90).
+
+### Proof
+
+The dashboard's CI passed on both pull requests (the full suite and the build). The install check of this release: result added after the check.
+
 ## [0.5.92] - 2026-11-06
 
 Components: CasaOS-UI `v0.4.146`. Unchanged from v0.5.91: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
