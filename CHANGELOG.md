@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.96] - 2026-11-07
+
+Components: CasaOS-AppManagement `v0.4.89`, CasaOS-UI `v0.4.151`. Unchanged from v0.5.95: CasaOS `v0.4.95`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The dependencies Dependabot flagged.** The dashboard moves to vue-i18n 11 (an XSS through `srcdoc` in the 9.x line, which has no fix), happy-dom 21 and vite 6.4.5 for its tests and build, and newer follow-redirects, fast-uri, qs, glob and minimatch. A language without a translation still reads the sentence in English, with an English date, as before. AppManagement takes go-jose 4.1.6: a denial of service when parsing JWKs with RSA keys, and two panics ([ReCasaOS/CasaOS-UI#138](https://github.com/ReCasaOS/CasaOS-UI/pull/138), [ReCasaOS/CasaOS-UI#139](https://github.com/ReCasaOS/CasaOS-UI/pull/139), [ReCasaOS/CasaOS-AppManagement#45](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/45)).
+
+### Not in it
+
+- The echo v4 alerts on the five Go services (a rate-limiter bypass and a proxy header: none of the services uses either middleware) and docker/distribution in AppManagement (its registry client is never called) have no fix on their line. They are dismissed as not used, not fixed.
+- vue-i18n 11 and happy-dom 21 were checked by the dashboard's test suite and build, not in a browser.
+
+### Proof
+
+The dashboard's CI passed on both pull requests and on main (the full suite and the build), and AppManagement's Go suite passed on main. The install check of this release: result added after the check.
+
 ## [0.5.95] - 2026-11-07
 
 Components: CasaOS-UI `v0.4.150`. Unchanged from v0.5.94: CasaOS `v0.4.95`, CasaOS-AppManagement `v0.4.88`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
