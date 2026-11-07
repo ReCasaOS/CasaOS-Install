@@ -17,7 +17,7 @@ Components: CasaOS-AppManagement `v0.4.89`, CasaOS-UI `v0.4.151`. Unchanged from
 
 ### Proof
 
-The dashboard's CI passed on both pull requests and on main (the full suite and the build), and AppManagement's Go suite passed on main. The install check of this release: result added after the check.
+The dashboard's CI passed on both pull requests and on main (the full suite and the build), and AppManagement's Go suite passed on main. The install check of this release passes on all 9 legs of the published bundle: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42394764681](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42394764681)).
 
 ## [0.5.95] - 2026-11-07
 
