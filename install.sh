@@ -858,20 +858,76 @@ Check_Docker_Install_Final() {
     fi
 }
 
+# The Debian or Ubuntu release a derivative is built on, as "<distro> <codename>",
+# for Docker's apt source: the derivative's own codename is not in Docker's repository.
+Docker_Base_Repo() {
+    if [[ " ${ID_LIKE:-} " == *" ubuntu "* && -n "${UBUNTU_CODENAME:-}" ]]; then
+        echo "ubuntu ${UBUNTU_CODENAME}"
+    elif [[ " ${ID_LIKE:-} " == *" debian "* ]]; then
+        local codename="${DEBIAN_CODENAME:-}"
+        if [[ -z "${codename}" ]]; then
+            case "${VERSION_ID:-}" in
+            6) codename=bookworm ;;
+            7) codename=trixie ;;
+            esac
+        fi
+        [[ -n "${codename}" ]] || return 1
+        echo "debian ${codename}"
+    else
+        return 1
+    fi
+}
+
+# get.docker.com reads only ID and refuses derivatives, so Docker's repository is added by hand.
+Install_Docker_From_Repo() {
+    local distro="$1" codename="$2"
+    ${sudo_cmd} install -d -m 0755 "${PREFIX}/etc/apt/keyrings" "${PREFIX}/etc/apt/sources.list.d" || return $?
+    if ! grep -rqs download.docker.com "${PREFIX}/etc/apt/sources.list.d/"; then
+        ${sudo_cmd} curl -fsSL "https://download.docker.com/linux/${distro}/gpg" -o "${PREFIX}/etc/apt/keyrings/docker.asc" || return $?
+        ${sudo_cmd} chmod a+r "${PREFIX}/etc/apt/keyrings/docker.asc" || return $?
+        ${sudo_cmd} tee "${PREFIX}/etc/apt/sources.list.d/docker.sources" >/dev/null <<EOT || return $?
+Types: deb
+URIs: https://download.docker.com/linux/${distro}
+Suites: ${codename}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOT
+    fi
+    ${sudo_cmd} apt-get update || return $?
+    ${sudo_cmd} apt-get -y -qq install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
+
 #Install Docker
 Install_Docker() {
     Show 2 "Install the necessary dependencies: \e[33mDocker \e[0m"
     if [[ ! -d "${PREFIX}/etc/apt/sources.list.d" ]]; then
         ${sudo_cmd} mkdir -p "${PREFIX}/etc/apt/sources.list.d"
     fi
+    local docker_status=0 base
     GreyStart
-    if [[ "${REGION}" = "China" ]] || [[ "${REGION}" = "CN" ]]; then
-        ${sudo_cmd} curl -fsSL https://play.cuse.eu.org/get_docker.sh | bash -s docker --mirror Aliyun
+    if [[ ! " ubuntu debian raspbian " == *" ${ID:-} "* && ( " ${ID_LIKE:-} " == *" ubuntu "* || " ${ID_LIKE:-} " == *" debian "* ) ]]; then
+        if base="$(Docker_Base_Repo)"; then
+            Show 2 "Docker from Docker's repository for ${base% *} ${base#* } (this system is based on it)"
+            Install_Docker_From_Repo ${base} || docker_status=$?
+        else
+            ColorReset
+            Show 1 "This system is based on Debian or Ubuntu but its os-release names no base release (UBUNTU_CODENAME or DEBIAN_CODENAME): install Docker by hand, then run this installer again."
+            exit 1
+        fi
+    elif [[ "${REGION}" = "China" ]] || [[ "${REGION}" = "CN" ]]; then
+        (
+            set -o pipefail
+            ${sudo_cmd} curl -fsSL https://play.cuse.eu.org/get_docker.sh | bash -s docker --mirror Aliyun
+        ) || docker_status=$?
     else
-        ${sudo_cmd} curl -fsSL https://get.docker.com | bash
+        (
+            set -o pipefail
+            ${sudo_cmd} curl -fsSL https://get.docker.com | bash
+        ) || docker_status=$?
     fi
     ColorReset
-    if [[ $? -ne 0 ]]; then
+    if [[ ${docker_status} -ne 0 ]]; then
         Show 1 "Installation failed, please try again."
         exit 1
     else

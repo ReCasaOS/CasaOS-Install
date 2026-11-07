@@ -49,6 +49,9 @@ jobs:
       - name: Check what the installer says when a dependency cannot be installed
         run: bash scripts/test-install-dependencies.sh
 
+      - name: Check what the installer does on derivatives and appliances
+        run: bash scripts/test-install-distribution.sh
+
       - name: Check the port the installer's closing banner shows
         run: bash scripts/test-install-banner.sh
 
