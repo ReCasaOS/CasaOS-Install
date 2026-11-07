@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.98] - 2026-11-07
+
+Components: CasaOS-UI `v0.4.153`. Unchanged from v0.5.97: CasaOS `v0.4.96`, CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The settings menu reads as three cards.** Display, System and Updates each sit on a raised card with hairlines between the rows, the icons on a small tile, and the Configure and Change buttons on a light tint instead of a dark pill lost on the dark panel. On a phone every control of the menu reaches 44 px, which the accessibility pass of v0.5.93 had missed ([ReCasaOS/CasaOS-UI#141](https://github.com/ReCasaOS/CasaOS-UI/pull/141)).
+- **The settings windows on a phone, and in the light theme.** Already in v0.5.95 and not noted there: Backups, Alerts, Update, Modules, Fleet and the other settings windows have 44 px controls on a phone, named remove buttons, a backup history that keeps Restore on the screen, and their sections on cards ([ReCasaOS/CasaOS-UI#134](https://github.com/ReCasaOS/CasaOS-UI/pull/134)). Those cards were white on white in the light theme; this release gives them a grey of their own.
+
+### Not in it
+
+- Seen on a mock at 1100, 800 and 390 px in both themes, not on a real box or a touch screen.
+
+### Proof
+
+The dashboard's suite and build passed on the pull request and on main. The install check of this release: result added after the check.
+
 ## [0.5.97] - 2026-11-07
 
 Components: CasaOS `v0.4.96`, CasaOS-UI `v0.4.152`. Unchanged from v0.5.96: CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
