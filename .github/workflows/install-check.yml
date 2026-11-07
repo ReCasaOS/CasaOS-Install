@@ -2805,6 +2805,19 @@ jobs:
             image: ubuntu-26.04-server-cloudimg-amd64.img
             sums: SHA256SUMS
             algo: sha256sum
+          # Armbian's generic x86 image, the one people put on mini PCs. It keeps
+          # Debian's ID and VERSION_ID, is built to boot by UEFI from its EFI
+          # partition, and has no cloud-init: the user is written into the disk.
+          # The link follows Armbian's newest release; its sums sit next to the
+          # file it redirects to, as <file>.sha.
+          - name: Armbian (x86, Trixie)
+            id: debian
+            version: '13'
+            url: https://dl.armbian.com/uefi-x86/Trixie_cloud_minimal-qcow2
+            algo: sha256sum
+            uefi: true
+            seed: customize
+            variant: armbian
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
@@ -2817,6 +2830,9 @@ jobs:
       EXPECT_VERSION_ID: ${{ matrix.version }}
       INSTALLER_ARGS: ${{ matrix.args }}
       DISGUISE: ${{ matrix.disguise }}
+      URL: ${{ matrix.url }}
+      UEFI: ${{ matrix.uefi }}
+      SEED: ${{ matrix.seed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -2832,17 +2848,29 @@ jobs:
       - name: The distribution's cloud image
         run: |
           set -euo pipefail
-          curl -fsSL -o disk.img "${BASE}/${IMAGE}"
-          # Debian lists "<sum>  name", Ubuntu "<sum> *name"
-          curl -fsSL "${BASE}/${SUMS}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
+          if [ -n "${URL}" ]; then
+            # Check the file the link redirected to, not whatever it points at a moment later
+            IMAGE_URL="$(curl -fsSL -o disk.img -w '%{url_effective}' "${URL}")"
+            IMAGE="${IMAGE_URL##*/}"
+            SUMS_URL="${IMAGE_URL}.sha"
+            echo "${IMAGE_URL}"
+          else
+            curl -fsSL -o disk.img "${BASE}/${IMAGE}"
+            SUMS_URL="${BASE}/${SUMS}"
+          fi
+          # Debian lists "<sum>  name", Ubuntu "<sum> *name", Armbian "<sum> name"
+          curl -fsSL "${SUMS_URL}" | awk -v f="${IMAGE}" '$2 == f || $2 == "*" f {print $1 "  disk.img"}' | "${ALGO}" --check
 
       - name: Boot it
         run: |
           set -euo pipefail
+          pkgs="qemu-system-x86 qemu-utils cloud-image-utils"
+          [ "${UEFI}" != true ] || pkgs="${pkgs} ovmf"
+          [ "${SEED}" != customize ] || pkgs="${pkgs} libguestfs-tools"
           # The runner's apt sometimes stalls without a word (it has taken a whole job
           # before): a few bounded tries, for that and for nothing else.
           for attempt in 1 2 3; do
-            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq ${pkgs} && break
             [ "${attempt}" -lt 3 ] || exit 1
             echo "apt stalled or failed (try ${attempt}), again"
             sudo dpkg --configure -a || true
@@ -2851,7 +2879,17 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           ssh-keygen -q -t ed25519 -N '' -f vm_key
-          cat > user-data <<EOF
+          drives=()
+          if [ "${SEED}" = customize ]; then
+            # No cloud-init in the image: the same user, written into the disk before
+            # it boots. sudo, because the runner's kernel in /boot is root's alone.
+            sudo virt-customize -a disk.img --no-network \
+              --run-command 'useradd -m -s /bin/bash casa' \
+              --ssh-inject casa:file:vm_key.pub \
+              --write /etc/sudoers.d/casa:'casa ALL=(ALL) NOPASSWD:ALL' \
+              --chmod 0440:/etc/sudoers.d/casa
+          else
+            cat > user-data <<EOF
           #cloud-config
           users:
             - name: casa
@@ -2860,7 +2898,16 @@ jobs:
               ssh_authorized_keys:
                 - $(cat vm_key.pub)
           EOF
-          cloud-localds seed.img user-data
+            cloud-localds seed.img user-data
+            drives+=(-drive file=seed.img,if=virtio,format=raw)
+          fi
+          if [ "${UEFI}" = true ]; then
+            # Noble's ovmf ships the 4M firmware as code and variables in two files:
+            # the code read-only, the variables a copy the guest may write.
+            cp /usr/share/OVMF/OVMF_VARS_4M.fd efivars.fd
+            drives+=(-drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd
+                     -drive if=pflash,format=raw,unit=1,file=efivars.fd)
+          fi
           qemu-img resize disk.img 30G
           cat > ssh_config <<EOF
           Host vm
@@ -2874,8 +2921,7 @@ jobs:
             ServerAliveInterval 30
           EOF
           qemu-system-x86_64 -enable-kvm -cpu host -m 6144 -smp 4 -display none -daemonize \
-            -drive file=disk.img,if=virtio,format=qcow2 \
-            -drive file=seed.img,if=virtio,format=raw \
+            -drive file=disk.img,if=virtio,format=qcow2 "${drives[@]}" \
             -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
             -serial file:serial.log
           for _ in $(seq 1 90); do
@@ -2924,7 +2970,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: install-check-${{ inputs.tag }}-${{ matrix.id }}-${{ matrix.version }}
+          name: install-check-${{ inputs.tag }}-${{ matrix.id }}-${{ matrix.version }}${{ matrix.variant && format('-{0}', matrix.variant) || '' }}
           path: |
             install.log
             serial.log
