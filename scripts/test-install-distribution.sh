@@ -97,6 +97,12 @@ expect_base() { # <case> <expected output>; os-release variables already set
 )
 (
     fresh
+    ID=devuan ID_LIKE=debian VERSION_ID=6
+    out="$(Docker_Base_Repo)" && fail "devuan: Docker_Base_Repo returned 0"
+    [[ -z "${out}" ]] || fail "devuan: Docker_Base_Repo printed '${out}'"
+)
+(
+    fresh
     ID=kali ID_LIKE=debian VERSION_ID=2024.1
     out="$(Docker_Base_Repo)" && fail "kali: Docker_Base_Repo returned 0"
     [[ -z "${out}" ]] || fail "kali: Docker_Base_Repo printed '${out}'"
@@ -129,6 +135,7 @@ expect_base() { # <case> <expected output>; os-release variables already set
 )
 
 (
+    set +o pipefail # install.sh sets only -e: Install_Docker has to bring its own pipefail
     fresh
     ID=ubuntu get_docker_status=22
     out="$(Install_Docker)" && fail "get-docker-fails: Install_Docker returned 0"
@@ -136,6 +143,7 @@ expect_base() { # <case> <expected output>; os-release variables already set
     ! grep -q Check_Docker_Install_Final "${CALLS}" || fail "get-docker-fails: the final check ran"
 )
 (
+    set +o pipefail
     fresh
     ID=linuxmint ID_LIKE="ubuntu debian" UBUNTU_CODENAME=noble
     Install_Docker >/dev/null || fail "derivative-path: status $?"
@@ -143,6 +151,7 @@ expect_base() { # <case> <expected output>; os-release variables already set
     [[ -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "derivative-path: no docker.sources"
 )
 (
+    set +o pipefail
     fresh
     ID=kali ID_LIKE=debian VERSION_ID=2024.1
     out="$(Install_Docker)" && fail "no-base: Install_Docker returned 0"

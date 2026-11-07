@@ -865,7 +865,7 @@ Docker_Base_Repo() {
         echo "ubuntu ${UBUNTU_CODENAME}"
     elif [[ " ${ID_LIKE:-} " == *" debian "* ]]; then
         local codename="${DEBIAN_CODENAME:-}"
-        if [[ -z "${codename}" ]]; then
+        if [[ -z "${codename}" && "${ID:-}" == linuxmint ]]; then
             case "${VERSION_ID:-}" in
             6) codename=bookworm ;;
             7) codename=trixie ;;
