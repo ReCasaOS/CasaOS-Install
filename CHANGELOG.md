@@ -23,7 +23,7 @@ Components: CasaOS `v0.4.96`, CasaOS-UI `v0.4.152`. Unchanged from v0.5.96: Casa
 
 ### Proof
 
-The core's Go suite (with -race) and the dashboard's suite and build passed on both pull requests and on main. The install check of this release: result added after the check.
+The core's Go suite (with -race) and the dashboard's suite and build passed on both pull requests and on main. The install check of this release passes on all 9 legs of the published bundle: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42401784640](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42401784640)).
 
 ## [0.5.96] - 2026-11-07
 
