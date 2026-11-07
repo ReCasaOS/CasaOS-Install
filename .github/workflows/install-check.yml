@@ -19,6 +19,9 @@ name: install-check
 # Likewise the Debian 11 leg passes --use-debian-archive, which an installer older
 # than v0.5.16 does not know: dispatched against one of those tags, that leg
 # ends on the usage text, and the others are unaffected.
+# The Linux Mint leg fails against a tag older than the release that installs Docker
+# from Docker's own repository on Ubuntu and Debian derivatives, at the Docker step
+# (get.docker.com: Unsupported distribution 'linuxmint').
 
 on:
   workflow_call:
@@ -2787,6 +2790,14 @@ jobs:
             image: ubuntu-24.04-server-cloudimg-amd64.img
             sums: SHA256SUMS
             algo: sha256sum
+          - name: Linux Mint 22.3 (Ubuntu 24.04 wearing Mint's os-release)
+            id: linuxmint
+            version: '22.3'
+            base: https://cloud-images.ubuntu.com/releases/24.04/release
+            image: ubuntu-24.04-server-cloudimg-amd64.img
+            sums: SHA256SUMS
+            algo: sha256sum
+            disguise: linuxmint
           - name: Ubuntu 26.04
             id: ubuntu
             version: '26.04'
@@ -2805,6 +2816,7 @@ jobs:
       EXPECT_ID: ${{ matrix.id }}
       EXPECT_VERSION_ID: ${{ matrix.version }}
       INSTALLER_ARGS: ${{ matrix.args }}
+      DISGUISE: ${{ matrix.disguise }}
     steps:
       - uses: actions/checkout@v4
 
@@ -2871,6 +2883,29 @@ jobs:
             sleep 5
           done
           ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
+
+      # Mint publishes no cloud image, so this leg is an Ubuntu 24.04 guest that
+      # says it is Mint 22.3. It proves what the installer does with that identity:
+      # it is not Debian or Ubuntu by ID, so it must pick Docker's apt repository
+      # by ID_LIKE and the Ubuntu codename (get.docker.com refuses linuxmint). It
+      # does not prove Mint's desktop, its NetworkManager, or ports a desktop
+      # already holds. /etc/os-release is a symlink to /usr/lib/os-release: replace
+      # it with a file instead of writing through it.
+      - name: Wear the derivative's os-release
+        if: matrix.disguise == 'linuxmint'
+        run: |
+          set -euo pipefail
+          ssh -F ssh_config vm 'sudo rm -f /etc/os-release && sudo tee /etc/os-release >/dev/null' <<'EOF'
+          NAME="Linux Mint"
+          VERSION="22.3 (Zena)"
+          ID=linuxmint
+          ID_LIKE="ubuntu debian"
+          PRETTY_NAME="Linux Mint 22.3"
+          VERSION_ID="22.3"
+          VERSION_CODENAME=zena
+          UBUNTU_CODENAME=noble
+          EOF
+          ssh -F ssh_config vm 'cat /etc/os-release'
 
       - name: Install and ask the questions
         run: |
