@@ -21,7 +21,7 @@ name: install-check
 # ends on the usage text, and the others are unaffected.
 # The Linux Mint leg fails against a tag older than the release that installs Docker
 # from Docker's own repository on Ubuntu and Debian derivatives, at the Docker step
-# (get.docker.com: Unsupported distribution 'linuxmint').
+# (apt: "held broken packages", because get.docker.com fell back to Debian trixie).
 
 on:
   workflow_call:
@@ -2954,7 +2954,7 @@ jobs:
       # Mint publishes no cloud image, so this leg is an Ubuntu 24.04 guest that
       # says it is Mint 22.3. It proves what the installer does with that identity:
       # it is not Debian or Ubuntu by ID, so it must pick Docker's apt repository
-      # by ID_LIKE and the Ubuntu codename (get.docker.com refuses linuxmint). It
+      # by ID_LIKE and the Ubuntu codename (get.docker.com would take Debian trixie here). It
       # does not prove Mint's desktop, its NetworkManager, or ports a desktop
       # already holds. /etc/os-release is a symlink to /usr/lib/os-release: replace
       # it with a file instead of writing through it.

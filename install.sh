@@ -937,7 +937,8 @@ Docker_Base_Repo() {
     fi
 }
 
-# get.docker.com reads only ID and refuses derivatives, so Docker's repository is added by hand.
+# Docker's repository is added by hand on derivatives: get.docker.com guesses the base from lsb_release -u,
+# else from /etc/debian_version, and on an Ubuntu base that second guess installs Debian packages.
 Install_Docker_From_Repo() {
     local distro="$1" codename="$2"
     ${sudo_cmd} install -d -m 0755 "${PREFIX}/etc/apt/keyrings" "${PREFIX}/etc/apt/sources.list.d" || return $?
