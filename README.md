@@ -49,6 +49,18 @@ The installer also installs tailscale and never starts tailscaled: it is **stopp
 
 **What is verified.** Every package the installer downloads comes from a ReCasaOS release and is checked against a SHA-256 digest before extraction. The digests are written into `install.sh` at release time from the checksums each component publishes, or, for the dashboard and the App Store seed whose releases publish none, computed from the package as published; none is typed by hand. The uninstall script is checked the same way. Docker is the exception: when the box has none, the installer installs it with get.docker.com, apt verifies its packages against Docker's own key, and ReCasaOS neither pins nor checksums them. tailscale is the same: from the system's repositories, or from Tailscale's (added with Tailscale's key when the system has none), verified by the package manager.
 
+### Supported systems
+
+| Tested at every release | Not tested yet | Seen in service | Not supported |
+|---|---|---|---|
+| Debian 11, 12, 13; Ubuntu 22.04 (amd64, arm64), 24.04, 26.04; Armbian x86 (Trixie); DietPi x86 (Trixie); Linux Mint 22.3 | Raspberry Pi OS 64-bit; Raspberry Pi OS 32-bit (Docker 28 at most); LMDE, Pop!_OS, Zorin, elementary | none yet | Alpine, OpenWrt, Devuan (no systemd), TrueNAS SCALE (apt is locked, it runs its own apps), Proxmox VE host, Proxmox Backup Server, Proxmox Mail Gateway |
+
+- The Armbian and DietPi legs install the newest image of their project. The Ubuntu 22.04 arm64 runner stands in for a Raspberry Pi. The Linux Mint leg is an Ubuntu 24.04 with Linux Mint 22.3's `os-release`: it proves how the installer handles a derivative, not Mint itself, and it is green from the first release that carries this change.
+- *Seen in service* will list systems whose installs complete and whose boxes keep reporting, read from `os` and `os_variant` below. It does not mean every feature was checked.
+- On a derivative of Ubuntu or Debian (Linux Mint, LMDE, Pop!_OS, Zorin, elementary), the installer adds Docker's own apt repository for the base release instead of running get.docker.com. If the `os-release` names no base release, it stops at the Docker step and says to install Docker by hand.
+- The refusals apply to a first install only; an existing installation is updated anyway, with a warning. On a Proxmox VE host, Docker cuts the network of its virtual machines and containers: install ReCasaOS in a Debian or Ubuntu VM on it, or pass `--allow-proxmox-host` to install on the host anyway.
+- OpenMediaVault gets a warning, not a stop: it manages samba itself, so shares may conflict.
+
 ## What ReCasaOS adds to CasaOS
 
 ### Apps
@@ -154,6 +166,7 @@ A ReCasaOS box sends anonymous statistics, so that the maintainers know how many
 | `core` | `v0.4.59` | `"v" + common.VERSION` |
 | `arch` | `amd64`, `arm64`, `arm-7` | `runtime.GOARCH`, plus `GOARM` from the build info for `arm` |
 | `os` | `ubuntu 24.04`, `debian 12`, `arch` | `/etc/os-release`: `ID` and `VERSION_ID` (ID alone when there is no VERSION_ID); `unknown` if unreadable |
+| `os_variant` | `raspberrypi`, `armbian`, `dietpi`, `proxmox`, `openmediavault`, `truenas`, `proxmox_backup`, `proxmox_mail`, `none` | What a box that says `ID=debian` or `ubuntu` really is, from fixed marker files (`/etc/rpi-issue`, `/etc/armbian-release`, `/boot/dietpi.txt`, `/usr/bin/pveversion`, `/etc/openmediavault`, `/usr/sbin/proxmox-backup-manager`, `/usr/bin/pmgversion`, `/usr/bin/middlewared`); `none` for plain Debian or Ubuntu and for any other ID (Raspberry Pi OS 32-bit too: its ID, `raspbian`, shows in `os`); `unknown` if `os-release` is unreadable |
 | `kernel` | `6.8` | `uname` release, major.minor |
 | `virtualization` | `none`, `kvm`, `lxc`, `wsl`, `unknown` | `systemd-detect-virt` output; `unknown` if it cannot run |
 | `model` | `Raspberry Pi 5 Model B Rev 1.0`, `ZimaBoard` | `/proc/device-tree/model`, else `/sys/class/dmi/id/product_name`; NUL and spaces trimmed, 64 characters max; `unknown` if empty or a known placeholder (`To Be Filled By O.E.M.`, `System Product Name`, `Default string`, `Not Specified`) |
