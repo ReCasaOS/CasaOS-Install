@@ -35,7 +35,7 @@ Most of this release is the work Vinz2168 brought over from their fork ([ReCasaO
 
 ### Proof
 
-Every pull request's CI passed (the full suites and the builds). The install check of this release: result added after the check.
+Every pull request's CI passed (the full suites and the builds). The install check of this release passes on all 9 legs of the published bundle: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42353069388](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42353069388)).
 
 ## [0.5.93] - 2026-11-06
 
