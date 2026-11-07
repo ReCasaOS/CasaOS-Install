@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.95] - 2026-11-07
+
+Components: CasaOS-UI `v0.4.150`. Unchanged from v0.5.94: CasaOS `v0.4.95`, CasaOS-AppManagement `v0.4.88`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Subtitles in the Files video player.** The player is ArtPlayer 5.4. The subtitle files (`.srt`, `.vtt`, `.ass`) in the video's folder are listed in its settings under *Subtitles*, with *No subtitles* first; a file named after the video (`Movie.srt`, `Movie.fr.srt` for `Movie.mkv`) is shown at start. The player follows the dashboard's language where ArtPlayer has it, English otherwise ([ReCasaOS/CasaOS-UI#136](https://github.com/ReCasaOS/CasaOS-UI/pull/136), [ReCasaOS/CasaOS#100](https://github.com/ReCasaOS/CasaOS/issues/100)).
+- **Open in a new tab.** Files, Terminal, Virtual Machines, Statistics, Logs, Fleet and the App Store have a button next to their close button that opens the window on a tab of its own, where it is (the folder, the VM, the item, the app and box of Logs, the app shown in the store), at an address that can be bookmarked. The CasaOS-UI README lists those addresses ([ReCasaOS/CasaOS-UI#137](https://github.com/ReCasaOS/CasaOS-UI/pull/137), [ReCasaOS/CasaOS#99](https://github.com/ReCasaOS/CasaOS/issues/99)).
+
+### Not in it
+
+- The subtitles were not tried with a real video in a browser: the player's options were checked against ArtPlayer 5 in tests.
+- The new-tab button was clicked through in Statistics against the dashboard's stubbed answers; the other windows use the same button.
+
+### Proof
+
+The dashboard's CI passed on both pull requests and on main (the full suite and the build). The install check of this release: result added after the check.
+
 ## [0.5.94] - 2026-11-07
 
 Components: CasaOS `v0.4.95`, CasaOS-AppManagement `v0.4.88`, CasaOS-UI `v0.4.149`, CasaOS-UserService `v0.4.34`, CasaOS-Gateway `v0.4.32`, CasaOS-MessageBus `v0.4.31`, CasaOS-LocalStorage `v0.4.59`. Unchanged from v0.5.93: module `virt` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
