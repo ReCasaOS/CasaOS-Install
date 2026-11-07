@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.99] - 2026-11-07
+
+Components: CasaOS-UI `v0.4.154`. Unchanged from v0.5.98: CasaOS `v0.4.96`, CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The operating system badge shows whatever the end of support.** It was the only way into the operating system window and its upgrade guide, and it appeared only when security support had ended or ended within 180 days: a Debian 12, supported by Debian LTS until 30 June 2028, could not reach the upgrade to Debian 13 before January 2028. Every Debian or Ubuntu the core knows now has the badge: a quiet one that says until when the system is supported ("System supported until 30 June 2028"), or "Operating system" when the core gives no date; amber and red stay for an end that is near or past. The window says the same date as a success message. Variants such as Raspberry Pi OS and systems the core does not know still have none ([ReCasaOS/CasaOS-UI#143](https://github.com/ReCasaOS/CasaOS-UI/pull/143)).
+
+### Not in it
+
+- The quiet badge was not seen in a browser, in either theme, nor the upgrade guide run from it on a real Debian 12.
+
+### Proof
+
+The dashboard's suite (7961 tests) passed before the pull request, and its release run passed on the tag. The install check of this release: result added after the check.
+
 ## [0.5.98] - 2026-11-07
 
 Components: CasaOS-UI `v0.4.153`. Unchanged from v0.5.97: CasaOS `v0.4.96`, CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
