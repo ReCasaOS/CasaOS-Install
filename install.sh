@@ -475,10 +475,69 @@ CASA_SERVICES=(
 "casaos.service"  # must be the last one so update from UI can work
 )
 
+# The host products and NAS appliances ossupport.go (the core) names, among the
+# ones this installer treats: the first whose marker exists, or nothing.
+# Raspberry Pi OS, Armbian and DietPi are not looked for here.
+Distribution_Variant() {
+    local v p
+    for v in         "proxmox /usr/bin/pveversion /etc/pve"         "openmediavault /etc/openmediavault /usr/sbin/omv-confdbadm"         "proxmox_backup /usr/sbin/proxmox-backup-manager"         "proxmox_mail /usr/bin/pmgversion"         "truenas /usr/bin/middlewared /usr/lib/python3/dist-packages/middlewared"; do
+        for p in ${v#* }; do
+            if [[ -e "${PREFIX}${p}" ]]; then
+                echo "${v%% *}"
+                return 0
+            fi
+        done
+    done
+}
+
 # 2 Check Distribution
 Check_Distribution() {
     sType=0
     notice=""
+    local variant refusal="" name="${DIST}" base=""
+    variant="$(Distribution_Variant)"
+    case "${variant}" in
+    proxmox)
+        if [[ "${ALLOW_PROXMOX_HOST:-0}" != 1 ]]; then
+            refusal="This is a Proxmox VE host: Docker on the host cuts the network of its virtual machines and containers. Install ReCasaOS in a Debian or Ubuntu virtual machine on it, or pass --allow-proxmox-host."
+        else
+            Show 3 "This is a Proxmox VE host: Docker on the host cuts the network of its virtual machines and containers. Going on because of --allow-proxmox-host."
+        fi
+        ;;
+    proxmox_backup | proxmox_mail)
+        refusal="This is a Proxmox appliance (Backup Server or Mail Gateway). Install ReCasaOS on a separate Debian or Ubuntu machine."
+        ;;
+    truenas)
+        refusal="This is TrueNAS SCALE, which locks apt and runs its own apps. Install ReCasaOS on a separate Debian or Ubuntu machine."
+        ;;
+    openmediavault)
+        Show 3 "This is OpenMediaVault, which manages samba itself: its shares and those of ReCasaOS may conflict."
+        ;;
+    esac
+    if [[ "${ID:-}" == devuan ]]; then
+        refusal="Devuan runs without systemd, which every ReCasaOS service needs."
+    fi
+    if [[ -n "${refusal}" ]]; then
+        if [[ "$(Previous_Release)" == new ]]; then
+            Show 1 "${refusal}"
+            exit 1
+        fi
+        Show 3 "${refusal} Updating the existing installation anyway."
+    fi
+    if [[ "${ID:-}" == raspbian ]]; then
+        Show 3 "Docker 28 is the last Docker for Raspberry Pi OS 32-bit: this box will not get Docker 29. Raspberry Pi OS 64-bit keeps it updated."
+    fi
+    case "${ID:-}" in
+    debian | ubuntu | raspbian) ;;
+    *)
+        if [[ -n "${UBUNTU_CODENAME:-}" ]]; then
+            base="Ubuntu ${UBUNTU_CODENAME}"
+        elif [[ -n "${DEBIAN_CODENAME:-}" ]]; then
+            base="Debian ${DEBIAN_CODENAME}"
+        fi
+        if [[ -n "${base}" ]]; then name="${PRETTY_NAME:-${ID}} (based on ${base})"; fi
+        ;;
+    esac
     case $LSB_DIST in
     *debian*) ;;
 
@@ -501,7 +560,7 @@ Check_Distribution() {
         notice="We have not tested it on this system and it may fail to install."
         ;;
     esac
-    Show ${sType} "Your Linux Distribution is : ${DIST} ${notice}"
+    Show ${sType} "Your Linux Distribution is : ${name} ${notice}"
 
     if [[ ${sType} == 1 ]]; then
         select yn in "Yes" "No"; do
@@ -1944,6 +2003,8 @@ usage() {
 Usage: install.sh [options]
 Valid options are:
     -p <build_dir>          Specify build directory (Local install)
+    --allow-proxmox-host    Install on a Proxmox VE host anyway (Docker there cuts the network of
+                            its virtual machines and containers)
     --no-telemetry          Turn anonymous statistics off (same as RECASAOS_TELEMETRY=0)
     --use-debian-archive    On Debian 11, when apt answers 404 Not Found for a package, take the
                             security repository from archive.debian.org and go on (same as
@@ -1977,6 +2038,9 @@ while getopts ":p:h-:" arg; do
             ;;
         use-debian-archive)
             DEBIAN_ARCHIVE=1
+            ;;
+        allow-proxmox-host)
+            ALLOW_PROXMOX_HOST=1
             ;;
         no-module-update)
             NO_MODULE_UPDATE=1

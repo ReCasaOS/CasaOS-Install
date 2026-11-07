@@ -27,7 +27,7 @@ INSTALL_SH="${WORK}/install.sh"
 tr -d '\r' <"${ROOT}/install.sh" >"${INSTALL_SH}"
 bash -n "${INSTALL_SH}" || fail "install.sh does not parse"
 
-for f in Docker_Base_Repo Install_Docker_From_Repo Install_Docker; do
+for f in Docker_Base_Repo Install_Docker_From_Repo Install_Docker Distribution_Variant Check_Distribution Previous_Release; do
     eval "$(sed -n "/^${f}() {\$/,/^}\$/p" "${INSTALL_SH}")"
     declare -F "${f}" >/dev/null || fail "install.sh defines no ${f}()"
 done
@@ -61,8 +61,9 @@ curl() {
 
 # A case runs in a subshell with a bare os-release and a fresh PREFIX.
 fresh() {
-    unset ID ID_LIKE UBUNTU_CODENAME DEBIAN_CODENAME VERSION_ID
+    unset ID ID_LIKE UBUNTU_CODENAME DEBIAN_CODENAME VERSION_ID PRETTY_NAME ALLOW_PROXMOX_HOST
     PREFIX="$(mktemp -d -p "${WORK}")"
+    CASA_STATE_DIR="${PREFIX}/var/lib/casaos"
     curl_status=0
     get_docker_status=0
     dpkg_arch=""
@@ -159,5 +160,85 @@ expect_base() { # <case> <expected output>; os-release variables already set
     ! grep -q '^curl' "${CALLS}" || fail "no-base: curl was called"
     [[ -z "$(find "${PREFIX}/etc/apt" -type f)" ]] || fail "no-base: a file was written under etc/apt"
 )
+
+# Check_Distribution: LSB_DIST and DIST are computed as install.sh does at its top.
+# check <case> <expected status> <expected text> <forbidden text>: output kept in ${out}.
+check() {
+    local want="$2" status=0
+    LSB_DIST="${ID_LIKE:-${ID}}" DIST="${ID}"
+    out="$(Check_Distribution 2>&1)" || status=$?
+    [[ "${status}" == "${want}" ]] || fail "$1: status ${status}, expected ${want}: ${out}"
+    [[ -z "${3:-}" || "${out}" == *"$3"* ]] || fail "$1: output lacks '$3': ${out}"
+    [[ -z "${4:-}" || "${out}" != *"$4"* ]] || fail "$1: output has '$4': ${out}"
+}
+marker() { mkdir -p "$(dirname "${PREFIX}$1")" && : >"${PREFIX}$1"; }
+
+(
+    fresh
+    ID=debian
+    marker /usr/bin/pveversion
+    check proxmox-new 1 "--allow-proxmox-host" ""
+    [[ "${out}" == *"Proxmox VE host"* ]] || fail "proxmox-new: no Proxmox VE host text"
+)
+(
+    fresh
+    ID=debian ALLOW_PROXMOX_HOST=1
+    marker /usr/bin/pveversion
+    check proxmox-allowed 0 "[3]"
+)
+(
+    fresh
+    ID=debian
+    marker /usr/bin/pveversion
+    mkdir -p "${CASA_STATE_DIR}" && echo v0.5.98 >"${CASA_STATE_DIR}/fork-release"
+    check proxmox-upgrade 0 "[3]"
+)
+(
+    fresh
+    ID=debian
+    marker /usr/bin/pveversion
+    casaos() { :; }
+    check proxmox-upstream 0 "[3]"
+)
+for m in /usr/bin/middlewared /usr/sbin/proxmox-backup-manager /usr/bin/pmgversion; do
+    (
+        fresh
+        ID=debian ALLOW_PROXMOX_HOST=1
+        marker "${m}"
+        check "appliance ${m}" 1 "separate Debian or Ubuntu machine"
+    )
+done
+(
+    fresh
+    ID=debian
+    marker /etc/openmediavault
+    check omv 0 "OpenMediaVault" ""
+    [[ "${out}" == *"[3]"* ]] || fail "omv: no warning"
+)
+(
+    fresh
+    ID=devuan ID_LIKE=debian
+    check devuan-new 1 "systemd"
+)
+(
+    fresh
+    ID=raspbian ID_LIKE=debian
+    check raspbian 0 "Docker 28" ""
+    [[ "${out}" == *"64-bit"* ]] || fail "raspbian: no 64-bit text"
+)
+for pair in "pi-os:/etc/rpi-issue" "armbian:/etc/armbian-release" "dietpi:/boot/dietpi.txt"; do
+    (
+        fresh
+        ID=debian
+        marker "${pair#*:}"
+        check "${pair%%:*}" 0 "[0] Your Linux Distribution is" "[3]"
+    )
+done
+(
+    fresh
+    ID=linuxmint ID_LIKE="ubuntu debian" PRETTY_NAME="Linux Mint 22.3" UBUNTU_CODENAME=noble
+    check mint-name 0 "Linux Mint 22.3 (based on Ubuntu noble)"
+)
+sed -n '/^usage() {$/,/^}$/p' "${INSTALL_SH}" | grep -q -- '--allow-proxmox-host' || fail "usage() does not mention --allow-proxmox-host"
 
 echo "ok: install.sh handles derivatives and a failed get.docker.com"
