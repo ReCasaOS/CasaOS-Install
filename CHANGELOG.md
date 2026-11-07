@@ -2,6 +2,41 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.94] - 2026-11-07
+
+Components: CasaOS `v0.4.95`, CasaOS-AppManagement `v0.4.88`, CasaOS-UI `v0.4.149`, CasaOS-UserService `v0.4.34`, CasaOS-Gateway `v0.4.32`, CasaOS-MessageBus `v0.4.31`, CasaOS-LocalStorage `v0.4.59`. Unchanged from v0.5.93: module `virt` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Most of this release is the work Vinz2168 brought over from their fork ([ReCasaOS/CasaOS#84](https://github.com/ReCasaOS/CasaOS/issues/84)).
+
+### Added
+
+- **Several accounts per network share.** A protected share opens for any number of share accounts, each with read and write or read only. *Share accounts* in the settings menu gets a **Folders** button per account: the /DATA folders, mounted disks and shares that account opens, and how. Deleting an account hands its shares to another member; when a share changes owner, only the old owner's files change hands, never inside /DATA itself, AppData, a disk's root, another protected share or a disk mounted inside. New share accounts take their ids in 800-899, away from the uids containers use ([ReCasaOS/CasaOS#94](https://github.com/ReCasaOS/CasaOS/pull/94), [ReCasaOS/CasaOS-UI#118](https://github.com/ReCasaOS/CasaOS-UI/pull/118)).
+- **Move Docker's data to another folder, and back.** Settings → Docker data moves images, containers and volumes to a folder on another disk under /DATA or /media (ext4, xfs; not NTFS, exFAT, FAT, network or FUSE disks, nor the btrfs storage driver) through systemd bind mounts, checks that Docker finds every image and restarts the containers that ran, and keeps the old copy until it is deleted from the same window. A move cut by a reboot or a power cut is put back, or kept when it had ended and checks out, at the next start ([ReCasaOS/CasaOS-AppManagement#40](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/40), [ReCasaOS/CasaOS-UI#119](https://github.com/ReCasaOS/CasaOS-UI/pull/119)).
+- **The new login page can be switched on.** The settings switch added in v0.5.90 now saves: CasaOS-UserService remembers which login page the box shows ([ReCasaOS/CasaOS-UserService#11](https://github.com/ReCasaOS/CasaOS-UserService/pull/11)).
+- **`recasaos*` service names.** Every service also answers to its `recasaos…` name (`systemctl status recasaos`, `systemctl restart recasaos-gateway`); logs stay under the `casaos…` names ([ReCasaOS/CasaOS#95](https://github.com/ReCasaOS/CasaOS/pull/95) and the matching PRs in each service).
+- **The web terminal is an `xterm-256color`**, so programs show their colours ([ReCasaOS/CasaOS-Common#12](https://github.com/ReCasaOS/CasaOS-Common/pull/12), [ReCasaOS/CasaOS#98](https://github.com/ReCasaOS/CasaOS/pull/98)).
+- CasaOS-Gateway creates a missing `gateway.ini`, and the Gateway, UserService and MessageBus binaries carry the ReCasaOS name.
+- **One backup schedule for several apps, and for the box itself.** A schedule is a destination, a time and a retention with boxes to tick: "This box" and the apps. The box's own backup, until now only on the button, runs on a schedule like an app. Schedules saved before are shown grouped by their settings ([ReCasaOS/CasaOS-AppManagement#44](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/44), [ReCasaOS/CasaOS-UI#135](https://github.com/ReCasaOS/CasaOS-UI/pull/135)).
+- **What the box's backup holds.** "What is copied", under "Back up this box", lists each path and what it holds, and what is not copied: the apps and their data, the files in your folders, the restic passwords.
+- **The restic password can be read again.** A destination kept with restic has a "Restic password" button that shows it and downloads it as a text file. The box's own backup still leaves it out, on purpose: keep a copy away from the box.
+- **New installs use the ReCasaOS app catalogue.** The default store, which named IceWhale's store and a Big Bear repository that has answered 404 since 2026-11-04, is the catalogue ReCasaOS builds nightly from IceWhale, RoqueOS and our Big Bear fork, with a jsdelivr fallback. Existing boxes keep their configuration ([ReCasaOS/CasaOS-AppManagement#38](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/38)).
+
+### Fixed
+
+- **The box's backup holds the backup schedules.** The dashboard said it did; the file was not in it.
+- **A click right after a Docker data move is not refused.** A move recorded its end a moment before it let go of its lock, so a new move or "Delete old copy" sent at once was refused, and the release build of AppManagement v0.4.86 failed on it ([ReCasaOS/CasaOS-AppManagement#43](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/43)).
+
+### Not in it
+
+- The Docker data move and the multi-account shares were tested by their unit tests and on the contributor's Linux Mint box, not on a box of ours; the moves cut by a power cut were checked with simulated systemd, not real power cuts.
+- The Docker data move refuses disks mounted by the dashboard itself (not in fstab) and a mergerfs /DATA: most external disks cannot be picked yet.
+- Share accounts created before this release keep their ids, which can be 999, the uid of some database containers.
+- The new backup screens were checked by their tests only, not in a browser nor on a box. Any signed-in dashboard user can read a restic password.
+
+### Proof
+
+Every pull request's CI passed (the full suites and the builds). The install check of this release: result added after the check.
+
 ## [0.5.93] - 2026-11-06
 
 Components: CasaOS-UI `v0.4.147`. Unchanged from v0.5.92: CasaOS `v0.4.94`, CasaOS-AppManagement `v0.4.85`, CasaOS-LocalStorage `v0.4.58`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.33`, CasaOS-MessageBus `v0.4.30`, CasaOS-Gateway `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
