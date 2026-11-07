@@ -2930,6 +2930,27 @@ jobs:
           done
           ssh -F ssh_config vm 'cat /etc/os-release; nproc; free -m; df -h /'
 
+      # The first Armbian guest woke at its image's build time, months back, and
+      # apt then refused every repository as "not live until" today. A box on a
+      # network gets the time from NTP: give it two minutes for that, and if it
+      # does not, hand it the runner's clock and say so.
+      - name: The clock is today's
+        if: matrix.variant == 'armbian'
+        run: |
+          set -euo pipefail
+          ssh -F ssh_config vm 'date -u; timedatectl; sudo dmesg | grep -iE "rtc|clock" || true; ls -l /etc/fake-hwclock.data /var/lib/systemd/timesync/clock 2>&1; grep -v "^#" /etc/default/fake-hwclock 2>&1 || true'
+          for _ in $(seq 1 24); do
+            [ "$(ssh -F ssh_config vm timedatectl show -p NTPSynchronized --value)" = yes ] && break
+            sleep 5
+          done
+          ssh -F ssh_config vm 'timedatectl timesync-status; journalctl -b -u systemd-timesyncd -u fake-hwclock --no-pager | tail -20' || true
+          off=$(( $(date +%s) - $(ssh -F ssh_config vm date +%s) ))
+          echo "guest clock is ${off}s behind the runner's"
+          if [ "${off#-}" -gt 120 ]; then
+            echo "::warning::The guest's clock was ${off}s off after two minutes: set from the runner's"
+            ssh -F ssh_config vm "sudo date -u -s @$(date +%s)"
+          fi
+
       # Mint publishes no cloud image, so this leg is an Ubuntu 24.04 guest that
       # says it is Mint 22.3. It proves what the installer does with that identity:
       # it is not Debian or Ubuntu by ID, so it must pick Docker's apt repository
