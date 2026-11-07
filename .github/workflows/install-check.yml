@@ -2818,6 +2818,19 @@ jobs:
             uefi: true
             seed: customize
             variant: armbian
+          # DietPi's VM image, the plain BIOS one. It keeps Debian's os-release and
+          # has no cloud-init: the user is written into the disk, and DietPi then
+          # sets itself up on first boot from /boot/dietpi.txt. The file is rebuilt
+          # under the same name, so the leg follows DietPi's newest build.
+          - name: DietPi (x86, Trixie)
+            id: debian
+            version: '13'
+            base: https://dietpi.com/downloads/images
+            image: DietPi_VM-x86_64-Trixie.qcow2
+            sums: DietPi_VM-x86_64-Trixie.qcow2.sha256
+            algo: sha256sum
+            seed: customize
+            variant: dietpi
     env:
       GH_TOKEN: ${{ github.token }}
       DEBIAN_FRONTEND: noninteractive
@@ -2833,6 +2846,7 @@ jobs:
       URL: ${{ matrix.url }}
       UEFI: ${{ matrix.uefi }}
       SEED: ${{ matrix.seed }}
+      VARIANT: ${{ matrix.variant }}
     steps:
       - uses: actions/checkout@v4
 
@@ -2881,13 +2895,24 @@ jobs:
           ssh-keygen -q -t ed25519 -N '' -f vm_key
           drives=()
           if [ "${SEED}" = customize ]; then
+            dietpi=()
+            if [ "${VARIANT}" = dietpi ]; then
+              # DietPi's first run, unattended: a root password that is not the
+              # published one, OpenSSH in place of Dropbear (scp needs its sftp), no
+              # survey from CI. It pings 9.9.9.9 before it goes on, and the runners'
+              # cloud drops ICMP: QEMU's own gateway answers pings itself.
+              for kv in AUTO_SETUP_AUTOMATED=1 "AUTO_SETUP_GLOBAL_PASSWORD=$(openssl rand -hex 16)" \
+                        AUTO_SETUP_SSH_SERVER_INDEX=-2 SURVEY_OPTED_IN=0 CONFIG_CHECK_CONNECTION_IP=10.0.2.2; do
+                dietpi+=(--edit "/boot/dietpi.txt:s/^${kv%%=*}=.*/${kv}/")
+              done
+            fi
             # No cloud-init in the image: the same user, written into the disk before
             # it boots. sudo, because the runner's kernel in /boot is root's alone.
             sudo virt-customize -a disk.img --no-network \
               --run-command 'useradd -m -s /bin/bash casa' \
               --ssh-inject casa:file:vm_key.pub \
               --write /etc/sudoers.d/casa:'casa ALL=(ALL) NOPASSWD:ALL' \
-              --chmod 0440:/etc/sudoers.d/casa
+              --chmod 0440:/etc/sudoers.d/casa "${dietpi[@]}"
           else
             cat > user-data <<EOF
           #cloud-config
@@ -2950,6 +2975,28 @@ jobs:
             echo "::warning::The guest's clock was ${off}s off after two minutes: set from the runner's"
             ssh -F ssh_config vm "sudo date -u -s @$(date +%s)"
           fi
+
+      # DietPi finishes setting itself up after it boots: it updates itself, swaps
+      # Dropbear for OpenSSH, which drops the connection, may reboot for a new
+      # kernel, and writes 2 to its install stage when it is done. The installer
+      # must not race its apt, so wait for that, twenty minutes at most.
+      - name: DietPi's first run is done
+        if: matrix.variant == 'dietpi'
+        run: |
+          set -euo pipefail
+          ready=
+          for _ in $(seq 1 120); do
+            ssh -F ssh_config -o ConnectTimeout=5 vm '[ "$(cat /boot/dietpi/.install_stage)" = 2 ] && ! pgrep -f "^/bin/bash /boot/dietpi/dietpi-(software|update)" >/dev/null' 2>/dev/null && ready=1 && break
+            sleep 10
+          done
+          ssh -F ssh_config vm 'sudo tail -40 /var/lib/dietpi/logs/dietpi-firstrun-setup.log' || true
+          if [ -z "${ready}" ]; then
+            stage="$(ssh -F ssh_config -o ConnectTimeout=5 vm cat /boot/dietpi/.install_stage 2>/dev/null || echo unreachable)"
+            echo "::error::DietPi's first run had not finished after twenty minutes (install stage ${stage})"
+            tail -30 serial.log || true
+            exit 1
+          fi
+          ssh -F ssh_config vm 'systemctl is-active ssh dropbear || true; df -h /'
 
       # Mint publishes no cloud image, so this leg is an Ubuntu 24.04 guest that
       # says it is Mint 22.3. It proves what the installer does with that identity:
