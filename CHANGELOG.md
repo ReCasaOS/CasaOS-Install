@@ -17,7 +17,7 @@ Components: CasaOS-UI `v0.4.153`. Unchanged from v0.5.97: CasaOS `v0.4.96`, Casa
 
 ### Proof
 
-The dashboard's suite and build passed on the pull request and on main. The install check of this release: result added after the check.
+The dashboard's suite and build passed on the pull request and on main. The install check of this release passes on all 9 legs of the published bundle: Debian 11, 12 and 13 and Ubuntu 24.04 and 26.04 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42413680875](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42413680875)).
 
 ## [0.5.97] - 2026-11-07
 
