@@ -2,6 +2,29 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.97] - 2026-11-07
+
+Components: CasaOS `v0.4.96`, CasaOS-UI `v0.4.152`. Unchanged from v0.5.96: CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Remote access: reach the box from a phone or PC, from anywhere.** In the settings, "Remote access" puts the box on a private network at the ReCasaOS relay. No domain is needed, no port is opened and nothing is exposed on the internet. Then:
+  - "Add a phone or PC" gives a short code. In the official Tailscale app, choose a custom server (the relay), log in, and type the code on the page that opens. The window shows the steps for iPhone, Android, Windows and Mac.
+  - The box's address on that network opens its dashboard.
+  - Devices stay until removed, from the same window.
+  - A fleet master has remote access too, and lists every box of the fleet with its address. Each box now tells its master its dashboard's port.
+  - Joining a fleet, disabling remote access or disabling a master asks for confirmation first, because the devices lose access.
+  - Links: [ReCasaOS/CasaOS#101](https://github.com/ReCasaOS/CasaOS/pull/101), [ReCasaOS/CasaOS-UI#140](https://github.com/ReCasaOS/CasaOS-UI/pull/140). The relay side is in [ReCasaOS/ReCasaOS-Relay#3](https://github.com/ReCasaOS/ReCasaOS-Relay/pull/3) (relay v0.5.0, deployed on relay.recasaos.org).
+
+### Not in it
+
+- Not tried yet with a real phone. The relay's end-to-end tests drive real Tailscale clients through the code page in CI; the iPhone and Android menus come from Tailscale's documentation.
+- A relay older than v0.5.0 (self-hosted and not updated) refuses remote access with a message saying so.
+
+### Proof
+
+The core's Go suite (with -race) and the dashboard's suite and build passed on both pull requests and on main. The install check of this release: result added after the check.
+
 ## [0.5.96] - 2026-11-07
 
 Components: CasaOS-AppManagement `v0.4.89`, CasaOS-UI `v0.4.151`. Unchanged from v0.5.95: CasaOS `v0.4.95`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
