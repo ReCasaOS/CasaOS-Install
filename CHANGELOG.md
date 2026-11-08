@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.107] - 2026-11-08
+
+Components: CasaOS `v0.4.102`. Unchanged from v0.5.106: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The upgrade from Ubuntu 24.04 to 26.04 runs in one step, as `do-release-upgrade` does.**
+  - The minimal step first (`apt-get upgrade`, as Debian's release notes say) installed tcpdump of 26.04 while systemd of 24.04 was still in place. Its `systemd-sysusers` refused the new tcpdump's user file, and the upgrade stopped after its point of no return.
+  - Block 5 now runs the whole upgrade (`dist-upgrade`) for that hop. The Debian upgrades keep their minimal step ([ReCasaOS/CasaOS#117](https://github.com/ReCasaOS/CasaOS/pull/117)).
+  - The third upgrade proof on the Ubuntu 24.04 cloud image found it. The switch, the refresh, the plan, the rehearsal, the refusals and the call-off passed; the hop stopped there.
+
+### Proof
+
+The core's CI passed on its pull request, and its release run passed on its tag. The release run of v0.5.106, its install check included, passed. The install check and the upgrade proof of this release: results added after them.
+
 ## [0.5.106] - 2026-11-08
 
 Components: CasaOS `v0.4.101`. Unchanged from v0.5.105: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
