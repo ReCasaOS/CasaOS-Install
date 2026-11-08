@@ -940,9 +940,27 @@ Docker_Base_Repo() {
 # Docker's repository is added by hand on derivatives: get.docker.com guesses the base from lsb_release -u,
 # else from /etc/debian_version, and on an Ubuntu base that second guess installs Debian packages.
 Install_Docker_From_Repo() {
-    local distro="$1" codename="$2"
+    local distro="$1" codename="$2" f active reuse="" stale=""
     ${sudo_cmd} install -d -m 0755 "${PREFIX}/etc/apt/keyrings" "${PREFIX}/etc/apt/sources.list.d" || return $?
-    if ! grep -rqs download.docker.com "${PREFIX}/etc/apt/sources.list.d/"; then
+    # Only active lines of sources.list, *.list and *.sources count (not comments, not *.save backups).
+    # shortcut: a .sources file is judged as a whole, not stanza by stanza; split it if one file ever mixes repositories.
+    for f in "${PREFIX}/etc/apt/sources.list" "${PREFIX}/etc/apt/sources.list.d/"*.list "${PREFIX}/etc/apt/sources.list.d/"*.sources; do
+        [[ -f "${f}" ]] || continue
+        active="$(sed 's/#.*//' "${f}")"
+        grep -q 'download\.docker\.com' <<<"${active}" || continue
+        if [[ "${f}" == *.sources ]]; then
+            grep -Eq "^[[:space:]]*URIs:.*download\.docker\.com/linux/${distro}([/[:space:]]|$)" <<<"${active}" &&
+                grep -Eq "^[[:space:]]*Suites:.*[[:space:]]${codename}([[:space:]]|$)" <<<"${active}" && reuse=1
+        else
+            grep -Eq "download\.docker\.com/linux/${distro}[[:space:]]+${codename}([[:space:]]|$)" <<<"${active}" && reuse=1
+        fi
+        stale="${stale:-${f}}"
+    done
+    if [[ -z "${reuse}" && -n "${stale}" ]]; then
+        Show 1 "${stale} points apt at another Docker repository; this system needs ${distro} ${codename}: remove that line and run this installer again."
+        return 1
+    fi
+    if [[ -z "${reuse}" ]]; then
         ${sudo_cmd} curl -fsSL "https://download.docker.com/linux/${distro}/gpg" -o "${PREFIX}/etc/apt/keyrings/docker.asc" || return $?
         ${sudo_cmd} chmod a+r "${PREFIX}/etc/apt/keyrings/docker.asc" || return $?
         ${sudo_cmd} tee "${PREFIX}/etc/apt/sources.list.d/docker.sources" >/dev/null <<EOT || return $?
@@ -970,10 +988,16 @@ Install_Docker() {
         if base="$(Docker_Base_Repo)"; then
             Show 2 "Docker from Docker's repository for ${base% *} ${base#* } (this system is based on it)"
             Install_Docker_From_Repo ${base} || docker_status=$?
-        else
+        elif [[ " ${ID_LIKE:-} " == *" ubuntu "* ]]; then
             ColorReset
             Show 1 "This system is based on Debian or Ubuntu but its os-release names no base release (UBUNTU_CODENAME or DEBIAN_CODENAME): install Docker by hand, then run this installer again."
             exit 1
+        else
+            # Debian only: get.docker.com's fallback to /etc/debian_version gives the right repository
+            (
+                set -o pipefail
+                ${sudo_cmd} curl -fsSL https://get.docker.com | bash
+            ) || docker_status=$?
         fi
     elif [[ "${REGION}" = "China" ]] || [[ "${REGION}" = "CN" ]]; then
         (

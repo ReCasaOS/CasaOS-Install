@@ -61,7 +61,7 @@ curl() {
 
 # A case runs in a subshell with a bare os-release and a fresh PREFIX.
 fresh() {
-    unset ID ID_LIKE UBUNTU_CODENAME DEBIAN_CODENAME VERSION_ID PRETTY_NAME ALLOW_PROXMOX_HOST
+    unset ID ID_LIKE UBUNTU_CODENAME DEBIAN_CODENAME VERSION_CODENAME VERSION_ID PRETTY_NAME ALLOW_PROXMOX_HOST
     PREFIX="$(mktemp -d -p "${WORK}")"
     CASA_STATE_DIR="${PREFIX}/var/lib/casaos"
     curl_status=0
@@ -78,8 +78,8 @@ expect_base() { # <case> <expected output>; os-release variables already set
 
 (
     fresh
-    ID=linuxmint ID_LIKE="ubuntu debian" VERSION_ID=22.3 UBUNTU_CODENAME=noble
-    expect_base mint "ubuntu noble"
+    ID=linuxmint ID_LIKE="ubuntu debian" VERSION_ID=22.3 UBUNTU_CODENAME=noble VERSION_CODENAME=zena
+    expect_base mint "ubuntu noble" # the derivative's own codename (zena) is not the answer
 )
 (
     fresh
@@ -146,19 +146,83 @@ expect_base() { # <case> <expected output>; os-release variables already set
 (
     set +o pipefail
     fresh
-    ID=linuxmint ID_LIKE="ubuntu debian" UBUNTU_CODENAME=noble
+    ID=linuxmint ID_LIKE="ubuntu debian" UBUNTU_CODENAME=noble VERSION_CODENAME=zena
     Install_Docker >/dev/null || fail "derivative-path: status $?"
+    grep -q '^Suites: noble$' "${PREFIX}/etc/apt/sources.list.d/docker.sources" || fail "derivative-path: Suites is not noble"
+    ! grep -q zena "${PREFIX}/etc/apt/sources.list.d/docker.sources" "${CALLS}" || fail "derivative-path: zena reached docker.sources or apt"
     ! grep -q 'get.docker.com' "${CALLS}" || fail "derivative-path: get.docker.com was used"
     [[ -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "derivative-path: no docker.sources"
 )
 (
     set +o pipefail
     fresh
-    ID=kali ID_LIKE=debian VERSION_ID=2024.1
+    ID=zorin ID_LIKE="ubuntu debian" VERSION_ID=17
     out="$(Install_Docker)" && fail "no-base: Install_Docker returned 0"
     [[ "${out}" == *"[1] This system is based on Debian or Ubuntu but its os-release names no base release (UBUNTU_CODENAME or DEBIAN_CODENAME): install Docker by hand, then run this installer again." ]] || fail "no-base: output is '${out}'"
     ! grep -q '^curl' "${CALLS}" || fail "no-base: curl was called"
     [[ -z "$(find "${PREFIX}/etc/apt" -type f)" ]] || fail "no-base: a file was written under etc/apt"
+)
+(
+    set +o pipefail
+    fresh
+    ID=kali ID_LIKE=debian VERSION_ID=2024.1
+    out="$(Install_Docker)" || fail "debian-like-no-base: status $?"
+    [[ "${out}" != *"names no base release"* ]] || fail "debian-like-no-base: stopped with the no-base sentence"
+    grep -q 'curl -fsSL https://get.docker.com' "${CALLS}" || fail "debian-like-no-base: get.docker.com was not used"
+    [[ ! -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "debian-like-no-base: a docker.sources was written"
+)
+
+# Existing Docker sources: only active lines count, in sources.list and sources.list.d/*.list|*.sources.
+(
+    fresh
+    mkdir -p "${PREFIX}/etc/apt/sources.list.d"
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable" >"${PREFIX}/etc/apt/sources.list.d/docker.list"
+    out="$(Install_Docker_From_Repo ubuntu noble)" && fail "stale-docker-list: returned 0"
+    [[ "${out}" == "[1] ${PREFIX}/etc/apt/sources.list.d/docker.list points apt at another Docker repository; this system needs ubuntu noble: remove that line and run this installer again." ]] || fail "stale-docker-list: output is '${out}'"
+    [[ ! -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "stale-docker-list: docker.sources written"
+    ! grep -q 'apt-get' "${CALLS}" || fail "stale-docker-list: apt-get ran"
+    grep -q trixie "${PREFIX}/etc/apt/sources.list.d/docker.list" || fail "stale-docker-list: the user's file was edited"
+)
+(
+    fresh
+    mkdir -p "${PREFIX}/etc/apt/sources.list.d"
+    echo "# deb https://download.docker.com/linux/ubuntu noble stable # disabled on upgrade to noble" >"${PREFIX}/etc/apt/sources.list.d/docker.list"
+    Install_Docker_From_Repo ubuntu noble || fail "commented-docker-line: status $?"
+    [[ -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "commented-docker-line: no docker.sources"
+    grep -q 'apt-get -y -qq install docker-ce' "${CALLS}" || fail "commented-docker-line: the install did not run"
+)
+(
+    fresh
+    mkdir -p "${PREFIX}/etc/apt/sources.list.d"
+    echo "deb https://download.docker.com/linux/ubuntu noble stable" >"${PREFIX}/etc/apt/sources.list.d/docker.list.save"
+    Install_Docker_From_Repo ubuntu noble || fail "backup-file: status $?"
+    [[ -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "backup-file: no docker.sources"
+)
+(
+    fresh
+    mkdir -p "${PREFIX}/etc/apt"
+    printf '%s
+' "deb http://archive.ubuntu.com/ubuntu noble main" "deb https://download.docker.com/linux/ubuntu noble stable" >"${PREFIX}/etc/apt/sources.list"
+    Install_Docker_From_Repo ubuntu noble || fail "main-sources-list: status $?"
+    [[ ! -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "main-sources-list: a second source was written"
+    ! grep -q '^curl' "${CALLS}" || fail "main-sources-list: curl was called"
+    grep -q 'apt-get -y -qq install docker-ce' "${CALLS}" || fail "main-sources-list: the install did not run"
+)
+(
+    fresh
+    mkdir -p "${PREFIX}/etc/apt/sources.list.d"
+    printf '%s
+' "Types: deb" "URIs: https://download.docker.com/linux/ubuntu" "Suites: noble" "Components: stable" >"${PREFIX}/etc/apt/sources.list.d/other.sources"
+    Install_Docker_From_Repo ubuntu noble || fail "deb822-reuse: status $?"
+    [[ ! -e "${PREFIX}/etc/apt/sources.list.d/docker.sources" ]] || fail "deb822-reuse: a second source was written"
+)
+(
+    fresh
+    mkdir -p "${PREFIX}/etc/apt/sources.list.d"
+    printf '%s
+' "Types: deb" "URIs: https://download.docker.com/linux/debian" "Suites: trixie" "Components: stable" >"${PREFIX}/etc/apt/sources.list.d/docker.sources"
+    out="$(Install_Docker_From_Repo ubuntu noble)" && fail "deb822-stale: returned 0"
+    [[ "${out}" == *"docker.sources points apt at another Docker repository"* ]] || fail "deb822-stale: output is '${out}'"
 )
 
 # Check_Distribution: LSB_DIST and DIST are computed as install.sh does at its top.
