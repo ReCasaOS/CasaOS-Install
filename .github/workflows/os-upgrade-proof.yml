@@ -1,11 +1,15 @@
 name: os-upgrade-proof
 
 # Proof that the ENGINE of the operating system upgrade (the unit that runs the blocks of the hop under systemd, the core that reads its log and answers the page's calls:
-# /v1/sys/os/upgrade/{status,beta,refresh,plan,start,abort,ack,reboot,resume}) does what it says, on a real Debian 11 guest that boots, through a real restart, and with real faults.
+# /v1/sys/os/upgrade/{status,beta,refresh,plan,start,abort,ack,reboot,resume}) does what it says, on a real Debian guest that boots, through a real restart, and with real faults.
+#
+# `hop` chooses the hop: debian-11-12 (the default: a Debian 11 guest that ends on Debian 12) or debian-12-13 (a Debian 12 guest, whose cloud image has deb822 sources named through
+# mirror+file:/etc/apt/mirrors/debian.list and a sources.list that is only a comment, and which ends on Debian 13). What follows says "Debian 11" and "Debian 12" for the two ends of the
+# hop; C3b and C3c (the security line of Debian 11 at security.debian.org) are of the hop from Debian 11 only, and are NOT TESTABLE, with that reason, on the other one.
 # The commands of the hop were measured (os-upgrade-measure.yml) and its plan was proved (os-plan-proof.yml); the machinery around the commands was only ever run with stand-ins. This is
 # the proof that has to be green before the feature is switched on, on a machine that matters.
 #
-# Each leg is a QEMU guest booted with KVM from the Debian 11 cloud image (the way os-plan-proof.yml and os-upgrade-measure.yml boot theirs), with a QEMU monitor and two forwards: ssh,
+# Each leg is a QEMU guest booted with KVM from the cloud image of the Debian the hop starts from (the way os-plan-proof.yml and os-upgrade-measure.yml boot theirs), with a QEMU monitor and two forwards: ssh,
 # and the gateway of ReCasaOS. scripts/os-upgrade-proof.sh installs Docker 28.0.4 and the published ReCasaOS release on it as os-plan-proof.sh does, starts the witness containers, puts
 # the timers of apt on (quiet), and then, from the RUNNER (the guest restarts, is reset and has its network cut in the middle of a case, and the evidence has to be on the side that
 # survives it), drives the engine through the gateway with the token of a login of the box's own, the way the page does, and asks the guest only for what only it can say (snapshots of
@@ -47,6 +51,14 @@ on:
         required: false
         default: ''
         type: string
+      hop:
+        description: The hop to prove, from the Debian of a fresh cloud image to the next one
+        required: false
+        default: debian-11-12
+        type: choice
+        options:
+          - debian-11-12
+          - debian-12-13
       legs:
         description: Which legs to run, all of them (core first, then faults) or one
         required: false
@@ -69,6 +81,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     env:
       LEGS: ${{ inputs.legs }}
+      HOP: ${{ inputs.hop }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,13 +94,13 @@ jobs:
           python3 - <<'PY' >>"${GITHUB_OUTPUT}"
           import json
           import os
-          want = os.environ["LEGS"]
-          chosen = [c for c in json.load(open("scripts/os-upgrade-proof-legs.json")) if want == "all" or c["leg"] == want]
+          want, hop = os.environ["LEGS"], os.environ["HOP"] or "debian-11-12"
+          chosen = [c for c in json.load(open("scripts/os-upgrade-proof-legs.json")) if c["hop"] == hop and (want == "all" or c["leg"] == want)]
           if not chosen:
-              raise SystemExit("no leg is %r" % want)
+              raise SystemExit("no leg is %r of the hop %r" % (want, hop))
           print("matrix=" + json.dumps({"include": chosen}, separators=(",", ":")))
           PY
-          echo "legs of this run: ${LEGS}" | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo "legs of this run: ${LEGS}, hop ${HOP:-debian-11-12}" | tee -a "${GITHUB_STEP_SUMMARY}"
 
   vm:
     name: ${{ matrix.leg }}, ${{ matrix.name }}, ${{ matrix.label }}
@@ -105,6 +118,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       TAG: ${{ inputs.tag }}
       LEG: ${{ matrix.leg }}
+      HOP: ${{ matrix.hop }}
       BASE: ${{ matrix.base }}
       IMAGE: ${{ matrix.image }}
       SUMS: ${{ matrix.sums }}
@@ -253,7 +267,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: os-upgrade-proof-${{ matrix.leg }}
+          name: os-upgrade-proof-${{ matrix.hop }}-${{ matrix.leg }}
           path: |
             out
             serial.log

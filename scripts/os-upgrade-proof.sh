@@ -4,7 +4,7 @@
 #
 # The commands of the hop were measured (os-upgrade-measure.sh), the plan was proved (os-plan-proof.sh); the machinery around the commands (the driver in its transient unit, the log of
 # markers, the reducer, the checks before the restart, the judge after it) was only ever run with stand-ins. This runs the REAL engine, through the REAL core's API, under a real systemd,
-# on a Debian 11 guest, across a real restart.
+# on a Debian guest of the hop under test (HOP: debian-11-12, the default, or debian-12-13), across a real restart.
 #
 # Unlike os-plan-proof.sh this script runs ON THE CI RUNNER and drives the guest: the guest reboots, is reset and has its network cut in the middle of a case, and the evidence has to be
 # on the side that survives it. The calls to the core go through the gateway (QEMU forwards a port of the runner to the guest's port 80) with the token of a login of the box's own, the way
@@ -23,7 +23,7 @@
 #                    engine may have been made or started
 #   C2 switch on     POST beta
 #   C3 refresh       the refresh of Debian 11 (and the restart it may ask for)
-#   C3b security line   the security line of Debian 11 at security.debian.org: the refresh reads it from the archive (a Note in R1, the owner's files untouched); C3c: a line the rewrite does
+#   C3b security line   (hop debian-11-12 only: the other hop runs nothing, and the report says why) the security line of Debian 11 at security.debian.org: the refresh reads it from the archive (a Note in R1, the owner's files untouched); C3c: a line the rewrite does
 #                    not recognise (a port) ends the refresh failed, class network, hint security_archive_gap. Both need the core of SECURITY_ARCHIVE_MIN_CORE or later (else not testable)
 #   C4 plan, rehearsal   the plan, a rehearsal to `rehearsed` (the sources of Debian 12 in place, the timers stopped), the discard, the close
 #   C5 refusals      a wrong hostname, a missing acknowledgement, dpkg's lock held, a second start while a run is open, the page's restart while the unit works
@@ -39,7 +39,8 @@
 #
 # Environment (runner): OUT (default ./oup-out), WORK (default ./oup-work: the token, never in OUT), SSH_CONFIG (ssh_config) and SSH_HOST (vm), GW_PORT (8080: the runner's end of the
 # forward to the guest's port 80), MON_SOCK (mon.sock: the QEMU monitor), CASES (a comma list of the cases to run, c1..c7, c3b, c3c or f1..f4; all by default), OUP_FAST and OUP_TICK (the tests of
-# this script skip the sleeps and tell their stand-in of the guest how much time went by), and the waits and sleeps below.
+# this script skip the sleeps and tell their stand-in of the guest how much time went by), HOP (debian-11-12 by default, or debian-12-13: the guest it is on, given to the guest's preparation and
+# written into $OUT/hop for the report), and the waits and sleeps below.
 
 # shellcheck disable=SC2034
 # (the fields of a poll are read into P_* whether or not a case looks at each of them)
@@ -60,6 +61,16 @@ RESUME_PATH=/v1/sys/os/upgrade/resume
 RESTART_PATH=/v1/sys/state/restart
 GUEST_TOOLS_DIR=/usr/local/lib/oup
 PROOF_USER=oupproof
+HOP="${HOP:-debian-11-12}"
+
+# hop_facts <hop>: "<the version it is on> <its codename> <the version it goes to> <that codename>", or status 1
+hop_facts() {
+    case "$1" in
+    debian-11-12) echo "11 bullseye 12 bookworm" ;;
+    debian-12-13) echo "12 bookworm 13 trixie" ;;
+    *) return 1 ;;
+    esac
+}
 
 # write_guest_tools <dir>: what the runner asks of the guest, one verb a call. POSIX sh (dash): the hop replaces bash and libc while some of these run. The `snap` verb prints the
 # machine in sections ("@@ <name>" lines, the last one "@@ end": a snapshot that was cut short has no end and is not believed).
@@ -100,7 +111,7 @@ snap() {
     printf 'timers_state_file %s\n' "$(yn test -e /var/backups/casaos-os-upgrade-timers.state)"
     printf 'bk_dirs %s\n' "$(find /var/backups -maxdepth 1 -type d -name 'casaos-os-upgrade-*' 2>/dev/null | sort | tr '\n' ' ')"
     printf 'run_bk %s\n' "$(find "$RUN" -maxdepth 2 -type d \( -name bk-done -o -name bk-aborted \) 2>/dev/null | sort | tr '\n' ' ')"
-    printf 'sources_bookworm %s\nsources_bullseye %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)"
+    printf 'sources_bookworm %s\nsources_bullseye %s\nsources_trixie %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)" "$(in_sources trixie)"
     printf 'df_root_kb %s\n' "$(df -Pk / | awk 'NR == 2 {print $4}')"
     printf 'df_boot_kb %s\n' "$(df -Pk /boot | awk 'NR == 2 {print $4}')"
     printf 'rx_bytes %s\n' "$(awk -F'[: ]+' 'NR > 2 && $2 != "lo" {s += $3} END {print s + 0}' /proc/net/dev)"
@@ -570,7 +581,11 @@ guest_prepare() {
     fi
     # shellcheck source=os-readiness-proof.sh
     . "${READINESS_LIB:-${OUP_HERE}/os-readiness-proof.sh}"
-    FAMILY=debian FROM_VERSION=11 FROM_CODENAME=bullseye TO_VERSION=12 TO_CODENAME=bookworm
+    local facts
+    facts="$(hop_facts "${HOP}")" || { echo "unknown hop: ${HOP}" >&2; exit 2; }
+    FAMILY=debian
+    # shellcheck disable=SC2034
+    read -r FROM_VERSION FROM_CODENAME TO_VERSION TO_CODENAME <<<"${facts}"
     # shellcheck source=/dev/null
     . "${OS_RELEASE}"
     test "${ID}" = "${FAMILY}"
@@ -593,7 +608,7 @@ guest_prepare() {
     cloud-init status --wait >/dev/null 2>&1 || true
     # apt's own timers would run in the middle of the installation; they are put back at the end
     systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service >/dev/null 2>&1 || true
-    if grep -Eq '^[[:space:]]*deb(-src)?[[:space:]].*//(deb|security)\.debian\.org/debian-security' "${APT_DIR}/sources.list" 2>/dev/null; then
+    if [ "${FROM_VERSION}" = 11 ] && grep -Eq '^[[:space:]]*deb(-src)?[[:space:]].*//(deb|security)\.debian\.org/debian-security' "${APT_DIR}/sources.list" 2>/dev/null; then
         # out of support: the change --use-debian-archive makes, made first because Docker's own installer runs apt before ReCasaOS's does
         cp -p "${APT_DIR}/sources.list" "${APT_DIR}/sources.list.osr.bak"
         sed -i -E 's#//(deb|security)\.debian\.org/debian-security#//archive.debian.org/debian-security#' "${APT_DIR}/sources.list"
@@ -1081,7 +1096,8 @@ sec_case() {
     marker "case_${id}_start"
     g core_version >"${OUT}/${t}.core-version" 2>/dev/null || true
     printf '%s\n' "${SECURITY_ARCHIVE_MIN_CORE}" >"${OUT}/${t}.min-core"
-    if ! sec_core_ok "${t}"; then
+    # the security line of Debian 11 is a matter of the hop from Debian 11 only (the report says so of the other hop)
+    if [ "${HOP}" != debian-11-12 ] || ! sec_core_ok "${t}"; then
         marker "case_${id}_done"
         return 0
     fi
@@ -1558,6 +1574,8 @@ runner_run() {
     date -u +%FT%TZ >"${OUT}/started"
     trap cleanup EXIT
     [ -n "${EPOCHREALTIME:-}" ] || abort "this bash has no EPOCHREALTIME (bash 5 is needed)"
+    hop_facts "${HOP}" >/dev/null || abort "unknown hop: ${HOP}"
+    echo "${HOP}" >"${OUT}/hop"
     login || abort "the box's user could not log in: no token"
     GUEST_HOST="$(g hostname | tr -d '\r\n')"
     [ -n "${GUEST_HOST}" ] || abort "the guest does not answer ssh"
@@ -1579,7 +1597,7 @@ runner_run() {
         run_case c7 case_c7
         ;;
     faults)
-        # the start state: Debian 11, refreshed, rehearsed, the plan live (the cases of the core leg, run again; the report holds them to being reached and not to the rest)
+        # the start state: the Debian the hop starts from, refreshed, rehearsed, the plan live (the cases of the core leg, run again; the report holds them to being reached and not to the rest)
         run_case prelude prelude_faults
         if want_case snapshot; then
             if login && qmon savevm "${SNAP_NAME}" >"${OUT}/savevm.txt" 2>&1; then echo ok >"${OUT}/savevm.ok"; else abort "the snapshot of the whole machine could not be taken: $(tr -d '\r' <"${OUT}/savevm.txt" | tr '\n' ' ' | cut -c1-300)"; fi
@@ -1609,7 +1627,7 @@ runner_prepare() {
     : "${INSTALL_SH:?INSTALL_SH names the published install.sh}"
     scp -F "${SSH_CONFIG}" "${INSTALL_SH}" "${OUP_HERE}/os-readiness-proof.sh" "${OUP_HERE}/os-upgrade-proof.sh" "${SSH_HOST}:" ||
         abort "the files could not be copied to the guest"
-    SSH_LIMIT=3600 gssh "sudo env OUP_DISPOSABLE=1 INSTALLER_ARGS='${INSTALLER_ARGS:-}' DOCKER_FROM='${DOCKER_FROM:-}' OUT=/home/casa/oup-guest-out bash os-upgrade-proof.sh guest-prepare" || true
+    SSH_LIMIT=3600 gssh "sudo env OUP_DISPOSABLE=1 HOP='${HOP}' INSTALLER_ARGS='${INSTALLER_ARGS:-}' DOCKER_FROM='${DOCKER_FROM:-}' OUT=/home/casa/oup-guest-out bash os-upgrade-proof.sh guest-prepare" || true
     mkdir -p "${OUT}/guest"
     gssh 'sudo tar -C /home/casa/oup-guest-out -cf - .' | tar -xf - -C "${OUT}/guest" || true
     [ ! -s "${OUT}/guest/aborted" ] || abort "the guest's preparation stopped: $(tr '\n' ' ' <"${OUT}/guest/aborted")"

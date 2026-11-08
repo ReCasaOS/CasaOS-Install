@@ -1344,6 +1344,10 @@ def core_mutations():
     m("a run that stopped early", invalid_run("the run stopped early: boom"), lambda d: write_out(d, "aborted", "boom\n"))
     m("a release that has no engine (404 on the status)", invalid_run("has no /v1/sys/os/upgrade/status"), lambda d: code(d, "probe-status", 404))
     m("a guest that is not Debian 11", invalid_run("the guest is debian 12"), lambda d: subst(d, "guest/os-release", 'VERSION_ID="11"', 'VERSION_ID="12"'))
+    m("the hop from Debian 12 run on a Debian 11 guest", invalid_run("the guest is debian 11, the proof needs Debian 12"), lambda d: write_out(d, "hop", "debian-12-13\n"))
+    m("the hop from Debian 12: the security line of Debian 11 is not its case", not_testable("C3b refresh with the security line", "not part of the hop from Debian 12"),
+      lambda d: write_out(d, "hop", "debian-12-13\n"))
+    m("a hop the report does not know", invalid_run("the hop 'debian-13-14'"), lambda d: write_out(d, "hop", "debian-13-14\n"))
     m("a step of the harness whose undo failed", invalid_run("could not be undone (C5): the lock stayed"), lambda d: add_line(d, "invalid.txt", "C5\tthe lock stayed"))
     m("a snapshot of the guest that is missing", invalid_run("the snapshot c3-after is missing"), lambda d: os.remove(os.path.join(d, "snap-c3-after.facts")))
     m("a snapshot of the guest that could not be had", invalid_run("snapshot c4-before"), lambda d: write_out(d, "snap-c4-before.failed", "three tries\n"))
@@ -2122,9 +2126,20 @@ def static_checks():
     guest_checks()
     workflow_checks()
     legs = json.load(open(LEGS_JSON))
-    check("the legs file names the two legs, with what the workflow needs", [l["leg"] for l in legs] == ["core", "faults"] and all(
-        {"leg", "name", "label", "id", "version", "base", "image", "sums", "algo", "args", "docker_from", "timeout", "prove_timeout"} <= set(l) for l in legs), "")
-    check("the faults leg has more time than the core leg, and the proof step less than the job", legs[1]["timeout"] > legs[0]["timeout"] and all(l["prove_timeout"] < l["timeout"] for l in legs), "")
+    hops = {}
+    for l in legs:
+        hops.setdefault(l.get("hop"), []).append(l)
+    check("the legs file names the two legs of each hop, with what the workflow needs", sorted(hops) == ["debian-11-12", "debian-12-13"] and all(
+        [l["leg"] for l in ls] == ["core", "faults"] for ls in hops.values()) and all(
+        {"hop", "leg", "name", "label", "id", "version", "base", "image", "sums", "algo", "args", "docker_from", "timeout", "prove_timeout"} <= set(l) for l in legs), str(sorted(hops)))
+    check("each hop's legs boot the Debian it starts from", all(l["version"] == h.split("-")[1] and ("/%s-genericcloud-" % ("debian-" + l["version"])) in "/" + l["image"]
+                                                              for h, ls in hops.items() for l in ls), "")
+    check("the faults leg has more time than the core leg, and the proof step less than the job (at most the 360 minutes of a job)", all(
+        ls[1]["timeout"] > ls[0]["timeout"] and all(l["prove_timeout"] < l["timeout"] <= 360 for l in ls) for ls in hops.values()), "")
+    p = subprocess.run([BASH, "-c", 'source "$1"; for h in debian-11-12 debian-12-13 debian-13-14; do printf "%s=" "$h"; hop_facts "$h" || echo none; done', "x", posix(SCRIPT)],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    check("the script knows the facts of each hop of the legs file, and no other", p.stdout.decode("utf-8", "replace").split() ==
+          ["debian-11-12=11", "bullseye", "12", "bookworm", "debian-12-13=12", "bookworm", "13", "trixie", "debian-13-14=none"], p.stdout.decode("utf-8", "replace"))
     try:
         import yaml
         wf = yaml.safe_load(open(WORKFLOW, encoding="utf-8"))
@@ -2132,8 +2147,10 @@ def static_checks():
         wf = None
     if wf is not None:
         triggers = wf.get("on", wf.get(True))
-        check("the workflow is dispatched by hand only, with the tag and the legs", list(triggers) == ["workflow_dispatch"] and set(triggers["workflow_dispatch"]["inputs"]) == {"tag", "legs"}, str(triggers))
+        check("the workflow is dispatched by hand only, with the tag, the hop and the legs", list(triggers) == ["workflow_dispatch"] and set(triggers["workflow_dispatch"]["inputs"]) == {"tag", "hop", "legs"}, str(triggers))
         check("the legs the workflow offers are the legs of the file", triggers["workflow_dispatch"]["inputs"]["legs"]["options"] == ["all", "core", "faults"], "")
+        hop_in = triggers["workflow_dispatch"]["inputs"]["hop"]
+        check("the hops the workflow offers are the hops of the file, the hop from Debian 11 by default", hop_in["options"] == sorted(hops) and hop_in["default"] == "debian-11-12", str(hop_in))
         vm = wf["jobs"]["vm"]
         check("the legs run one at a time, core first, and a failing core leg cancels the faults leg", vm["strategy"]["max-parallel"] == 1 and vm["strategy"]["fail-fast"] is True, str(vm["strategy"]))
         text = open(WORKFLOW, encoding="utf-8").read()

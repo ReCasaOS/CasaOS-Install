@@ -9,7 +9,8 @@ Exit status: 0 only when no verdict is a FAIL and the run is valid. 1 for a FAIL
 stopped early, a mirror or the network of the runner failed, the guest did not boot, an undo failed, a snapshot of the guest is missing, the release under test has no engine). An invalid run
 proves nothing and is never green. NOT TESTABLE is neutral and visible: a case whose precondition this guest could not reach, with the reason; it is never a pass.
 
-What the runner did (os-upgrade-proof.sh), on a fresh Debian 11 cloud image with ReCasaOS, Docker 28.0.4 and four witness containers, through the gateway with the token of a login of the
+What the runner did (os-upgrade-proof.sh), on a fresh cloud image of the Debian the hop starts from (out/hop: debian-11-12 when it is not there, or debian-12-13; "Debian 11" and
+"Debian 12" below are the two ends of the hop), with ReCasaOS, Docker 28.0.4 and four witness containers, through the gateway with the token of a login of the
 box's own, and with the guest asked for what only it can say (snapshots of the machine, the busy flag, the boot id):
 
   leg core
@@ -64,6 +65,8 @@ OBSERVE_MIN = 170                     # a stopped hop is looked at for this long
 CLOCK_SLACK = 5.0
 ROW_FIELDS = 19
 BK_GLOB = "casaos-os-upgrade-"
+# the hops the proof knows: (the version it is on, its codename, the version it goes to, that codename)
+HOPS = {"debian-11-12": ("11", "bullseye", "12", "bookworm"), "debian-12-13": ("12", "bookworm", "13", "trixie")}
 SECURITY_ARCHIVE_MIN_CORE = "v0.4.76"     # the first core that moves the security line of Debian 11 to the archive in a refresh (the script writes the one it used in c3b.min-core)
 
 CASES_CORE = (("C1", "flag off"), ("C2", "switch on"), ("C3", "refresh"), ("C3b", "refresh with the security line at security.debian.org"), ("C3c", "refresh with a security line the rewrite does not recognise"), ("C4", "plan and rehearsal"), ("C5", "refusals"), ("C6", "call-off before the point of no return"), ("C7", "the hop"))
@@ -88,6 +91,11 @@ def read(name, default=""):
 
 def exists(name):
     return os.path.exists(os.path.join(out_dir, name))
+
+
+# the hop of this run (the script writes it; a run of a script older than the hop input is the hop from Debian 11)
+HOP = read("hop").strip() or "debian-11-12"
+FROM_V, FROM_C, TO_V, TO_C = HOPS.get(HOP, HOPS["debian-11-12"])
 
 
 def verdict(name, ok, detail=""):
@@ -474,11 +482,13 @@ try:
     for ln in read("invalid.txt").splitlines():
         r = ln.split("\t", 1)
         invalid("a step of the harness failed or could not be undone (%s): %s" % (r[0], r[1] if len(r) > 1 else ""))
+    if HOP not in HOPS:
+        invalid("the runner says it ran the hop %r, which the report does not know" % cell(HOP, 40))
     osr = osrelease("guest/os-release")
     if not osr.get("ID"):
         invalid("guest/os-release is missing or empty: the guest did not say what system it is")
-    elif (osr.get("ID"), osr.get("VERSION_ID")) != ("debian", "11"):
-        invalid("the guest is %s %s, the proof needs Debian 11" % (osr.get("ID"), osr.get("VERSION_ID")))
+    elif (osr.get("ID"), osr.get("VERSION_ID")) != ("debian", FROM_V):
+        invalid("the guest is %s %s, the proof needs Debian %s" % (osr.get("ID"), osr.get("VERSION_ID"), FROM_V))
     for ln in read("guest/timers-on").splitlines():
         w = ln.split()
         if w[:1] in (["apt-daily.timer"], ["apt-daily-upgrade.timer"]) and w[1:2] != ["active"]:
@@ -801,6 +811,9 @@ try:
         """the case ran, and the core is one that moves the security line to the archive: otherwise it is not testable (never a failure)"""
         if not gate(cid, title):
             return False
+        if FROM_V != "11":
+            not_testable("%s %s" % (cid, title), "the security line of Debian 11 is not part of the hop from Debian %s (its security line is still served)" % FROM_V)
+            return False
         ver, mn = read("%s.core-version" % t).strip(), read("%s.min-core" % t).strip() or SECURITY_ARCHIVE_MIN_CORE
         have, need = version_of(ver), version_of(mn)
         if have is None or need is None:
@@ -978,8 +991,8 @@ try:
         c.check(exp is not None and since is not None and 0 < exp - since <= REHEARSAL_TTL + CLOCK_SLACK, "the rehearsal is held for at most 30 minutes (expires_at - since)", "at most %d s" % REHEARSAL_TTL,
                 "since %s, expires_at %s" % (d.get("since"), d.get("expires_at")))
         c.check("discard" in last.acts, "rehearsed offers `discard`", "discard among the actions", last.actions)
-        c.check((reh.num("sources_bookworm") or 0) > 0 and reh.num("sources_bullseye") == 0, "the sources of Debian 12 are in place", "bookworm lines, no bullseye line",
-                "bookworm %s, bullseye %s" % (reh.f.get("sources_bookworm"), reh.f.get("sources_bullseye")))
+        c.check((reh.num("sources_" + TO_C) or 0) > 0 and reh.num("sources_" + FROM_C) == 0, "the sources of Debian %s are in place" % TO_V, "%s lines, no %s line" % (TO_C, FROM_C),
+                "%s %s, %s %s" % (TO_C, reh.f.get("sources_" + TO_C), FROM_C, reh.f.get("sources_" + FROM_C)))
         c.check(bool(apt_diff(before, reh)), "/etc/apt is not what it was", "changed", "unchanged")
         c.check(all(v[0] != "active" for v in reh.timers.values()), "the timers of apt are stopped", "none active", dict_str(reh.timers))
         c.check(reh.f.get("busy_flag") == "yes", "the busy flag is there while the rehearsal is held", "yes", reh.f.get("busy_flag"))
@@ -1220,8 +1233,8 @@ try:
                 "pnr %s, half_upgraded %s, busy %s" % (d.get("pnr"), d.get("half_upgraded"), d.get("busy")))
         c.check("reboot" in (d.get("actions") or []), "%sawaiting_reboot offers `reboot`" % label, "reboot among the actions", few(d.get("actions") or []))
         c.check(aw.f.get("busy_flag") == "yes", "%sthe busy flag stays up while the machine waits" % label, "yes", aw.f.get("busy_flag"))
-        c.check((aw.num("sources_bookworm") or 0) > 0 and aw.num("sources_bullseye") == 0, "%sthe sources are those of Debian 12" % label, "bookworm lines, no bullseye line",
-                "bookworm %s, bullseye %s" % (aw.f.get("sources_bookworm"), aw.f.get("sources_bullseye")))
+        c.check((aw.num("sources_" + TO_C) or 0) > 0 and aw.num("sources_" + FROM_C) == 0, "%sthe sources are those of Debian %s" % (label, TO_V), "%s lines, no %s line" % (TO_C, FROM_C),
+                "%s %s, %s %s" % (TO_C, aw.f.get("sources_" + TO_C), FROM_C, aw.f.get("sources_" + FROM_C)))
         c.check(aw.f.get("uname") == before.f.get("uname"), "%sthe old kernel still runs until the restart" % label, "kernel %s" % before.f.get("uname"), "kernel %s" % aw.f.get("uname"))
         got = reboot_accepted(c, "%s-reboot" % p, label)
         if got is None:
@@ -1270,7 +1283,7 @@ try:
                                                                   "; ".join(cell("%s %s%s" % (x.get("severity") or "no severity", x.get("code"), " " + str(x.get("arg")) if x.get("arg") else ""), 120) for x in findings)))
         if f.get("not_judged"):
             notes.append("%snot judged: %s" % (label or p + " ", few(f.get("not_judged"))))
-        c.check(after.f.get("version_id") == "12", "%sos-release says VERSION_ID=12" % label, "12", after.f.get("version_id"))
+        c.check(after.f.get("version_id") == TO_V, "%sos-release says VERSION_ID=%s" % (label, TO_V), TO_V, after.f.get("version_id"))
         c.check(newer(after.f.get("uname", ""), before.f.get("uname", "")), "%sa kernel newer than before runs" % label, "later than %s" % before.f.get("uname"), after.f.get("uname"))
         svc_before = {n for n, st in before.services.items() if st == "active"}
         down = sorted(n for n in svc_before if after.services.get(n) != "active")
@@ -1669,7 +1682,7 @@ try:
         if not exists("savevm.ok"):
             invalid("the snapshot of the whole machine was not taken: %s" % cell(read("savevm.txt").strip(), 200))
             return
-        P("Start state of the faults: Debian 11, refreshed, rehearsed and put back, plan %s live; snapshot taken." % cell(plan.get("plan_id"), 40))
+        P("Start state of the faults: Debian " + FROM_V + ", refreshed, rehearsed and put back, plan %s live; snapshot taken." % cell(plan.get("plan_id"), 40))
 
     # ---- the order of the report -----------------------------------------------------------------------------------------------------
 
@@ -1697,7 +1710,7 @@ try:
         if k:
             box[k] = v.strip()
     if box:
-        P("Guest: %s, kernel %s, apt %s, systemd %s, Docker %s, %s CPUs, %s MB." % (cell(read("guest/os").strip() or "Debian 11", 40), cell(box.get("kernel", "?"), 40), cell(box.get("apt", "?"), 40),
+        P("Guest: %s, kernel %s, apt %s, systemd %s, Docker %s, %s CPUs, %s MB." % (cell(read("guest/os").strip() or "Debian " + FROM_V, 40), cell(box.get("kernel", "?"), 40), cell(box.get("apt", "?"), 40),
                                                                                   cell(box.get("systemd", "?"), 40), cell(box.get("docker", "?"), 20), cell(box.get("cpus", "?"), 4), cell(box.get("memory_mb", "?"), 8)))
     finish()
 except SystemExit:
