@@ -475,10 +475,69 @@ CASA_SERVICES=(
 "casaos.service"  # must be the last one so update from UI can work
 )
 
+# The host products and NAS appliances ossupport.go (the core) names, among the
+# ones this installer treats: the first whose marker exists, or nothing.
+# Raspberry Pi OS, Armbian and DietPi are not looked for here.
+Distribution_Variant() {
+    local v p
+    for v in         "proxmox /usr/bin/pveversion /etc/pve"         "openmediavault /etc/openmediavault /usr/sbin/omv-confdbadm"         "proxmox_backup /usr/sbin/proxmox-backup-manager"         "proxmox_mail /usr/bin/pmgversion"         "truenas /usr/bin/middlewared /usr/lib/python3/dist-packages/middlewared"; do
+        for p in ${v#* }; do
+            if [[ -e "${PREFIX}${p}" ]]; then
+                echo "${v%% *}"
+                return 0
+            fi
+        done
+    done
+}
+
 # 2 Check Distribution
 Check_Distribution() {
     sType=0
     notice=""
+    local variant refusal="" name="${DIST}" base=""
+    variant="$(Distribution_Variant)"
+    case "${variant}" in
+    proxmox)
+        if [[ "${ALLOW_PROXMOX_HOST:-0}" != 1 ]]; then
+            refusal="This is a Proxmox VE host: Docker on the host cuts the network of its virtual machines and containers. Install ReCasaOS in a Debian or Ubuntu virtual machine on it, or pass --allow-proxmox-host."
+        else
+            Show 3 "This is a Proxmox VE host: Docker on the host cuts the network of its virtual machines and containers. Going on because of --allow-proxmox-host."
+        fi
+        ;;
+    proxmox_backup | proxmox_mail)
+        refusal="This is a Proxmox appliance (Backup Server or Mail Gateway). Install ReCasaOS on a separate Debian or Ubuntu machine."
+        ;;
+    truenas)
+        refusal="This is TrueNAS SCALE, which locks apt and runs its own apps. Install ReCasaOS on a separate Debian or Ubuntu machine."
+        ;;
+    openmediavault)
+        Show 3 "This is OpenMediaVault, which manages samba itself: its shares and those of ReCasaOS may conflict."
+        ;;
+    esac
+    if [[ "${ID:-}" == devuan ]]; then
+        refusal="Devuan runs without systemd, which every ReCasaOS service needs."
+    fi
+    if [[ -n "${refusal}" ]]; then
+        if [[ "$(Previous_Release)" == new ]]; then
+            Show 1 "${refusal}"
+            exit 1
+        fi
+        Show 3 "${refusal} Updating the existing installation anyway."
+    fi
+    if [[ "${ID:-}" == raspbian ]]; then
+        Show 3 "Docker 28 is the last Docker for Raspberry Pi OS 32-bit: this box will not get Docker 29. Raspberry Pi OS 64-bit keeps it updated."
+    fi
+    case "${ID:-}" in
+    debian | ubuntu | raspbian) ;;
+    *)
+        if [[ -n "${UBUNTU_CODENAME:-}" ]]; then
+            base="Ubuntu ${UBUNTU_CODENAME}"
+        elif [[ -n "${DEBIAN_CODENAME:-}" ]]; then
+            base="Debian ${DEBIAN_CODENAME}"
+        fi
+        if [[ -n "${base}" ]]; then name="${PRETTY_NAME:-${ID}} (based on ${base})"; fi
+        ;;
+    esac
     case $LSB_DIST in
     *debian*) ;;
 
@@ -501,7 +560,7 @@ Check_Distribution() {
         notice="We have not tested it on this system and it may fail to install."
         ;;
     esac
-    Show ${sType} "Your Linux Distribution is : ${DIST} ${notice}"
+    Show ${sType} "Your Linux Distribution is : ${name} ${notice}"
 
     if [[ ${sType} == 1 ]]; then
         select yn in "Yes" "No"; do
@@ -858,20 +917,101 @@ Check_Docker_Install_Final() {
     fi
 }
 
+# The Debian or Ubuntu release a derivative is built on, as "<distro> <codename>",
+# for Docker's apt source: the derivative's own codename is not in Docker's repository.
+Docker_Base_Repo() {
+    if [[ " ${ID_LIKE:-} " == *" ubuntu "* && -n "${UBUNTU_CODENAME:-}" ]]; then
+        echo "ubuntu ${UBUNTU_CODENAME}"
+    elif [[ " ${ID_LIKE:-} " == *" debian "* ]]; then
+        local codename="${DEBIAN_CODENAME:-}"
+        if [[ -z "${codename}" && "${ID:-}" == linuxmint ]]; then
+            case "${VERSION_ID:-}" in
+            6) codename=bookworm ;;
+            7) codename=trixie ;;
+            esac
+        fi
+        [[ -n "${codename}" ]] || return 1
+        echo "debian ${codename}"
+    else
+        return 1
+    fi
+}
+
+# Docker's repository is added by hand on derivatives: get.docker.com guesses the base from lsb_release -u,
+# else from /etc/debian_version, and on an Ubuntu base that second guess installs Debian packages.
+Install_Docker_From_Repo() {
+    local distro="$1" codename="$2" f active reuse="" stale=""
+    ${sudo_cmd} install -d -m 0755 "${PREFIX}/etc/apt/keyrings" "${PREFIX}/etc/apt/sources.list.d" || return $?
+    # Only active lines of sources.list, *.list and *.sources count (not comments, not *.save backups).
+    # shortcut: a .sources file is judged as a whole, not stanza by stanza; split it if one file ever mixes repositories.
+    for f in "${PREFIX}/etc/apt/sources.list" "${PREFIX}/etc/apt/sources.list.d/"*.list "${PREFIX}/etc/apt/sources.list.d/"*.sources; do
+        [[ -f "${f}" ]] || continue
+        active="$(sed 's/#.*//' "${f}")"
+        grep -q 'download\.docker\.com' <<<"${active}" || continue
+        if [[ "${f}" == *.sources ]]; then
+            grep -Eq "^[[:space:]]*URIs:.*download\.docker\.com/linux/${distro}([/[:space:]]|$)" <<<"${active}" &&
+                grep -Eq "^[[:space:]]*Suites:.*[[:space:]]${codename}([[:space:]]|$)" <<<"${active}" && reuse=1
+        else
+            grep -Eq "download\.docker\.com/linux/${distro}[[:space:]]+${codename}([[:space:]]|$)" <<<"${active}" && reuse=1
+        fi
+        stale="${stale:-${f}}"
+    done
+    if [[ -z "${reuse}" && -n "${stale}" ]]; then
+        Show 1 "${stale} points apt at another Docker repository; this system needs ${distro} ${codename}: remove that line and run this installer again."
+        return 1
+    fi
+    if [[ -z "${reuse}" ]]; then
+        ${sudo_cmd} curl -fsSL "https://download.docker.com/linux/${distro}/gpg" -o "${PREFIX}/etc/apt/keyrings/docker.asc" || return $?
+        ${sudo_cmd} chmod a+r "${PREFIX}/etc/apt/keyrings/docker.asc" || return $?
+        ${sudo_cmd} tee "${PREFIX}/etc/apt/sources.list.d/docker.sources" >/dev/null <<EOT || return $?
+Types: deb
+URIs: https://download.docker.com/linux/${distro}
+Suites: ${codename}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOT
+    fi
+    ${sudo_cmd} apt-get update || return $?
+    ${sudo_cmd} apt-get -y -qq install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
+
 #Install Docker
 Install_Docker() {
     Show 2 "Install the necessary dependencies: \e[33mDocker \e[0m"
     if [[ ! -d "${PREFIX}/etc/apt/sources.list.d" ]]; then
         ${sudo_cmd} mkdir -p "${PREFIX}/etc/apt/sources.list.d"
     fi
+    local docker_status=0 base
     GreyStart
-    if [[ "${REGION}" = "China" ]] || [[ "${REGION}" = "CN" ]]; then
-        ${sudo_cmd} curl -fsSL https://play.cuse.eu.org/get_docker.sh | bash -s docker --mirror Aliyun
+    if [[ ! " ubuntu debian raspbian " == *" ${ID:-} "* && ( " ${ID_LIKE:-} " == *" ubuntu "* || " ${ID_LIKE:-} " == *" debian "* ) ]]; then
+        if base="$(Docker_Base_Repo)"; then
+            Show 2 "Docker from Docker's repository for ${base% *} ${base#* } (this system is based on it)"
+            Install_Docker_From_Repo ${base} || docker_status=$?
+        elif [[ " ${ID_LIKE:-} " == *" ubuntu "* ]]; then
+            ColorReset
+            Show 1 "This system is based on Debian or Ubuntu but its os-release names no base release (UBUNTU_CODENAME or DEBIAN_CODENAME): install Docker by hand, then run this installer again."
+            exit 1
+        else
+            # Debian only: get.docker.com's fallback to /etc/debian_version gives the right repository
+            (
+                set -o pipefail
+                ${sudo_cmd} curl -fsSL https://get.docker.com | bash
+            ) || docker_status=$?
+        fi
+    elif [[ "${REGION}" = "China" ]] || [[ "${REGION}" = "CN" ]]; then
+        (
+            set -o pipefail
+            ${sudo_cmd} curl -fsSL https://play.cuse.eu.org/get_docker.sh | bash -s docker --mirror Aliyun
+        ) || docker_status=$?
     else
-        ${sudo_cmd} curl -fsSL https://get.docker.com | bash
+        (
+            set -o pipefail
+            ${sudo_cmd} curl -fsSL https://get.docker.com | bash
+        ) || docker_status=$?
     fi
     ColorReset
-    if [[ $? -ne 0 ]]; then
+    if [[ ${docker_status} -ne 0 ]]; then
         Show 1 "Installation failed, please try again."
         exit 1
     else
@@ -1888,6 +2028,8 @@ usage() {
 Usage: install.sh [options]
 Valid options are:
     -p <build_dir>          Specify build directory (Local install)
+    --allow-proxmox-host    Install on a Proxmox VE host anyway (Docker there cuts the network of
+                            its virtual machines and containers)
     --no-telemetry          Turn anonymous statistics off (same as RECASAOS_TELEMETRY=0)
     --use-debian-archive    On Debian 11, when apt answers 404 Not Found for a package, take the
                             security repository from archive.debian.org and go on (same as
@@ -1921,6 +2063,9 @@ while getopts ":p:h-:" arg; do
             ;;
         use-debian-archive)
             DEBIAN_ARCHIVE=1
+            ;;
+        allow-proxmox-host)
+            ALLOW_PROXMOX_HOST=1
             ;;
         no-module-update)
             NO_MODULE_UPDATE=1

@@ -26,6 +26,11 @@ sudo apt-get install -y -qq curl jq openssl >/dev/null
 
 echo "docker $(sudo docker version --format '{{.Server.Version}}'), storage driver $(sudo docker info --format '{{.Driver}}')"
 
+# a derivative gets Docker from Docker's repository for its Ubuntu base, not get.docker.com
+if [ "${EXPECT_ID:-}" = linuxmint ]; then
+  apt-cache policy docker-ce | grep -q 'download.docker.com/linux/ubuntu noble'
+fi
+
 for unit in casaos-gateway casaos-message-bus casaos-user-service casaos-local-storage casaos-app-management rclone casaos; do
   state="$(systemctl is-active "${unit}.service" || true)"
   echo "${unit}: ${state}"
