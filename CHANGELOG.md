@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.105] - 2026-11-08
+
+Components: CasaOS `v0.4.100`. Unchanged from v0.5.104: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **An Ubuntu 24.04 box that has sudo gets its plan to 26.04.** Every cloud image of Ubuntu has sudo. The upgrade moves it to sudo-rs, which ends apt's simulation on `E: Conf Broken sudo-common` as well, while the real upgrade goes through (sudo-rs in place, `sudo` works, `dpkg --audit` clean). With v0.5.104 such a box got "the simulation failed" (`sandbox_solver_failed`). The plan and the runbook now let that error through for that hop only, as they do for coreutils ([ReCasaOS/CasaOS#115](https://github.com/ReCasaOS/CasaOS/pull/115)).
+  - The first upgrade proof on the Ubuntu 24.04 cloud image found it: the switch, the refusals and the refresh passed, and the plan stopped there.
+
+### Proof
+
+The core's CI passed on its pull request, and its release run passed on its tag. The install check of v0.5.104 passed on all 12 legs. The install check and the upgrade proof of this release: results added after them.
+
 ## [0.5.104] - 2026-11-08
 
 Components: CasaOS `v0.4.99`, CasaOS-UI `v0.4.159`. Unchanged from v0.5.103: CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
