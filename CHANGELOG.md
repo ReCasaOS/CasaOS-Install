@@ -2,6 +2,26 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.103] - 2026-11-08
+
+Components: CasaOS-UI `v0.4.158`. Unchanged from v0.5.102: CasaOS `v0.4.98`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A backup in progress is no longer "Succeeded".** The Backups card of the beta dashboard read only the runs that had finished: while the next app was being copied it still said the last one succeeded. It now says "Running", with the app and its percentage, and reads the runs again as soon as the copy ends ([ReCasaOS/CasaOS-UI#149](https://github.com/ReCasaOS/CasaOS-UI/pull/149)).
+- **A backup's progress card no longer says "Installing".** It read "Installing Backing up casaos-system"; it now reads "Backing up this box", and the toasts at the end name the box the same way ([ReCasaOS/CasaOS-UI#149](https://github.com/ReCasaOS/CasaOS-UI/pull/149)).
+- **Backups › Schedules says when the next run really comes.** The box checks every minute, so a schedule that never ran goes off within a minute of saving and a missed slot is caught up within one; "at the next check, a slot was missed" now says that. An app icon that does not load shows the app's initial, a cut app name has a tooltip, and "apps stopped during the copy" is left out when only this box is chosen ([ReCasaOS/CasaOS-UI#149](https://github.com/ReCasaOS/CasaOS-UI/pull/149)).
+- **The install retries a 5xx from GitHub.** Its downloads (components, rclone, restic, the module catalogue, the uninstall script) failed at once on a 502, 503 or 504; they now retry, and a 404 still fails at once ([ReCasaOS/CasaOS-Install#166](https://github.com/ReCasaOS/CasaOS-Install/pull/166)).
+
+### Not in it
+
+- Saving a new schedule still backs up within a minute, with the apps stopped when that option is on, whatever time was chosen: the dashboard now says so, the scheduler is unchanged.
+- A dashboard opened while a backup runs says "Running" only from the next progress event: the box does not list the copies in progress.
+
+### Proof
+
+The dashboard's CI passed on the pull request (lint, the full suite and the build) and the release run passed on its tag. The fixes were checked by the test suite, not on a box. The install check of this release: result added after the check.
+
 ## [0.5.102] - 2026-11-08
 
 Components: CasaOS-UI `v0.4.157`. Unchanged from v0.5.101: CasaOS `v0.4.98`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
