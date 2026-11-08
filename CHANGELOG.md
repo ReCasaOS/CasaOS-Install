@@ -4,7 +4,7 @@ All notable changes to the CasaOS fork installer are documented here.
 
 ## [0.5.100] - 2026-11-08
 
-Components: CasaOS `v0.4.97`, CasaOS-UI `v0.4.155`. Unchanged from v0.5.99: CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+Components: CasaOS `v0.4.98`, CasaOS-UI `v0.4.155`. Unchanged from v0.5.99: CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
 
 ### Added
 
@@ -12,6 +12,11 @@ Components: CasaOS `v0.4.97`, CasaOS-UI `v0.4.155`. Unchanged from v0.5.99: Casa
   - The sources in the deb822 form (`.sources` files, the form of Debian's cloud images) are read and rewritten stanza by stanza; Docker's `docker.sources` is put aside whole, and a file that mixes Debian and another source is refused. A list given by `mirror+file:///etc/apt/mirrors/debian.list` is judged by its addresses ([ReCasaOS/CasaOS#103](https://github.com/ReCasaOS/CasaOS/pull/103)).
   - Four checks from the release notes of Debian 13: an SSH server whose host keys are all DSA is refused (a warning when only some are); an encrypted disk without `systemd-cryptsetup`, a `/etc/sysctl.conf` Debian 13 no longer reads, and `/tmp` turning into a tmpfs are warned.
 - **The upgrade guide says why no plan can be made**, with a button to ask again, where it pointed at details that were hidden ([ReCasaOS/CasaOS-UI#144](https://github.com/ReCasaOS/CasaOS-UI/pull/144)).
+- **Debian and Ubuntu derivatives** ([ReCasaOS/CasaOS-Install#155](https://github.com/ReCasaOS/CasaOS-Install/pull/155), [ReCasaOS/CasaOS#102](https://github.com/ReCasaOS/CasaOS/pull/102)).
+  - On Linux Mint, LMDE, Pop!_OS, Zorin or elementary, the installer adds Docker's own repository for the base release instead of running get.docker.com, which picked the wrong one; with no base release named, it stops at the Docker step and says to install Docker by hand.
+  - A first install stops on a Proxmox VE host (`--allow-proxmox-host` goes on anyway), Proxmox Backup Server, Proxmox Mail Gateway and TrueNAS SCALE; OpenMediaVault is warned. An existing installation is updated anyway, with a warning.
+  - The anonymous statistics gain `os_variant` (Raspberry Pi OS, Armbian, DietPi, Proxmox and the others, from fixed marker files), listed in the README. Raspberry Pi OS 32-bit is told once that Docker 28 is its last.
+  - The README lists the supported systems; the install check gains Armbian, DietPi and Linux Mint legs.
 
 ### Not in it
 

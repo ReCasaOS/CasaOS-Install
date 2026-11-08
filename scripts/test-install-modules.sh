@@ -401,6 +401,8 @@ EXPECTED_USAGE="$(
 Usage: install.sh [options]
 Valid options are:
     -p <build_dir>          Specify build directory (Local install)
+    --allow-proxmox-host    Install on a Proxmox VE host anyway (Docker there cuts the network of
+                            its virtual machines and containers)
     --no-telemetry          Turn anonymous statistics off (same as RECASAOS_TELEMETRY=0)
     --use-debian-archive    On Debian 11, when apt answers 404 Not Found for a package, take the
                             security repository from archive.debian.org and go on (same as
