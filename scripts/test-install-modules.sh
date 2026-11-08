@@ -636,7 +636,7 @@ cmp -s "${CATALOGUE_FILE}" "${installed_file}" || fail "good catalogue: the file
 [ "$(stat -c %a "${installed_file}")" = 644 ] || fail "good catalogue: mode $(stat -c %a "${installed_file}"), wanted 644"
 [ "$(stat -c %a "${CASA_MODULE_CATALOGUE_DIR}")" = 755 ] || fail "good catalogue: the directory is $(stat -c %a "${CASA_MODULE_CATALOGUE_DIR}"), wanted 755"
 no_leftover "good catalogue"
-grep -Fq "wget -t 3 -q -O " "${CALLS}" && grep -Fq " ${CASAOS_RELEASE_BASE_URL}/modules-catalogue-v0.0.0.json" "${CALLS}" || fail "good catalogue: not downloaded from the release: $(calls)"
+grep -Fq "wget -t 10 --waitretry=10 --retry-on-http-error=429,500,502,503,504 -q -O " "${CALLS}" && grep -Fq " ${CASAOS_RELEASE_BASE_URL}/modules-catalogue-v0.0.0.json" "${CALLS}" || fail "good catalogue: not downloaded from the release: $(calls)"
 [ "$(grep -c '^wget' "${CALLS}")" -eq 1 ] || fail "good catalogue: more than one download"
 grep -Fxq "install -d -m 0755 ${CASA_MODULE_CATALOGUE_DIR}" "${CALLS}" || fail "good catalogue: the directory is not made 0755 by install -d: $(calls)"
 staged="$(awk '$1 == "install" && $2 == "-m" && $3 == "0644" { print $5 }' "${CALLS}")"
@@ -864,7 +864,7 @@ sudo_cmd=""
 unset SUDO_OK
 case "${out}" in *"READY=1"*) ;; *) fail "with sudo: the catalogue was not placed: ${out}" ;; esac
 cmp -s "${CATALOGUE_FILE}" "${installed_file}" || fail "with sudo: the file in place is not the one served"
-sudo_run "the catalogue" "sudo wget -t 3 -q -O <work>/catalogue.json ${CASAOS_RELEASE_BASE_URL}/modules-catalogue-v0.0.0.json
+sudo_run "the catalogue" "sudo wget -t 10 --waitretry=10 --retry-on-http-error=429,500,502,503,504 -q -O <work>/catalogue.json ${CASAOS_RELEASE_BASE_URL}/modules-catalogue-v0.0.0.json
 sudo sha256sum --check --status -
 sudo install -d -m 0755 <dir>
 sudo mktemp <dir>/.catalogue.json.<s>

@@ -1040,7 +1040,7 @@ Install_rclone_from_source() {
 
   Show 2 "Downloading rclone ${RCLONE_TAG}..."
   GreyStart
-  ${sudo_cmd} wget -t 3 -q ${WGET_PROGRESS} -O "${unpack}/${archive}" "${url}" || Show 1 "Failed to download rclone"
+  ${sudo_cmd} wget -t 10 --waitretry=10 --retry-on-http-error=429,500,502,503,504 -q ${WGET_PROGRESS} -O "${unpack}/${archive}" "${url}" || Show 1 "Failed to download rclone"
   ColorReset
 
   pushd "${unpack}" >/dev/null
@@ -1094,7 +1094,7 @@ Install_restic_from_source() {
 
   Show 2 "Downloading restic ${RESTIC_TAG}..."
   GreyStart
-  if ! ${sudo_cmd} wget -t 3 -q ${WGET_PROGRESS} -O "${unpack}/${archive}" "${url}"; then
+  if ! ${sudo_cmd} wget -t 10 --waitretry=10 --retry-on-http-error=429,500,502,503,504 -q ${WGET_PROGRESS} -O "${unpack}/${archive}" "${url}"; then
     ColorReset
     ${sudo_cmd} rm -rf "${unpack}"
     Show 3 "Failed to download restic; skipping it."
@@ -1322,7 +1322,8 @@ DownloadAndInstallCasaOS() {
         for PACKAGE in "${CASA_PACKAGES[@]}"; do
             Show 2 "Downloading ${PACKAGE}..."
             GreyStart
-            ${sudo_cmd} wget -t 3 -q ${WGET_PROGRESS} -c "${PACKAGE}" || Show 1 "Failed to download package"
+            # GitHub's release downloads answer 5xx in bursts (2026-11-08): wget retries those, never a 404
+            ${sudo_cmd} wget -t 10 --waitretry=10 --retry-on-http-error=429,500,502,503,504 -q ${WGET_PROGRESS} -c "${PACKAGE}" || Show 1 "Failed to download package"
             ColorReset
         done
 
@@ -1431,7 +1432,7 @@ DownloadAndInstallCasaOS() {
     if [[ -f $PREFIX/tmp/casaos-uninstall ]]; then
         ${sudo_cmd} rm -rf "$PREFIX/tmp/casaos-uninstall"
     fi
-    ${sudo_cmd} curl -fsSL "$CASA_UNINSTALL_URL" >"$PREFIX/tmp/casaos-uninstall"
+    ${sudo_cmd} curl -fsSL --retry 5 --retry-delay 10 -o "$PREFIX/tmp/casaos-uninstall" "$CASA_UNINSTALL_URL"
     Verify_Fork_Package "$PREFIX/tmp/casaos-uninstall" "${CASAOS_UNINSTALL_SHA256}"
     ${sudo_cmd} cp -rf "$PREFIX/tmp/casaos-uninstall" $CASA_UNINSTALL_PATH || {
         Show 1 "Download uninstall script failed, Please check if your internet connection is working and retry."
@@ -1705,7 +1706,7 @@ Install_Module_Catalogue() {
     else
         Show 2 "Downloading the module catalogue..."
         GreyStart
-        if ! ${sudo_cmd} wget -t 3 -q -O "${work}/catalogue.json" "${CASAOS_RELEASE_BASE_URL}/modules-catalogue-${CASAOS_INSTALL_RELEASE_TAG}.json"; then
+        if ! ${sudo_cmd} wget -t 10 --waitretry=10 --retry-on-http-error=429,500,502,503,504 -q -O "${work}/catalogue.json" "${CASAOS_RELEASE_BASE_URL}/modules-catalogue-${CASAOS_INSTALL_RELEASE_TAG}.json"; then
             reason="could not be downloaded"
         elif ! printf '%s  %s\n' "${sum}" "${work}/catalogue.json" | ${sudo_cmd} sha256sum --check --status -; then
             reason="is not the file this installer expects (its SHA-256 digest differs)"
