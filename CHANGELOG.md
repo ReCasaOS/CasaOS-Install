@@ -2,6 +2,30 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.101] - 2026-11-08
+
+Components: CasaOS-UI `v0.4.156`, CasaOS-AppManagement `v0.4.90`. Unchanged from v0.5.100: CasaOS `v0.4.98`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The size of each backup run.** AppManagement measures what a backup reads on the box as the copy goes (a file's size, the files under a folder added up, whichever engine carries it) and keeps it on the run's record and in the API (`bytes`; 0 for a restore and for runs made before this release) ([ReCasaOS/CasaOS-AppManagement#46](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/46)).
+
+### Changed
+
+- **Backups › Schedules as cards.** The tab was a flat list of checkboxes. Each schedule is now a card: a head that says when, where and what ("Every day at 03:00 to offsite", "This box and 6 apps, the last 7 are kept") with its switch; a body that opens on demand with the apps as tiles (All / None, "6 of 15") and the destination, frequency, time, keep and stop-the-apps choices. Under them, the next run by the server's own rule (a missed slot says "at the next check") and the last one: when, how long the batch took, how much it read and whether it succeeded ([ReCasaOS/CasaOS-UI#145](https://github.com/ReCasaOS/CasaOS-UI/pull/145)).
+- **The left column of the beta dashboard.** Needs attention, Storage, Backups and Fleet each had their own layout. The four cards now share one: a head with an icon tile, the title and a chip that says the essential (`2`, `3 healthy`, `Succeeded`, `4 of 6 boxes online`); rows with a coloured dot and the value at the right; a foot with the action. Needs attention wears a ring in the colour of its worst alert and shrinks to its head with "All good". Backups says how long the last go took, how much it read and where it went, and when the next scheduled one comes ([ReCasaOS/CasaOS-UI#147](https://github.com/ReCasaOS/CasaOS-UI/pull/147)).
+
+### Not in it
+
+- A run made before this release has no size: the dashboard shows none for it.
+- The Fleet card does not say for how long a box has been offline.
+- The new texts exist in English and French only.
+- Both dashboard changes were checked against stubbed answers at desktop and phone widths, not on a box.
+
+### Proof
+
+The dashboard's CI passed on both pull requests (the full suite and the build); AppManagement's suite ran on Linux in the pull request's CI, and both release runs passed on their tags. The install check of this release: result added after the check.
+
 ## [0.5.100] - 2026-11-08
 
 Components: CasaOS `v0.4.98`, CasaOS-UI `v0.4.155`. Unchanged from v0.5.99: CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
