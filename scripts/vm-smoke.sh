@@ -28,7 +28,9 @@ echo "docker $(sudo docker version --format '{{.Server.Version}}'), storage driv
 
 # a derivative gets Docker from Docker's repository for its Ubuntu base, not get.docker.com
 if [ "${EXPECT_ID:-}" = linuxmint ]; then
-  apt-cache policy docker-ce | grep -q 'download.docker.com/linux/ubuntu noble'
+  # not piped into grep -q: it leaves on the first match and pipefail takes apt-cache's SIGPIPE (141) for a failure
+  policy="$(apt-cache policy docker-ce)"
+  grep -q 'download.docker.com/linux/ubuntu noble' <<<"${policy}"
 fi
 
 for unit in casaos-gateway casaos-message-bus casaos-user-service casaos-local-storage casaos-app-management rclone casaos; do
