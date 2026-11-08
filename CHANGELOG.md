@@ -6,8 +6,6 @@ All notable changes to the CasaOS fork installer are documented here.
 
 Components: CasaOS-UI `v0.4.157`. Unchanged from v0.5.101: CasaOS `v0.4.98`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
 
-v0.5.101 was not published: its release run failed on a 504 from GitHub while downloading the `virt` tarball. Everything listed under 0.5.101 ships in this release.
-
 ### Fixed
 
 - **The Account menu has its own width again.** Since v0.5.100 it opened as wide as the settings menu on a PC, nearly the whole window, with its fields in a narrow column; only the settings menu is wide now ([ReCasaOS/CasaOS#106](https://github.com/ReCasaOS/CasaOS/issues/106), [ReCasaOS/CasaOS-UI#148](https://github.com/ReCasaOS/CasaOS-UI/pull/148)).
