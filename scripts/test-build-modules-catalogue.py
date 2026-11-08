@@ -1807,6 +1807,14 @@ class Workflow(unittest.TestCase):
     def text(self, name):
         return "\n".join(self.steps[step_index(self.steps, name)])
 
+    def test_every_download_of_the_bundle_retries_a_5xx(self):
+        # one 504 from GitHub failed v0.5.101 and v0.5.102 three times in a row (2026-11-08)
+        with open(BUILD_SCRIPT, encoding="utf-8") as f:
+            calls = [line for line in f if re.match(r"\s*(\S+=\"\$\()?curl ", line)]
+        self.assertEqual(len(calls), 3, calls)
+        for line in calls:
+            self.assertIn("--retry 5", line)
+
     def test_python_is_pinned_before_anything_runs_it(self):
         i = step_index(self.steps, "Set up Python")
         step = self.text("Set up Python")

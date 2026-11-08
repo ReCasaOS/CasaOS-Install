@@ -162,7 +162,7 @@ fetch_checksum() {
     local url="${base}/${repo}/releases/download/${tag}/${file}"
     local sum
 
-    sum="$(curl -fsSL "${url}" | awk -v a="${asset}" '($2 == a || $2 == "*" a) { print $1; exit }')"
+    sum="$(curl -fsSL --retry 5 --retry-delay 10 "${url}" | awk -v a="${asset}" '($2 == a || $2 == "*" a) { print $1; exit }')"
     [[ -n "${sum}" ]] || fail "No digest for ${asset} in ${url}."
     [[ "${sum}" =~ ^[0-9a-f]{64}$ ]] || fail "Malformed digest for ${asset}: ${sum}"
 
@@ -182,7 +182,8 @@ compute_checksum() {
     local url="${base}/${repo}/releases/download/${tag}/${asset}"
     local file="${keep_dir}/${asset}"
 
-    curl -fsSL -o "${file}" "${url}" || fail "Failed to download ${url}."
+    # GitHub's release downloads answer 5xx in bursts (2026-11-08): curl retries those, never a missing file
+    curl -fsSL --retry 5 --retry-delay 10 -o "${file}" "${url}" || fail "Failed to download ${url}."
     [[ -s "${file}" ]] || fail "Empty download: ${url}"
     # read the archive from stdin: the shell opens the path, so tar never
     # parses it, and a keep directory that is a Windows drive-letter path is
@@ -363,7 +364,7 @@ build_modules_catalogue() {
     stage="${STAGING_ROOT}/modules"
     while read -r name component tag commit tier; do
         mkdir -p "${stage}/${name}"
-        curl -fsSL -o "${stage}/${name}/checksums.txt" "${CHECKSUMS_BASE_URL}/${component}/releases/download/${tag}/checksums.txt" ||
+        curl -fsSL --retry 5 --retry-delay 10 -o "${stage}/${name}/checksums.txt" "${CHECKSUMS_BASE_URL}/${component}/releases/download/${tag}/checksums.txt" ||
             fail "Failed to download the checksums of module ${name} (${component} ${tag})."
         archives="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" archives "${stage}/${name}/checksums.txt" "${tag}")" ||
             fail "Module ${name}: its checksums.txt names no usable archives."
