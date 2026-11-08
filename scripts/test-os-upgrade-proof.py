@@ -2127,17 +2127,19 @@ def static_checks():
     hops = {}
     for l in legs:
         hops.setdefault(l.get("hop"), []).append(l)
-    check("the legs file names the two legs of each hop, with what the workflow needs", sorted(hops) == ["debian-11-12", "debian-12-13"] and all(
+    check("the legs file names the two legs of each hop, with what the workflow needs", sorted(hops) == ["debian-11-12", "debian-12-13", "ubuntu-24.04-26.04"] and all(
         [l["leg"] for l in ls] == ["core", "faults"] for ls in hops.values()) and all(
         {"hop", "leg", "name", "label", "id", "version", "base", "image", "sums", "algo", "args", "docker_from", "timeout", "prove_timeout"} <= set(l) for l in legs), str(sorted(hops)))
-    check("each hop's legs boot the Debian it starts from", all(l["version"] == h.split("-")[1] and ("/%s-genericcloud-" % ("debian-" + l["version"])) in "/" + l["image"]
-                                                              for h, ls in hops.items() for l in ls), "")
+    # Debian's generic cloud image, or Ubuntu's server cloud image, of the release the hop starts from
+    check("each hop's legs boot the system it starts from", all(l["id"] == h.split("-")[0] and l["version"] == h.split("-")[1] and (
+        ("/%s-genericcloud-" % ("debian-" + l["version"])) in "/" + l["image"] if l["id"] == "debian" else l["image"] == "ubuntu-%s-server-cloudimg-amd64.img" % l["version"])
+        for h, ls in hops.items() for l in ls), "")
     check("the faults leg has more time than the core leg, and the proof step less than the job (at most the 360 minutes of a job)", all(
         ls[1]["timeout"] > ls[0]["timeout"] and all(l["prove_timeout"] < l["timeout"] <= 360 for l in ls) for ls in hops.values()), "")
-    p = subprocess.run([BASH, "-c", 'source "$1"; for h in debian-11-12 debian-12-13 debian-13-14; do printf "%s=" "$h"; hop_facts "$h" || echo none; done', "x", posix(SCRIPT)],
+    p = subprocess.run([BASH, "-c", 'source "$1"; for h in debian-11-12 debian-12-13 ubuntu-24.04-26.04 debian-13-14; do printf "%s=" "$h"; hop_facts "$h" || echo none; done', "x", posix(SCRIPT)],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     check("the script knows the facts of each hop of the legs file, and no other", p.stdout.decode("utf-8", "replace").split() ==
-          ["debian-11-12=11", "bullseye", "12", "bookworm", "debian-12-13=12", "bookworm", "13", "trixie", "debian-13-14=none"], p.stdout.decode("utf-8", "replace"))
+          ["debian-11-12=11", "bullseye", "12", "bookworm", "debian-12-13=12", "bookworm", "13", "trixie", "ubuntu-24.04-26.04=24.04", "noble", "26.04", "resolute", "debian-13-14=none"], p.stdout.decode("utf-8", "replace"))
     try:
         import yaml
         wf = yaml.safe_load(open(WORKFLOW, encoding="utf-8"))

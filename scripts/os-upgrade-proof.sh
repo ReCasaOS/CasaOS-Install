@@ -68,6 +68,7 @@ hop_facts() {
     case "$1" in
     debian-11-12) echo "11 bullseye 12 bookworm" ;;
     debian-12-13) echo "12 bookworm 13 trixie" ;;
+    ubuntu-24.04-26.04) echo "24.04 noble 26.04 resolute" ;;
     *) return 1 ;;
     esac
 }
@@ -111,7 +112,7 @@ snap() {
     printf 'timers_state_file %s\n' "$(yn test -e /var/backups/casaos-os-upgrade-timers.state)"
     printf 'bk_dirs %s\n' "$(find /var/backups -maxdepth 1 -type d -name 'casaos-os-upgrade-*' 2>/dev/null | sort | tr '\n' ' ')"
     printf 'run_bk %s\n' "$(find "$RUN" -maxdepth 2 -type d \( -name bk-done -o -name bk-aborted \) 2>/dev/null | sort | tr '\n' ' ')"
-    printf 'sources_bookworm %s\nsources_bullseye %s\nsources_trixie %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)" "$(in_sources trixie)"
+    printf 'sources_bookworm %s\nsources_bullseye %s\nsources_trixie %s\nsources_noble %s\nsources_resolute %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)" "$(in_sources trixie)" "$(in_sources noble)" "$(in_sources resolute)"
     printf 'df_root_kb %s\n' "$(df -Pk / | awk 'NR == 2 {print $4}')"
     printf 'df_boot_kb %s\n' "$(df -Pk /boot | awk 'NR == 2 {print $4}')"
     printf 'rx_bytes %s\n' "$(awk -F'[: ]+' 'NR > 2 && $2 != "lo" {s += $3} END {print s + 0}' /proc/net/dev)"
@@ -583,7 +584,8 @@ guest_prepare() {
     . "${READINESS_LIB:-${OUP_HERE}/os-readiness-proof.sh}"
     local facts
     facts="$(hop_facts "${HOP}")" || { echo "unknown hop: ${HOP}" >&2; exit 2; }
-    FAMILY=debian
+    # the family is the hop's first word: debian, ubuntu
+    FAMILY="${HOP%%-*}"
     # shellcheck disable=SC2034
     read -r FROM_VERSION FROM_CODENAME TO_VERSION TO_CODENAME <<<"${facts}"
     # shellcheck source=/dev/null
