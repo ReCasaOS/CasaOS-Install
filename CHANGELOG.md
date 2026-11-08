@@ -2,6 +2,37 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.104] - 2026-11-08
+
+Components: CasaOS `v0.4.99`, CasaOS-UI `v0.4.159`. Unchanged from v0.5.103: CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The upgrade from Ubuntu 24.04 to Ubuntu 26.04 (beta).** Until now an Ubuntu 24.04 box got "a plan cannot be made" (`hop_not_planned`). It now gets a plan, a runbook and a run, with the apt blocks of the Debian hops ([ReCasaOS/CasaOS#112](https://github.com/ReCasaOS/CasaOS/pull/112)).
+  - **Only when Canonical offers it.** The plan first reads Canonical's list of the upgrades it offers (`meta-release-lts`), as `do-release-upgrade` does. A hop that is not in it, or that the list says is not supported, is refused (`not_offered`). The same goes for a list that cannot be read ([ReCasaOS/CasaOS#110](https://github.com/ReCasaOS/CasaOS/pull/110)).
+  - **Ubuntu's sources are read and rewritten.** This covers `sources.list` and `ubuntu.sources`, with `-updates` and `-security` moved and `-backports` left out. Two cases are refused ([ReCasaOS/CasaOS#109](https://github.com/ReCasaOS/CasaOS/pull/109)):
+    - Ubuntu Pro (`esm.ubuntu.com`), whose sources Ubuntu's `pro` tool rewrites during an upgrade;
+    - a line of another distribution's archive.
+  - **The move of coreutils to rust-coreutils is let through.** It ends apt's simulation of the full upgrade on `E: Conf Broken coreutils-from-uutils`, while the real upgrade goes through. The plan and the runbook let that one error through for that hop only.
+  - **The check of DSA host keys covers this hop.** Ubuntu 26.04 has OpenSSH 10.2 ([ReCasaOS/CasaOS#114](https://github.com/ReCasaOS/CasaOS/pull/114)).
+  - **The upgrade guide says the new refusals**, in English and French ([ReCasaOS/CasaOS-UI#150](https://github.com/ReCasaOS/CasaOS-UI/pull/150)).
+
+### Fixed
+
+- **The readiness report no longer flakes when it ends exactly at its time limit.** A timeout at the end of the report's time is `not_finished` ([ReCasaOS/CasaOS#105](https://github.com/ReCasaOS/CasaOS/pull/105)).
+
+### Not in it
+
+- **No hop from Ubuntu 24.04 to 26.04 has been run on a real machine yet.**
+  - What was run: in the images `ubuntu:24.04` and `ubuntu:26.04`, apt's real simulations, a real `upgrade --without-new-pkgs` then `dist-upgrade` that ended on 26.04.1, and the core's whole test suite under rust-coreutils.
+  - The upgrade proof (os-upgrade-proof) has no Ubuntu leg yet. Until it does, the runbook says that no such hop was measured.
+- **The upgrade from Ubuntu 22.04 to 24.04 is not planned yet** (`hop_not_planned`).
+- **Until 2026-11-28 the readiness report warns** that the upgrade to 26.04 is held back (`hold_until`).
+
+### Proof
+
+The core's CI passed on each pull request, and its release run passed on its tag. The dashboard's CI (lint, the full suite and the build) passed on its pull request, and its release run passed on its tag. The install check of this release: result added after the check.
+
 ## [0.5.103] - 2026-11-08
 
 Components: CasaOS-UI `v0.4.158`. Unchanged from v0.5.102: CasaOS `v0.4.98`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
