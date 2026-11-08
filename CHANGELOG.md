@@ -51,7 +51,7 @@ Components: CasaOS-UI `v0.4.158`. Unchanged from v0.5.102: CasaOS `v0.4.98`, Cas
 
 ### Proof
 
-The dashboard's CI passed on the pull request (lint, the full suite and the build) and the release run passed on its tag. The fixes were checked by the test suite, not on a box. The install check of this release: result added after the check.
+The dashboard's CI passed on the pull request (lint, the full suite and the build) and the release run passed on its tag. The fixes were checked by the test suite, not on a box. The install check of this release passes on all 12 legs of the published bundle, each on its first attempt: Debian 11, 12 and 13, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42498650796](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42498650796)).
 
 ## [0.5.102] - 2026-11-08
 
