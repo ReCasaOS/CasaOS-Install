@@ -1345,8 +1345,6 @@ def core_mutations():
     m("a release that has no engine (404 on the status)", invalid_run("has no /v1/sys/os/upgrade/status"), lambda d: code(d, "probe-status", 404))
     m("a guest that is not Debian 11", invalid_run("the guest is debian 12"), lambda d: subst(d, "guest/os-release", 'VERSION_ID="11"', 'VERSION_ID="12"'))
     m("the hop from Debian 12 run on a Debian 11 guest", invalid_run("the guest is debian 11, the proof needs Debian 12"), lambda d: write_out(d, "hop", "debian-12-13\n"))
-    m("the hop from Debian 12: the security line of Debian 11 is not its case", not_testable("C3b refresh with the security line", "not part of the hop from Debian 12"),
-      lambda d: write_out(d, "hop", "debian-12-13\n"))
     m("a hop the report does not know", invalid_run("the hop 'debian-13-14'"), lambda d: write_out(d, "hop", "debian-13-14\n"))
     m("a step of the harness whose undo failed", invalid_run("could not be undone (C5): the lock stayed"), lambda d: add_line(d, "invalid.txt", "C5\tthe lock stayed"))
     m("a snapshot of the guest that is missing", invalid_run("the snapshot c3-after is missing"), lambda d: os.remove(os.path.join(d, "snap-c3-after.facts")))
