@@ -24,7 +24,7 @@ Components: CasaOS `v0.4.98`, CasaOS-UI `v0.4.155`. Unchanged from v0.5.99: Casa
 
 ### Proof
 
-To be filled when the install check of this release has run.
+The core's suite passed on Linux before each pull request, and the release runs of CasaOS v0.4.98 and CasaOS-UI v0.4.155 passed on their tags. The install check of this release passes on all 12 legs of the published bundle: Debian 11, 12 and 13, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42463202631](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42463202631)). The Mint leg was red in the release run ([run 42460138142](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42460138142)) on its own check, not on the install ([ReCasaOS/CasaOS-Install#158](https://github.com/ReCasaOS/CasaOS-Install/pull/158)). The hop from Debian 12 to 13 itself was not run on a machine.
 
 ## [0.5.99] - 2026-11-07
 
