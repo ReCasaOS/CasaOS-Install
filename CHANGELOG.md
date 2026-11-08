@@ -2,6 +2,25 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.100] - 2026-11-08
+
+Components: CasaOS `v0.4.97`, CasaOS-UI `v0.4.155`. Unchanged from v0.5.99: CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The upgrade from Debian 12 to Debian 13.** A Debian 12 box got "a plan cannot be made" (hop_not_planned): it now gets a plan, a runbook and a run, with the blocks of the hop from Debian 11 ([ReCasaOS/CasaOS#104](https://github.com/ReCasaOS/CasaOS/pull/104)).
+  - The sources in the deb822 form (`.sources` files, the form of Debian's cloud images) are read and rewritten stanza by stanza; Docker's `docker.sources` is put aside whole, and a file that mixes Debian and another source is refused. A list given by `mirror+file:///etc/apt/mirrors/debian.list` is judged by its addresses ([ReCasaOS/CasaOS#103](https://github.com/ReCasaOS/CasaOS/pull/103)).
+  - Four checks from the release notes of Debian 13: an SSH server whose host keys are all DSA is refused (a warning when only some are); an encrypted disk without `systemd-cryptsetup`, a `/etc/sysctl.conf` Debian 13 no longer reads, and `/tmp` turning into a tmpfs are warned.
+- **The upgrade guide says why no plan can be made**, with a button to ask again, where it pointed at details that were hidden ([ReCasaOS/CasaOS-UI#144](https://github.com/ReCasaOS/CasaOS-UI/pull/144)).
+
+### Not in it
+
+- No hop from Debian 12 to 13 was run on a real machine: the runbook says so. The upgrade proof (os-upgrade-proof) still runs the hop from Debian 11 only.
+
+### Proof
+
+To be filled when the install check of this release has run.
+
 ## [0.5.99] - 2026-11-07
 
 Components: CasaOS-UI `v0.4.154`. Unchanged from v0.5.98: CasaOS `v0.4.96`, CasaOS-AppManagement `v0.4.89`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
