@@ -1103,7 +1103,7 @@ def run_script(leg, cases="", cfg=None, root=None, env_extra=None, world_from=No
         f.write("Aa1-test")
     world.user, world.pw = "oupproof", "Aa1-test"
     env = dict(ENV, PATH=os.pathsep.join([bindir] + tool_dirs() + [ENV.get("PATH", "")]), OUT=posix(out), WORK=posix(work), SSH_CONFIG="ssh_config", SSH_HOST="vm", GW_PORT=str(port), FAKE_PORT=str(port),
-               OUP_FAST="1", OUP_TICK=posix(os.path.join(bindir, "tick")), QMON=posix(os.path.join(bindir, "qmon")), TAG="v0.0.0-test", CASES=cases, POLL_EVERY="3", CONTROL_SECONDS="200",
+               OUP_FAST="1", OUP_TICK=posix(os.path.join(bindir, "tick")), QMON=posix(os.path.join(bindir, "qmon")), TAG="v0.0.0-test", HOP="debian-11-12", CASES=cases, POLL_EVERY="3", CONTROL_SECONDS="200",
                FAKE_SUDO_NOISE="1")
     env.update(env_extra or {})
     try:
