@@ -15,7 +15,7 @@ Components: CasaOS-UI `v0.4.157`. Unchanged from v0.5.101: CasaOS `v0.4.98`, Cas
 
 The dashboard's CI passed on the pull request (lint, the full suite and the build) and the release run passed on its tag. Both fixes were checked in the dashboard against stubbed answers at 1400 px, not on a box. The install check of this release: result added after the check.
 
-## [0.5.101] - 2026-11-08
+## [0.5.101] - 2026-11-08 (not published)
 
 Components: CasaOS-UI `v0.4.156`, CasaOS-AppManagement `v0.4.90`. Unchanged from v0.5.100: CasaOS `v0.4.98`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
 
@@ -37,7 +37,7 @@ Components: CasaOS-UI `v0.4.156`, CasaOS-AppManagement `v0.4.90`. Unchanged from
 
 ### Proof
 
-The dashboard's CI passed on both pull requests (the full suite and the build); AppManagement's suite ran on Linux in the pull request's CI, and both release runs passed on their tags. The install check of this release: result added after the check.
+The dashboard's CI passed on both pull requests (the full suite and the build); AppManagement's suite ran on Linux in the pull request's CI, and both release runs passed on their tags. This release was never published: its release run ([run 42469726811](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42469726811)) failed four times on GitHub's 504s of 8 November while downloading the component tarballs, before the bundle's downloads learnt to retry ([ReCasaOS/CasaOS-Install#162](https://github.com/ReCasaOS/CasaOS-Install/pull/162)). Everything listed here shipped in v0.5.102.
 
 ## [0.5.100] - 2026-11-08
 
