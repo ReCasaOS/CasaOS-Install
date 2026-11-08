@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.106] - 2026-11-08
+
+Components: CasaOS `v0.4.101`. Unchanged from v0.5.105: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The upgrade from Ubuntu 24.04 to 26.04 includes the phased updates, as `do-release-upgrade` does.** Ubuntu hands some updates out in waves, and holds one at 0% when it halts it. apt deferred such an update (`software-properties-common`, which every cloud image has) and would have left it on 24.04. With v0.5.105 the plan of such a box stopped at "apt's output was not understood" (`plan_unparsed`). The plan's simulations and the upgrade now include them, as ubuntu-release-upgrader does since 2024 (LP: #2045784) and as the refresh already did. The Debian upgrades are unchanged ([ReCasaOS/CasaOS#116](https://github.com/ReCasaOS/CasaOS/pull/116)).
+  - The second upgrade proof on the Ubuntu 24.04 cloud image found it. The switch, the refusals and the refresh passed, and so did the move of sudo fixed in v0.5.105. The plan stopped there.
+
+### Proof
+
+The core's CI passed on its pull request, and its release run passed on its tag. The release run of v0.5.105, its install check included, passed. The install check and the upgrade proof of this release: results added after them.
+
 ## [0.5.105] - 2026-11-08
 
 Components: CasaOS `v0.4.100`. Unchanged from v0.5.104: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
