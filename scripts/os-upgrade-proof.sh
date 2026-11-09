@@ -68,6 +68,7 @@ hop_facts() {
     case "$1" in
     debian-11-12) echo "11 bullseye 12 bookworm" ;;
     debian-12-13) echo "12 bookworm 13 trixie" ;;
+    ubuntu-22.04-24.04) echo "22.04 jammy 24.04 noble" ;;
     ubuntu-24.04-26.04) echo "24.04 noble 26.04 resolute" ;;
     *) return 1 ;;
     esac
@@ -116,7 +117,7 @@ snap() {
     printf 'timers_state_file %s\n' "$(yn test -e /var/backups/casaos-os-upgrade-timers.state)"
     printf 'bk_dirs %s\n' "$(find /var/backups -maxdepth 1 -type d -name 'casaos-os-upgrade-*' 2>/dev/null | sort | tr '\n' ' ')"
     printf 'run_bk %s\n' "$(find "$RUN" -maxdepth 2 -type d \( -name bk-done -o -name bk-aborted \) 2>/dev/null | sort | tr '\n' ' ')"
-    printf 'sources_bookworm %s\nsources_bullseye %s\nsources_trixie %s\nsources_noble %s\nsources_resolute %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)" "$(in_sources trixie)" "$(in_sources noble)" "$(in_sources resolute)"
+    printf 'sources_bookworm %s\nsources_bullseye %s\nsources_trixie %s\nsources_noble %s\nsources_resolute %s\nsources_jammy %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)" "$(in_sources trixie)" "$(in_sources noble)" "$(in_sources resolute)" "$(in_sources jammy)"
     printf 'df_root_kb %s\n' "$(df -Pk / | awk 'NR == 2 {print $4}')"
     printf 'df_boot_kb %s\n' "$(df -Pk /boot | awk 'NR == 2 {print $4}')"
     printf 'rx_bytes %s\n' "$(awk -F'[: ]+' 'NR > 2 && $2 != "lo" {s += $3} END {print s + 0}' /proc/net/dev)"
@@ -427,6 +428,27 @@ refresh_notes() {
 
 core_version() { casaos -v 2>/dev/null | head -n 1; return 0; }
 
+# plan_sim <from codename> <to codename>: apt's own words on the full upgrade, as the plan's sandbox asks it (the distribution's sources moved to the next release, apt's lists and cache in a
+# directory of their own): the core keeps the problems of a blocked plan, not the text that apt printed. Read only: the box's sources, lists and dpkg are not touched.
+plan_sim() {
+    local d=/var/tmp/oup-sim f o
+    rm -rf "$d"
+    mkdir -p "$d/parts" "$d/lists/partial" "$d/cache/archives/partial"
+    if [ -f /etc/apt/sources.list ]; then sed "s/$1/$2/g" /etc/apt/sources.list >"$d/sources.list"; else : >"$d/sources.list"; fi
+    for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] && grep -qE 'ubuntu\.com|debian\.org' "$f" && sed "s/$1/$2/g" "$f" >"$d/parts/${f##*/}"
+    done
+    o="-o Dir::Etc::sourcelist=$d/sources.list -o Dir::Etc::sourceparts=$d/parts -o Dir::State::lists=$d/lists -o Dir::Cache=$d/cache -o Debug::NoLocking=true"
+    # shellcheck disable=SC2086
+    LC_ALL=C apt-get $o update >/dev/null 2>&1
+    echo "== update $?"
+    # shellcheck disable=SC2086
+    LC_ALL=C apt-get $o -o APT::Get::Always-Include-Phased-Updates=true -s dist-upgrade 2>&1
+    echo "== dist-upgrade $?"
+    rm -rf "$d"
+    return 0
+}
+
 verb="${1:-}"
 [ "$#" -eq 0 ] || shift
 case "${verb}" in
@@ -453,6 +475,7 @@ gap_prepare) gap_prepare ;;
 gap_undo) gap_undo ;;
 refresh_notes) refresh_notes ;;
 core_version) core_version ;;
+plan_sim) plan_sim "$@" ;;
 *) echo "unknown verb: ${verb}" >&2; exit 2 ;;
 esac
 OUP_GUEST
@@ -1157,6 +1180,11 @@ case_c3c() { sec_case c3c C3c port; }
 case_c4() {
     marker case_C4_start
     plan_make c4-plan || true
+    if ! plan_startable; then
+        # what apt said, for a plan that cannot be started from
+        read -r _ fc _ tc <<<"$(hop_facts "${HOP}")"
+        SSH_LIMIT=600 g plan_sim "${fc}" "${tc}" >"${OUT}/c4-plan-sim.txt" 2>&1 || true
+    fi
     if plan_startable; then
         snap c4-before || return 1
         start_run c4-start true full "${GUEST_HOST}" ""

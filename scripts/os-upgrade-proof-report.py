@@ -67,7 +67,7 @@ ROW_FIELDS = 19
 BK_GLOB = "casaos-os-upgrade-"
 # the hops the proof knows: (the version it is on, its codename, the version it goes to, that codename)
 HOPS = {"debian-11-12": ("11", "bullseye", "12", "bookworm"), "debian-12-13": ("12", "bookworm", "13", "trixie"),
-        "ubuntu-24.04-26.04": ("24.04", "noble", "26.04", "resolute")}
+        "ubuntu-22.04-24.04": ("22.04", "jammy", "24.04", "noble"), "ubuntu-24.04-26.04": ("24.04", "noble", "26.04", "resolute")}
 SECURITY_ARCHIVE_MIN_CORE = "v0.4.76"     # the first core that moves the security line of Debian 11 to the archive in a refresh (the script writes the one it used in c3b.min-core)
 
 CASES_CORE = (("C1", "flag off"), ("C2", "switch on"), ("C3", "refresh"), ("C3b", "refresh with the security line at security.debian.org"), ("C3c", "refresh with a security line the rewrite does not recognise"), ("C4", "plan and rehearsal"), ("C5", "refusals"), ("C6", "call-off before the point of no return"), ("C7", "the hop"))
