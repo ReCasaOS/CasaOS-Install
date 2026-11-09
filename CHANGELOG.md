@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.111] - 2026-11-09
+
+Components: CasaOS-UI `v0.4.162`. Unchanged from v0.5.110: CasaOS `v0.4.104`, CasaOS-AppManagement `v0.4.92`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **Backups › Destinations as cards.** Each destination is a card: an icon tile, the name with a chip that says where it stands ("Repository checked", "Check failed", "Reachable", "Not checked yet"), the restic lines under it. Check and Restore stay as buttons; the restic choices and Forget go into a menu, since six pills in a row said nothing. "This box" takes one line, its destination preselected. The new-destination form is a grid: the options a backend usually wants are fields labelled with rclone's own key, in monospace, so the names that make a destination work stay in view; only a row added by hand has its key typed ([ReCasaOS/CasaOS-UI#156](https://github.com/ReCasaOS/CasaOS-UI/pull/156)).
+
+### Not in it
+
+- The new-destination card does not fold, and the type of an existing destination is not shown: the API does not give it.
+- The new texts exist in English and French only.
+- Checked against stubbed answers at desktop and phone widths, not on a box.
+
+### Proof
+
+The dashboard's CI passed on the pull request (the full suite and the build), and the release run of CasaOS-UI v0.4.162 passed on its tag. The install check of this release: result added after the check.
+
 ## [0.5.110] - 2026-11-09
 
 Components: CasaOS `v0.4.104`, CasaOS-UI `v0.4.161`, CasaOS-AppManagement `v0.4.92`. Unchanged from v0.5.109: CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
