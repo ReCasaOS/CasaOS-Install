@@ -2132,7 +2132,7 @@ def static_checks():
     hops = {}
     for l in legs:
         hops.setdefault(l.get("hop"), []).append(l)
-    check("the legs file names the two legs of each hop, with what the workflow needs", sorted(hops) == ["debian-11-12", "debian-12-13", "ubuntu-24.04-26.04"] and all(
+    check("the legs file names the two legs of each hop, with what the workflow needs", sorted(hops) == ["debian-11-12", "debian-12-13", "ubuntu-22.04-24.04", "ubuntu-24.04-26.04"] and all(
         [l["leg"] for l in ls] == ["core", "faults"] for ls in hops.values()) and all(
         {"hop", "leg", "name", "label", "id", "version", "base", "image", "sums", "algo", "args", "docker_from", "timeout", "prove_timeout"} <= set(l) for l in legs), str(sorted(hops)))
     # Debian's generic cloud image, or Ubuntu's server cloud image, of the release the hop starts from
@@ -2141,10 +2141,10 @@ def static_checks():
         for h, ls in hops.items() for l in ls), "")
     check("the faults leg has more time than the core leg, and the proof step less than the job (at most the 360 minutes of a job)", all(
         ls[1]["timeout"] > ls[0]["timeout"] and all(l["prove_timeout"] < l["timeout"] <= 360 for l in ls) for ls in hops.values()), "")
-    p = subprocess.run([BASH, "-c", 'source "$1"; for h in debian-11-12 debian-12-13 ubuntu-24.04-26.04 debian-13-14; do printf "%s=" "$h"; hop_facts "$h" || echo none; done', "x", posix(SCRIPT)],
+    p = subprocess.run([BASH, "-c", 'source "$1"; for h in debian-11-12 debian-12-13 ubuntu-22.04-24.04 ubuntu-24.04-26.04 debian-13-14; do printf "%s=" "$h"; hop_facts "$h" || echo none; done', "x", posix(SCRIPT)],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     check("the script knows the facts of each hop of the legs file, and no other", p.stdout.decode("utf-8", "replace").split() ==
-          ["debian-11-12=11", "bullseye", "12", "bookworm", "debian-12-13=12", "bookworm", "13", "trixie", "ubuntu-24.04-26.04=24.04", "noble", "26.04", "resolute", "debian-13-14=none"], p.stdout.decode("utf-8", "replace"))
+          ["debian-11-12=11", "bullseye", "12", "bookworm", "debian-12-13=12", "bookworm", "13", "trixie", "ubuntu-22.04-24.04=22.04", "jammy", "24.04", "noble", "ubuntu-24.04-26.04=24.04", "noble", "26.04", "resolute", "debian-13-14=none"], p.stdout.decode("utf-8", "replace"))
     try:
         import yaml
         wf = yaml.safe_load(open(WORKFLOW, encoding="utf-8"))
