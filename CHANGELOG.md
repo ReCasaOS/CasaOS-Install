@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.112] - 2026-11-09
+
+Components: CasaOS `v0.4.105`. Unchanged from v0.5.111: CasaOS-UI `v0.4.162`, CasaOS-AppManagement `v0.4.92`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The upgrade from Ubuntu 22.04 to 24.04.** A box on Ubuntu 22.04 gets a plan and can run the hop, as one on 24.04 does to 26.04 ([ReCasaOS/CasaOS#121](https://github.com/ReCasaOS/CasaOS/pull/121)).
+  - The hop runs the whole upgrade in one step, as `do-release-upgrade` does, and takes Ubuntu's phased updates.
+  - apt's simulation in the image `ubuntu:22.04` goes through: 90 packages upgraded, 14 new, 9 removed (the 64-bit time_t renames and usrmerge), none of which stops the plan.
+  - The hop is offered only while Canonical offers it (`meta-release-lts`), as for 26.04.
+
+### Proof
+
+The core's suite passed on Linux and its CI passed on the pull request. The install check and the upgrade proof of this release: results added after them.
+
 ## [0.5.111] - 2026-11-09
 
 Components: CasaOS-UI `v0.4.162`. Unchanged from v0.5.110: CasaOS `v0.4.104`, CasaOS-AppManagement `v0.4.92`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
