@@ -30,7 +30,7 @@
 #   C6 call-off      the hop is started and called off in block 3 or 4: the machine is put back
 #   C7 the hop       the real one: the blocks, the restart, the check, the close; the first real numbers of the engine
 # Leg faults (every fault starts from a snapshot of the whole guest, memory included, taken after C4, so the plan is still live):
-#   F1 the unit killed before the point of no return   F2 the unit killed after it, with dpkg at work   F3 the network cut after it   F4 a power cut (the QEMU monitor's reset) in block 6, with dpkg at work
+#   F1 the unit killed before the point of no return   F2 the unit killed after it, with dpkg at work   F3 the network cut after it   F4 a power cut (the QEMU monitor's reset) in block 6 (5 on a hop in one step), with dpkg at work
 # Each fault starts with the clock of the restored guest set from the runner's; the verbs that change the guest (the kill, the cut, the clock) are said up to three times and their effect is seen.
 #
 # The helpers of the other proofs are reused, not rewritten: os-readiness-proof.sh is SOURCED in the guest (Docker, the installer, the witnesses, the waits for the services, the
@@ -68,9 +68,14 @@ hop_facts() {
     case "$1" in
     debian-11-12) echo "11 bullseye 12 bookworm" ;;
     debian-12-13) echo "12 bookworm 13 trixie" ;;
+    ubuntu-24.04-26.04) echo "24.04 noble 26.04 resolute" ;;
     *) return 1 ;;
     esac
 }
+
+# ONE_STEP=1: the hop runs its whole upgrade in block 5 (the core's OneStep, Ubuntu): block 4 downloads all of it, block 6 has no dpkg work, so F4 cuts the power in block 5 and F3 proves
+# that the hop needs no network after its point of no return. The tests set it on their Debian stand-in.
+case "${HOP}" in ubuntu-*) ONE_STEP="${ONE_STEP:-1}" ;; *) ONE_STEP="${ONE_STEP:-0}" ;; esac
 
 # write_guest_tools <dir>: what the runner asks of the guest, one verb a call. POSIX sh (dash): the hop replaces bash and libc while some of these run. The `snap` verb prints the
 # machine in sections ("@@ <name>" lines, the last one "@@ end": a snapshot that was cut short has no end and is not believed).
@@ -111,7 +116,7 @@ snap() {
     printf 'timers_state_file %s\n' "$(yn test -e /var/backups/casaos-os-upgrade-timers.state)"
     printf 'bk_dirs %s\n' "$(find /var/backups -maxdepth 1 -type d -name 'casaos-os-upgrade-*' 2>/dev/null | sort | tr '\n' ' ')"
     printf 'run_bk %s\n' "$(find "$RUN" -maxdepth 2 -type d \( -name bk-done -o -name bk-aborted \) 2>/dev/null | sort | tr '\n' ' ')"
-    printf 'sources_bookworm %s\nsources_bullseye %s\nsources_trixie %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)" "$(in_sources trixie)"
+    printf 'sources_bookworm %s\nsources_bullseye %s\nsources_trixie %s\nsources_noble %s\nsources_resolute %s\n' "$(in_sources bookworm)" "$(in_sources bullseye)" "$(in_sources trixie)" "$(in_sources noble)" "$(in_sources resolute)"
     printf 'df_root_kb %s\n' "$(df -Pk / | awk 'NR == 2 {print $4}')"
     printf 'df_boot_kb %s\n' "$(df -Pk /boot | awk 'NR == 2 {print $4}')"
     printf 'rx_bytes %s\n' "$(awk -F'[: ]+' 'NR > 2 && $2 != "lo" {s += $3} END {print s + 0}' /proc/net/dev)"
@@ -583,7 +588,8 @@ guest_prepare() {
     . "${READINESS_LIB:-${OUP_HERE}/os-readiness-proof.sh}"
     local facts
     facts="$(hop_facts "${HOP}")" || { echo "unknown hop: ${HOP}" >&2; exit 2; }
-    FAMILY=debian
+    # the family is the hop's first word: debian, ubuntu
+    FAMILY="${HOP%%-*}"
     # shellcheck disable=SC2034
     read -r FROM_VERSION FROM_CODENAME TO_VERSION TO_CODENAME <<<"${facts}"
     # shellcheck source=/dev/null
@@ -918,6 +924,13 @@ reboot_cycle() {
         fi
         call "${tag}-status" GET "${STATUS_PATH}" "" 20
         reboot_try "${tag}-status" status "${tag}"
+        # a guest that restarts quicker than the look above (Ubuntu 26.04: 15 s) is back with another boot id: the call said again would be refused
+        id="$(boot_id)"
+        if [ -n "${id}" ] && [ "${id}" != "${old}" ]; then
+            now >"${OUT}/${tag}.lost-answer"
+            wait_boot "${tag}" "${old}" "${WAIT_BOOT:-1500}" || return 2
+            return 0
+        fi
         call "${tag}-post" POST "${REBOOT_PATH}" '{}' 30
         reboot_try "${tag}-post" post "${tag}"
     done
@@ -1301,7 +1314,7 @@ case_c7() {
 
 SNAP_NAME=oupbase
 FAULT_OBSERVE="${FAULT_OBSERVE:-180}"
-F4_BLOCK="${F4_BLOCK:-full}"
+if [ "${ONE_STEP}" = 1 ]; then F4_BLOCK="${F4_BLOCK:-minimal}"; else F4_BLOCK="${F4_BLOCK:-full}"; fi
 # (block 5 lasted a minute in the measured hop; block 6 is longer, and apt solves and downloads before dpkg begins: the wait is for the block, and ends when dpkg is seen)
 DPKG_WAIT="${DPKG_WAIT:-600}"
 
@@ -1483,6 +1496,9 @@ fault_f3() {
             if grep -qxE 'restored|present' "${OUT}/f3.restore"; then rm -f "${WORK}/pending-route"; else harness_invalid F3 "the network was not given back: $(tr -d '\r' <"${OUT}/f3.restore" | tr '\n' ' ' | cut -c1-200)"; fi
             if [ "${P_STATE}" = stopped_at_waypoint ]; then
                 fault_resume f3 || return 1
+            elif [ "${P_STATE}" = awaiting_reboot ] && [ "${ONE_STEP}" = 1 ]; then
+                # nothing was left to download: the hop is taken to its end, on the network given back
+                hop_tail f3 || return 1
             fi
         else
             echo "the hop did not reach its point of no return (state ${P_STATE}, block ${P_BID}) before the network could be cut" >"${OUT}/F3.untestable"
@@ -1576,6 +1592,7 @@ runner_run() {
     [ -n "${EPOCHREALTIME:-}" ] || abort "this bash has no EPOCHREALTIME (bash 5 is needed)"
     hop_facts "${HOP}" >/dev/null || abort "unknown hop: ${HOP}"
     echo "${HOP}" >"${OUT}/hop"
+    echo "${ONE_STEP}" >"${OUT}/one-step"
     login || abort "the box's user could not log in: no token"
     GUEST_HOST="$(g hostname | tr -d '\r\n')"
     [ -n "${GUEST_HOST}" ] || abort "the guest does not answer ssh"

@@ -133,6 +133,7 @@ class World:
         self.cfg.update(cfg or {})
         self.session_n, self.clock_lag, self.unit_gen, self.last_state = 0, 0.0, 0, ""
         self.ssh_calls, self.faultlog, self.starts, self.delay_taken = {}, [], [], 0.0
+        self.boot_look_miss = False
         self.run_info, self.run_ids = {}, []
         self.t = 0.0
         self.lock = threading.RLock()
@@ -242,6 +243,7 @@ class World:
         """the guest goes away and comes back with another boot id: what the new release brings is on it"""
         self.boot = str(uuid.uuid4())
         self.down_until = at + self.cfg["down_seconds"]
+        self.boot_look_miss = bool(self.cfg.get("boot_look_missed"))
         self.rx = 40 << 20
         self.lock_held = False
         r = self.run
@@ -842,6 +844,9 @@ class World:
             if not m:
                 return (0, "") if cmd.strip() == "true" else (127, "")
             verb, arg = m.group(1), (m.group(2) or "").strip()
+            if verb == "boot_id" and self.boot_look_miss:
+                self.boot_look_miss = False
+                return 255, ""          # the first look after a restart found the guest away (boot_look_missed)
             n = self.ssh_calls[verb] = self.ssh_calls.get(verb, 0) + 1
             if n <= self.cfg["ssh_drops"].get(verb, 0):
                 return 255, ""          # the connection was missed: nothing was done
@@ -2127,17 +2132,19 @@ def static_checks():
     hops = {}
     for l in legs:
         hops.setdefault(l.get("hop"), []).append(l)
-    check("the legs file names the two legs of each hop, with what the workflow needs", sorted(hops) == ["debian-11-12", "debian-12-13"] and all(
+    check("the legs file names the two legs of each hop, with what the workflow needs", sorted(hops) == ["debian-11-12", "debian-12-13", "ubuntu-24.04-26.04"] and all(
         [l["leg"] for l in ls] == ["core", "faults"] for ls in hops.values()) and all(
         {"hop", "leg", "name", "label", "id", "version", "base", "image", "sums", "algo", "args", "docker_from", "timeout", "prove_timeout"} <= set(l) for l in legs), str(sorted(hops)))
-    check("each hop's legs boot the Debian it starts from", all(l["version"] == h.split("-")[1] and ("/%s-genericcloud-" % ("debian-" + l["version"])) in "/" + l["image"]
-                                                              for h, ls in hops.items() for l in ls), "")
+    # Debian's generic cloud image, or Ubuntu's server cloud image, of the release the hop starts from
+    check("each hop's legs boot the system it starts from", all(l["id"] == h.split("-")[0] and l["version"] == h.split("-")[1] and (
+        ("/%s-genericcloud-" % ("debian-" + l["version"])) in "/" + l["image"] if l["id"] == "debian" else l["image"] == "ubuntu-%s-server-cloudimg-amd64.img" % l["version"])
+        for h, ls in hops.items() for l in ls), "")
     check("the faults leg has more time than the core leg, and the proof step less than the job (at most the 360 minutes of a job)", all(
         ls[1]["timeout"] > ls[0]["timeout"] and all(l["prove_timeout"] < l["timeout"] <= 360 for l in ls) for ls in hops.values()), "")
-    p = subprocess.run([BASH, "-c", 'source "$1"; for h in debian-11-12 debian-12-13 debian-13-14; do printf "%s=" "$h"; hop_facts "$h" || echo none; done', "x", posix(SCRIPT)],
+    p = subprocess.run([BASH, "-c", 'source "$1"; for h in debian-11-12 debian-12-13 ubuntu-24.04-26.04 debian-13-14; do printf "%s=" "$h"; hop_facts "$h" || echo none; done', "x", posix(SCRIPT)],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     check("the script knows the facts of each hop of the legs file, and no other", p.stdout.decode("utf-8", "replace").split() ==
-          ["debian-11-12=11", "bullseye", "12", "bookworm", "debian-12-13=12", "bookworm", "13", "trixie", "debian-13-14=none"], p.stdout.decode("utf-8", "replace"))
+          ["debian-11-12=11", "bullseye", "12", "bookworm", "debian-12-13=12", "bookworm", "13", "trixie", "ubuntu-24.04-26.04=24.04", "noble", "26.04", "resolute", "debian-13-14=none"], p.stdout.decode("utf-8", "replace"))
     try:
         import yaml
         wf = yaml.safe_load(open(WORKFLOW, encoding="utf-8"))
@@ -2273,6 +2280,14 @@ def scenarios_faults(base):
     # the restart that the core does not answer after a repair
     scenario("scenario: a core that does not answer POST reboot for 40 s after a repair", "faults", "f2", {"reboot_502_s": 40}, passes("F2 the unit killed after", "the core did not answer (HTTP 502)"), base=base)
     scenario("scenario: an answer to POST reboot that the shutdown cuts, after a power cut", "faults", "f4", {"reboot_lost_answer": True}, passes("F4 a power cut", "the answer to POST reboot was lost"), base=base)
+    # Ubuntu 26.04 on the runner: the answer was lost, the look at the boot id found the guest away, and the core answered the status with another boot id 15 s after the restart was asked for
+    scenario("scenario: a restart quicker than the look after a lost answer", "faults", "f2", {"reboot_lost_answer": True, "down_seconds": 1, "boot_look_missed": True},
+             passes("F2 the unit killed after", "the answer to POST reboot was lost"), base=base)
+    # a hop in one step (Ubuntu): block 4 downloads the whole upgrade, block 5 runs it, block 6 has no dpkg work
+    one = {"ONE_STEP": "1"}
+    scenario("scenario: a hop in one step that reaches the restart with the network cut", "faults", "f3", {"net_cut_ignored": True}, passes("F3 the network cut after", "needs no network"), env_extra=one, base=base)
+    scenario("scenario: a hop in one step that stops for the network after its point of no return", "faults", "f3", {}, fails("F3 the network cut after", "needs no network"), env_extra=one, base=base)
+    scenario("scenario: a hop in one step, its power cut in block 5", "faults", "f4", {}, passes("F4 a power cut", "the power was cut in block minimal"), env_extra=one, base=base)
     _, _, text = scenario("scenario: a core that never accepts the restart after a repair", "faults", "f2", {"reboot_502_s": 10 ** 6}, fails("F2 the unit killed after", "POST reboot is accepted"), base=base)
     check("scenario: a core that never accepts the restart after a repair is one FAIL, no INVALID", not text or ("INVALID" not in head(text) and text.count("not reached") == 1), (text or "")[:1200])
 

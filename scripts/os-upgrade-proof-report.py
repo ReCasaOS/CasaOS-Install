@@ -27,7 +27,7 @@ box's own, and with the guest asked for what only it can say (snapshots of the m
     F1  the unit killed in block 3 or 4: interrupted, the core unwinds by itself, failed, the machine as before
     F2  the unit killed after the point of no return, with dpkg at work: interrupted, no repair by itself, resume, awaiting_reboot, the restart, succeeded
     F3  the network cut after it: stopped_at_waypoint of the class network, the network back, resume, awaiting_reboot, the restart, succeeded
-    F4  a power cut (the QEMU monitor's reset) in block 6, with dpkg at work: interrupted (power), half upgraded, resume, and then what nobody has seen: printed
+    F4  a power cut (the QEMU monitor's reset) in block 6 (5 on a hop in one step), with dpkg at work: interrupted (power), half upgraded, resume, and then what nobody has seen: printed
         (each fault starts with the clock of the restored guest set from the runner's; a fault that was not delivered in the middle of dpkg is NOT TESTABLE)
 
 A verdict fails with what was expected and what was recorded. What a verdict cannot be silent about: a case that did not run says so (NOT TESTABLE, with the reason the run stopped), a verdict
@@ -66,12 +66,13 @@ CLOCK_SLACK = 5.0
 ROW_FIELDS = 19
 BK_GLOB = "casaos-os-upgrade-"
 # the hops the proof knows: (the version it is on, its codename, the version it goes to, that codename)
-HOPS = {"debian-11-12": ("11", "bullseye", "12", "bookworm"), "debian-12-13": ("12", "bookworm", "13", "trixie")}
+HOPS = {"debian-11-12": ("11", "bullseye", "12", "bookworm"), "debian-12-13": ("12", "bookworm", "13", "trixie"),
+        "ubuntu-24.04-26.04": ("24.04", "noble", "26.04", "resolute")}
 SECURITY_ARCHIVE_MIN_CORE = "v0.4.76"     # the first core that moves the security line of Debian 11 to the archive in a refresh (the script writes the one it used in c3b.min-core)
 
 CASES_CORE = (("C1", "flag off"), ("C2", "switch on"), ("C3", "refresh"), ("C3b", "refresh with the security line at security.debian.org"), ("C3c", "refresh with a security line the rewrite does not recognise"), ("C4", "plan and rehearsal"), ("C5", "refusals"), ("C6", "call-off before the point of no return"), ("C7", "the hop"))
 CASES_FAULTS = (("F1", "the unit killed before the point of no return"), ("F2", "the unit killed after the point of no return"), ("F3", "the network cut after the point of no return"),
-                ("F4", "a power cut during block 6"))
+                ("F4", "a power cut while dpkg upgrades"))
 
 lines = []
 P = lines.append
@@ -96,6 +97,11 @@ def exists(name):
 # the hop of this run (the script writes it; a run of a script older than the hop input is the hop from Debian 11)
 HOP = read("hop").strip() or "debian-11-12"
 FROM_V, FROM_C, TO_V, TO_C = HOPS.get(HOP, HOPS["debian-11-12"])
+# the distribution of the hop, as /etc/os-release names it (ID) and as the report says it
+DIST_ID = "ubuntu" if HOP.startswith("ubuntu-") else "debian"
+DIST = "Ubuntu" if DIST_ID == "ubuntu" else "Debian"
+# a hop whose block 5 runs the whole upgrade (the script writes it): nothing is left to download after its point of no return
+ONE_STEP = read("one-step").strip() == "1"
 
 
 def verdict(name, ok, detail=""):
@@ -487,8 +493,8 @@ try:
     osr = osrelease("guest/os-release")
     if not osr.get("ID"):
         invalid("guest/os-release is missing or empty: the guest did not say what system it is")
-    elif (osr.get("ID"), osr.get("VERSION_ID")) != ("debian", FROM_V):
-        invalid("the guest is %s %s, the proof needs Debian %s" % (osr.get("ID"), osr.get("VERSION_ID"), FROM_V))
+    elif (osr.get("ID"), osr.get("VERSION_ID")) != (DIST_ID, FROM_V):
+        invalid("the guest is %s %s, the proof needs %s %s" % (osr.get("ID"), osr.get("VERSION_ID"), DIST, FROM_V))
     for ln in read("guest/timers-on").splitlines():
         w = ln.split()
         if w[:1] in (["apt-daily.timer"], ["apt-daily-upgrade.timer"]) and w[1:2] != ["active"]:
@@ -812,7 +818,7 @@ try:
         if not gate(cid, title):
             return False
         if FROM_V != "11":
-            not_testable("%s %s" % (cid, title), "the security line of Debian 11 is not part of the hop from Debian %s (its security line is still served)" % FROM_V)
+            not_testable("%s %s" % (cid, title), "the security line of Debian 11 is not part of the hop from %s %s (its security line is still served)" % (DIST, FROM_V))
             return False
         ver, mn = read("%s.core-version" % t).strip(), read("%s.min-core" % t).strip() or SECURITY_ARCHIVE_MIN_CORE
         have, need = version_of(ver), version_of(mn)
@@ -991,7 +997,7 @@ try:
         c.check(exp is not None and since is not None and 0 < exp - since <= REHEARSAL_TTL + CLOCK_SLACK, "the rehearsal is held for at most 30 minutes (expires_at - since)", "at most %d s" % REHEARSAL_TTL,
                 "since %s, expires_at %s" % (d.get("since"), d.get("expires_at")))
         c.check("discard" in last.acts, "rehearsed offers `discard`", "discard among the actions", last.actions)
-        c.check((reh.num("sources_" + TO_C) or 0) > 0 and reh.num("sources_" + FROM_C) == 0, "the sources of Debian %s are in place" % TO_V, "%s lines, no %s line" % (TO_C, FROM_C),
+        c.check((reh.num("sources_" + TO_C) or 0) > 0 and reh.num("sources_" + FROM_C) == 0, "the sources of %s %s are in place" % (DIST, TO_V), "%s lines, no %s line" % (TO_C, FROM_C),
                 "%s %s, %s %s" % (TO_C, reh.f.get("sources_" + TO_C), FROM_C, reh.f.get("sources_" + FROM_C)))
         c.check(bool(apt_diff(before, reh)), "/etc/apt is not what it was", "changed", "unchanged")
         c.check(all(v[0] != "active" for v in reh.timers.values()), "the timers of apt are stopped", "none active", dict_str(reh.timers))
@@ -1233,7 +1239,7 @@ try:
                 "pnr %s, half_upgraded %s, busy %s" % (d.get("pnr"), d.get("half_upgraded"), d.get("busy")))
         c.check("reboot" in (d.get("actions") or []), "%sawaiting_reboot offers `reboot`" % label, "reboot among the actions", few(d.get("actions") or []))
         c.check(aw.f.get("busy_flag") == "yes", "%sthe busy flag stays up while the machine waits" % label, "yes", aw.f.get("busy_flag"))
-        c.check((aw.num("sources_" + TO_C) or 0) > 0 and aw.num("sources_" + FROM_C) == 0, "%sthe sources are those of Debian %s" % (label, TO_V), "%s lines, no %s line" % (TO_C, FROM_C),
+        c.check((aw.num("sources_" + TO_C) or 0) > 0 and aw.num("sources_" + FROM_C) == 0, "%sthe sources are those of %s %s" % (label, DIST, TO_V), "%s lines, no %s line" % (TO_C, FROM_C),
                 "%s %s, %s %s" % (TO_C, aw.f.get("sources_" + TO_C), FROM_C, aw.f.get("sources_" + FROM_C)))
         c.check(aw.f.get("uname") == before.f.get("uname"), "%sthe old kernel still runs until the restart" % label, "kernel %s" % before.f.get("uname"), "kernel %s" % aw.f.get("uname"))
         got = reboot_accepted(c, "%s-reboot" % p, label)
@@ -1554,10 +1560,23 @@ try:
             return
         run = rows("f3-stopped")
         last = last_answered(run)
-        if last is not None and last.state == "awaiting_reboot":
+        if last is not None and last.state == "awaiting_reboot" and not ONE_STEP:
             not_testable("F3 " + CASES_FAULTS[2][1], "the run reached awaiting_reboot with the network cut: it had nothing left to download (%s)" % " > ".join(states_of(run)))
             return
         c = Case("F3 " + CASES_FAULTS[2][1])
+        if ONE_STEP and start.code == 202:
+            # block 4 of a hop in one step downloads the whole upgrade: what the case proves is that the hop needs no network after its point of no return
+            cut = [ln.strip() for ln in read("f3.cut").splitlines() if ln.strip() and not ln.startswith("#")]
+            c.check(bool(cut) and cut[-1] == "cut", "the routes of the guest were taken away after the point of no return, and a request from the guest failed (the proof that it is cut)", "cut", " ".join(cut) or "no record")
+            done = reached(c, "f3-stopped", ("awaiting_reboot",), "a hop in one step needs no network after its point of no return: it reaches the restart with the network cut", ("running", "awaiting_reboot", "-"))
+            if done is None:
+                return
+            c.note("a hop in one step needs no network after its point of no return")
+            if not (("restored" in read("f3.restore")) or ("present" in read("f3.restore"))):
+                invalid("F3: the network was not given back (%s)" % (cell(read("f3.restore").strip(), 120) or "no record"))
+            hop_tail_checks(c, "f3", base, "")
+            c.done()
+            return
         if start.code != 202:
             c.check(False, "POST start (the hop) is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
@@ -1616,6 +1635,9 @@ try:
         if not clock_set("F4", "F4-reset"):
             return
         old = read("f4.boot-old").strip()
+        at = read("f4.reset-at").split()
+        if len(at) >= 3:
+            c.note("the power was cut in block %s" % at[-1])
         bt = [r for r in table("boot-f4-reset.tsv") if len(r) == 3]
         new = bt[-1][2] if bt else "-"
         c.check(old not in ("", "-") and new not in ("", "-") and old != new, "the guest restarted with another boot id after the reset", "a boot id other than %s" % old, new)
@@ -1682,7 +1704,7 @@ try:
         if not exists("savevm.ok"):
             invalid("the snapshot of the whole machine was not taken: %s" % cell(read("savevm.txt").strip(), 200))
             return
-        P("Start state of the faults: Debian " + FROM_V + ", refreshed, rehearsed and put back, plan %s live; snapshot taken." % cell(plan.get("plan_id"), 40))
+        P("Start state of the faults: " + DIST + " " + FROM_V + ", refreshed, rehearsed and put back, plan %s live; snapshot taken." % cell(plan.get("plan_id"), 40))
 
     # ---- the order of the report -----------------------------------------------------------------------------------------------------
 
@@ -1710,7 +1732,7 @@ try:
         if k:
             box[k] = v.strip()
     if box:
-        P("Guest: %s, kernel %s, apt %s, systemd %s, Docker %s, %s CPUs, %s MB." % (cell(read("guest/os").strip() or "Debian " + FROM_V, 40), cell(box.get("kernel", "?"), 40), cell(box.get("apt", "?"), 40),
+        P("Guest: %s, kernel %s, apt %s, systemd %s, Docker %s, %s CPUs, %s MB." % (cell(read("guest/os").strip() or DIST + " " + FROM_V, 40), cell(box.get("kernel", "?"), 40), cell(box.get("apt", "?"), 40),
                                                                                   cell(box.get("systemd", "?"), 40), cell(box.get("docker", "?"), 20), cell(box.get("cpus", "?"), 4), cell(box.get("memory_mb", "?"), 8)))
     finish()
 except SystemExit:
