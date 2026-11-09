@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.119] - 2026-11-09
+
+Components: CasaOS-AppManagement `v0.4.96`. Unchanged from v0.5.118: CasaOS `v0.4.108`, CasaOS-UI `v0.4.165`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A OneDrive backup destination can be saved after the sign-in.**
+  - rclone's OneDrive configuration goes on after the token to questions (the kind of connection, which drive) and asks them on the daemon's own terminal, where nobody answers: saving never returned and the dashboard said the rclone daemon was not answering. rclone is now asked not to be interactive; it keeps the token, `drive_id` and `drive_type` the sign-in gave and answers at once ([ReCasaOS/CasaOS-AppManagement#54](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/54)). Reproduced with rclone 1.75.1.
+- **The sign-in can be finished when the browser reached rclone itself.**
+  - Through a tunnel to the box, rclone takes the code and exits by itself; finishing the sign-in then said no sign-in was waiting while the token was already there. It is now taken ([ReCasaOS/CasaOS-AppManagement#53](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/53)).
+  - Both reported in [ReCasaOS/CasaOS#7](https://github.com/ReCasaOS/CasaOS/issues/7).
+
+### Proof
+
+The app manager's CI passed on both pull requests, and its release run passed on its tag. A real Microsoft sign-in followed by a save was not run by us. The install check of this release: result added after the check.
+
 ## [0.5.118] - 2026-11-09
 
 Components: CasaOS-AppManagement `v0.4.95`. Unchanged from v0.5.117: CasaOS `v0.4.108`, CasaOS-UI `v0.4.165`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
@@ -17,7 +33,7 @@ Components: CasaOS-AppManagement `v0.4.95`. Unchanged from v0.5.117: CasaOS `v0.
 
 ### Proof
 
-The app manager's CI passed on both pull requests. The install check of this release: result added after the check.
+The app manager's CI passed on both pull requests. The install check passed on all 12 legs (run 42626920644, rerun once after the app manager's release assets were not yet published).
 
 ## [0.5.117] - 2026-11-09
 
