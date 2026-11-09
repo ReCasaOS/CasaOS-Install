@@ -1571,6 +1571,7 @@ try:
             done = reached(c, "f3-stopped", ("awaiting_reboot",), "a hop in one step needs no network after its point of no return: it reaches the restart with the network cut", ("running", "awaiting_reboot", "-"))
             if done is None:
                 return
+            c.note("a hop in one step needs no network after its point of no return")
             if not (("restored" in read("f3.restore")) or ("present" in read("f3.restore"))):
                 invalid("F3: the network was not given back (%s)" % (cell(read("f3.restore").strip(), 120) or "no record"))
             hop_tail_checks(c, "f3", base, "")
@@ -1634,6 +1635,9 @@ try:
         if not clock_set("F4", "F4-reset"):
             return
         old = read("f4.boot-old").strip()
+        at = read("f4.reset-at").split()
+        if len(at) >= 3:
+            c.note("the power was cut in block %s" % at[-1])
         bt = [r for r in table("boot-f4-reset.tsv") if len(r) == 3]
         new = bt[-1][2] if bt else "-"
         c.check(old not in ("", "-") and new not in ("", "-") and old != new, "the guest restarted with another boot id after the reset", "a boot id other than %s" % old, new)

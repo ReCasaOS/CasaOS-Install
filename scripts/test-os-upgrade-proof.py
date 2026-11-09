@@ -2287,7 +2287,7 @@ def scenarios_faults(base):
     one = {"ONE_STEP": "1"}
     scenario("scenario: a hop in one step that reaches the restart with the network cut", "faults", "f3", {"net_cut_ignored": True}, passes("F3 the network cut after", "needs no network"), env_extra=one, base=base)
     scenario("scenario: a hop in one step that stops for the network after its point of no return", "faults", "f3", {}, fails("F3 the network cut after", "needs no network"), env_extra=one, base=base)
-    scenario("scenario: a hop in one step, its power cut in block 5", "faults", "f4", {}, passes("F4 a power cut", "interrupted by a power cut"), env_extra=one, base=base)
+    scenario("scenario: a hop in one step, its power cut in block 5", "faults", "f4", {}, passes("F4 a power cut", "the power was cut in block minimal"), env_extra=one, base=base)
     _, _, text = scenario("scenario: a core that never accepts the restart after a repair", "faults", "f2", {"reboot_502_s": 10 ** 6}, fails("F2 the unit killed after", "POST reboot is accepted"), base=base)
     check("scenario: a core that never accepts the restart after a repair is one FAIL, no INVALID", not text or ("INVALID" not in head(text) and text.count("not reached") == 1), (text or "")[:1200])
 
