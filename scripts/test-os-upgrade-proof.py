@@ -2283,6 +2283,11 @@ def scenarios_faults(base):
     # Ubuntu 26.04 on the runner: the answer was lost, the look at the boot id found the guest away, and the core answered the status with another boot id 15 s after the restart was asked for
     scenario("scenario: a restart quicker than the look after a lost answer", "faults", "f2", {"reboot_lost_answer": True, "down_seconds": 1, "boot_look_missed": True},
              passes("F2 the unit killed after", "the answer to POST reboot was lost"), base=base)
+    # a hop in one step (Ubuntu): block 4 downloads the whole upgrade, block 5 runs it, block 6 has no dpkg work
+    one = {"ONE_STEP": "1"}
+    scenario("scenario: a hop in one step that reaches the restart with the network cut", "faults", "f3", {"net_cut_ignored": True}, passes("F3 the network cut after", "needs no network"), env_extra=one, base=base)
+    scenario("scenario: a hop in one step that stops for the network after its point of no return", "faults", "f3", {}, fails("F3 the network cut after", "needs no network"), env_extra=one, base=base)
+    scenario("scenario: a hop in one step, its power cut in block 5", "faults", "f4", {}, passes("F4 a power cut", "interrupted by a power cut"), env_extra=one, base=base)
     _, _, text = scenario("scenario: a core that never accepts the restart after a repair", "faults", "f2", {"reboot_502_s": 10 ** 6}, fails("F2 the unit killed after", "POST reboot is accepted"), base=base)
     check("scenario: a core that never accepts the restart after a repair is one FAIL, no INVALID", not text or ("INVALID" not in head(text) and text.count("not reached") == 1), (text or "")[:1200])
 

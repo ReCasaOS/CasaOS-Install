@@ -27,7 +27,7 @@ box's own, and with the guest asked for what only it can say (snapshots of the m
     F1  the unit killed in block 3 or 4: interrupted, the core unwinds by itself, failed, the machine as before
     F2  the unit killed after the point of no return, with dpkg at work: interrupted, no repair by itself, resume, awaiting_reboot, the restart, succeeded
     F3  the network cut after it: stopped_at_waypoint of the class network, the network back, resume, awaiting_reboot, the restart, succeeded
-    F4  a power cut (the QEMU monitor's reset) in block 6, with dpkg at work: interrupted (power), half upgraded, resume, and then what nobody has seen: printed
+    F4  a power cut (the QEMU monitor's reset) in block 6 (5 on a hop in one step), with dpkg at work: interrupted (power), half upgraded, resume, and then what nobody has seen: printed
         (each fault starts with the clock of the restored guest set from the runner's; a fault that was not delivered in the middle of dpkg is NOT TESTABLE)
 
 A verdict fails with what was expected and what was recorded. What a verdict cannot be silent about: a case that did not run says so (NOT TESTABLE, with the reason the run stopped), a verdict
@@ -72,7 +72,7 @@ SECURITY_ARCHIVE_MIN_CORE = "v0.4.76"     # the first core that moves the securi
 
 CASES_CORE = (("C1", "flag off"), ("C2", "switch on"), ("C3", "refresh"), ("C3b", "refresh with the security line at security.debian.org"), ("C3c", "refresh with a security line the rewrite does not recognise"), ("C4", "plan and rehearsal"), ("C5", "refusals"), ("C6", "call-off before the point of no return"), ("C7", "the hop"))
 CASES_FAULTS = (("F1", "the unit killed before the point of no return"), ("F2", "the unit killed after the point of no return"), ("F3", "the network cut after the point of no return"),
-                ("F4", "a power cut during block 6"))
+                ("F4", "a power cut while dpkg upgrades"))
 
 lines = []
 P = lines.append
@@ -100,6 +100,8 @@ FROM_V, FROM_C, TO_V, TO_C = HOPS.get(HOP, HOPS["debian-11-12"])
 # the distribution of the hop, as /etc/os-release names it (ID) and as the report says it
 DIST_ID = "ubuntu" if HOP.startswith("ubuntu-") else "debian"
 DIST = "Ubuntu" if DIST_ID == "ubuntu" else "Debian"
+# a hop whose block 5 runs the whole upgrade (the script writes it): nothing is left to download after its point of no return
+ONE_STEP = read("one-step").strip() == "1"
 
 
 def verdict(name, ok, detail=""):
@@ -1558,10 +1560,22 @@ try:
             return
         run = rows("f3-stopped")
         last = last_answered(run)
-        if last is not None and last.state == "awaiting_reboot":
+        if last is not None and last.state == "awaiting_reboot" and not ONE_STEP:
             not_testable("F3 " + CASES_FAULTS[2][1], "the run reached awaiting_reboot with the network cut: it had nothing left to download (%s)" % " > ".join(states_of(run)))
             return
         c = Case("F3 " + CASES_FAULTS[2][1])
+        if ONE_STEP and start.code == 202:
+            # block 4 of a hop in one step downloads the whole upgrade: what the case proves is that the hop needs no network after its point of no return
+            cut = [ln.strip() for ln in read("f3.cut").splitlines() if ln.strip() and not ln.startswith("#")]
+            c.check(bool(cut) and cut[-1] == "cut", "the routes of the guest were taken away after the point of no return, and a request from the guest failed (the proof that it is cut)", "cut", " ".join(cut) or "no record")
+            done = reached(c, "f3-stopped", ("awaiting_reboot",), "a hop in one step needs no network after its point of no return: it reaches the restart with the network cut", ("running", "awaiting_reboot", "-"))
+            if done is None:
+                return
+            if not (("restored" in read("f3.restore")) or ("present" in read("f3.restore"))):
+                invalid("F3: the network was not given back (%s)" % (cell(read("f3.restore").strip(), 120) or "no record"))
+            hop_tail_checks(c, "f3", base, "")
+            c.done()
+            return
         if start.code != 202:
             c.check(False, "POST start (the hop) is accepted", "HTTP 202", "%s %s" % (start.shown(), few(sorted(start.detail.keys()))))
             c.done()
