@@ -37,7 +37,7 @@ Components: CasaOS-AppManagement `v0.4.96`. Unchanged from v0.5.118: CasaOS `v0.
 
 ### Proof
 
-The app manager's CI passed on both pull requests, and its release run passed on its tag. A real Microsoft sign-in followed by a save was not run by us. The install check of this release: result added after the check.
+The app manager's CI passed on both pull requests, and its release run passed on its tag. A real Microsoft sign-in followed by a save was not run by us. The install check passed on all 12 legs (run 42636751608).
 
 ## [0.5.118] - 2026-11-09
 
