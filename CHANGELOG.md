@@ -19,7 +19,7 @@ Components: CasaOS-UI `v0.4.160`, CasaOS-AppManagement `v0.4.91`. Unchanged from
 
 ### Proof
 
-The CI of both pull requests passed, and the release runs of CasaOS-AppManagement `v0.4.91` and CasaOS-UI `v0.4.160` passed on their tags. Not proven: a sign-in with a real Microsoft account. The install check of this release: result added after it.
+The CI of both pull requests passed, and the release runs of CasaOS-AppManagement `v0.4.91` and CasaOS-UI `v0.4.160` passed on their tags. Not proven: a sign-in with a real Microsoft account. The install check of this release passes on all 12 legs of the published bundle, each on its first attempt: Debian 11, 12 and 13, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42564185090](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42564185090)).
 
 ## [0.5.108] - 2026-11-09
 
