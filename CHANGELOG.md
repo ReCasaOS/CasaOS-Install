@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.118] - 2026-11-09
+
+Components: CasaOS-AppManagement `v0.4.95`. Unchanged from v0.5.117: CasaOS `v0.4.108`, CasaOS-UI `v0.4.165`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **Saving a OneDrive, Google Drive or Dropbox backup destination before the sign-in has finished says so, instead of looking like a dead rclone.**
+  - Saved without a token, rclone started its own browser sign-in and waited for a browser the box does not have until the call timed out; the dashboard then showed "the rclone daemon is not answering" although it was running. The destination is now refused at once with "sign in first" ([ReCasaOS/CasaOS-AppManagement#52](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/52)). Reported in [ReCasaOS/CasaOS#7](https://github.com/ReCasaOS/CasaOS/issues/7).
+
+### Added
+
+- **Docker labels of a container are accepted and checked by the app manager** ([ReCasaOS/CasaOS-AppManagement#51](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/51)). The API half only: names the system uses are refused, and `GET /info` lists `labels` under `features`. The dashboard side is not in this release.
+
+### Proof
+
+The app manager's CI passed on both pull requests. The install check of this release: result added after the check.
+
 ## [0.5.117] - 2026-11-09
 
 Components: CasaOS `v0.4.108`. Unchanged from v0.5.116: CasaOS-UI `v0.4.165`, CasaOS-AppManagement `v0.4.93`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
