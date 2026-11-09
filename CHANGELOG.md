@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.114] - 2026-11-09
+
+Components: CasaOS `v0.4.107`. Unchanged from v0.5.113: CasaOS-UI `v0.4.163`, CasaOS-AppManagement `v0.4.93`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The plan of the upgrade from Ubuntu 22.04 to 24.04 is no longer blocked on a cloud image.**
+  - Ubuntu's cloud images record the archive's priority, `required`, for libdb5.3, libext2fs2, libssl3, libtirpc3 and usrmerge, and the plan refused to remove a required package.
+  - These are noble's 64-bit time_t renames (each `…t64` is installed by the same upgrade) and usrmerge, which noble no longer needs. The plan and the guard of the hop now let them through when the successor is installed; any other required removal still stops ([ReCasaOS/CasaOS#123](https://github.com/ReCasaOS/CasaOS/pull/123)).
+  - The first upgrade proof on the Ubuntu 22.04 cloud image found it: the install, the switch and the refresh passed, the plan was blocked.
+
+### Proof
+
+The core's CI passed on its pull request, and its release run passed on its tag. The install check and the upgrade proof of this release: results added after them.
+
 ## [0.5.113] - 2026-11-09
 
 Components: CasaOS `v0.4.106`, CasaOS-UI `v0.4.163`, CasaOS-AppManagement `v0.4.93`. Unchanged from v0.5.112: CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
