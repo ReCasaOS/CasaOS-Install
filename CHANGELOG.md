@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.108] - 2026-11-09
+
+Components: CasaOS `v0.4.103`. Unchanged from v0.5.107: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The upgrade from Ubuntu 24.04 to 26.04 no longer stops on the new name of a root login setting.**
+  - OpenSSH 9.6 of 24.04 prints `permitrootlogin without-password`; OpenSSH 10.2 of 26.04 prints `prohibit-password`, the other name of the same setting. Block 7 compared them as text and stopped before the restart.
+  - For that hop, the comparison reads both names as one setting; any other change still stops it. The Debian upgrades are unchanged ([ReCasaOS/CasaOS#118](https://github.com/ReCasaOS/CasaOS/pull/118)).
+  - The fourth upgrade proof on the Ubuntu 24.04 cloud image found it, after the whole upgrade to 26.04 had gone through.
+
+### Proof
+
+The core's CI passed on its pull request. The release run of v0.5.107, its install check included, passed. The install check and the upgrade proof of this release: results added after them.
+
 ## [0.5.107] - 2026-11-08
 
 Components: CasaOS `v0.4.102`. Unchanged from v0.5.106: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
