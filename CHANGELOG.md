@@ -48,7 +48,11 @@ Components: CasaOS `v0.4.108`. Unchanged from v0.5.116: CasaOS-UI `v0.4.165`, Ca
 
 ### Proof
 
-The core's CI passed on the pull request, and its release run passed on its tag. The install check and the upgrade proof of this release: results added after them.
+The core's CI passed on the pull request, and its release run passed on its tag. The install check of this release passes on all 12 legs of the published bundle: Debian 11, 12 and 13, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42622564268](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42622564268)).
+
+The upgrade proof from Ubuntu 22.04 to 24.04, on Ubuntu's 22.04 cloud image under QEMU, passes on both legs ([run 42624706117](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42624706117)):
+- **core** (C1–C7): the flag off, the switch, the refresh, the plan and its rehearsal, the refusals, the call-off and the hop itself, its restart and its check. The refresh with another security line (C3b, C3c) is not testable: those are lines of Debian 11.
+- **faults** (F1–F4): the unit killed before and after the point of no return, the network cut after it, and a power cut while dpkg upgrades; each is resumed to the end. F2, the kill that left a package half unpacked in v0.5.114, now passes.
 
 ## [0.5.116] - 2026-11-09
 
@@ -106,7 +110,9 @@ Components: CasaOS `v0.4.107`. Unchanged from v0.5.113: CasaOS-UI `v0.4.163`, Ca
 
 ### Proof
 
-The core's CI passed on its pull request, and its release run passed on its tag. The install check and the upgrade proof of this release: results added after them.
+The core's CI passed on its pull request, and its release run passed on its tag. The install check of this release passes on all 12 legs of the published bundle: Debian 11, 12 and 13, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42609241103](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42609241103)).
+
+The upgrade proof from Ubuntu 22.04 to 24.04 ([run 42611438391](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42611438391)): the core leg passes, C1–C7, the hop included. The faults leg fails on F2: the unit was killed while dpkg unpacked libssl3t64, and the repair stopped with `dpkg_broken`. F1, F3 and F4 pass. Fixed in v0.5.117.
 
 ## [0.5.113] - 2026-11-09
 
@@ -147,7 +153,9 @@ Components: CasaOS `v0.4.105`. Unchanged from v0.5.111: CasaOS-UI `v0.4.162`, Ca
 
 ### Proof
 
-The core's suite passed on Linux and its CI passed on the pull request. The install check and the upgrade proof of this release: results added after them.
+The core's suite passed on Linux and its CI passed on the pull request. The install check of this release passes on all 12 legs of the published bundle: Debian 11, 12 and 13, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled) ([run 42597871408](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42597871408)).
+
+The upgrade proof from Ubuntu 22.04 to 24.04 ([run 42599591491](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/42599591491)) fails at C4: the install, the switch and the refresh pass, and the plan is blocked on five required packages of the cloud image. Fixed in v0.5.114.
 
 ## [0.5.111] - 2026-11-09
 
