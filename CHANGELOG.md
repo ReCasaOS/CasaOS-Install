@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.117] - 2026-11-09
+
+Components: CasaOS `v0.4.108`. Unchanged from v0.5.116: CasaOS-UI `v0.4.165`, CasaOS-AppManagement `v0.4.93`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **An OS upgrade interrupted in the middle of a package's unpack can be resumed.**
+  - A kill or a power cut while dpkg unpacks leaves the package half installed. Neither `dpkg --configure -a` nor `apt-get -f install` mends that, and `resume` stopped with `dpkg_broken`.
+  - The repair that `resume` runs now unpacks such a package again, first, from the archive already in apt's cache; one whose archive is not there is left to the steps that follow, as before ([ReCasaOS/CasaOS#125](https://github.com/ReCasaOS/CasaOS/pull/125)). It applies to every hop.
+  - The upgrade proof from Ubuntu 22.04 to 24.04 found it: the unit was killed while dpkg unpacked libssl3t64. The core leg of that proof passed: the hop from 22.04 to 24.04, its restart and its check.
+
+### Proof
+
+The core's CI passed on the pull request, and its release run passed on its tag. The install check and the upgrade proof of this release: results added after them.
+
 ## [0.5.116] - 2026-11-09
 
 Components: CasaOS-UI `v0.4.165`. Unchanged from v0.5.115: CasaOS `v0.4.107`, CasaOS-AppManagement `v0.4.93`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
