@@ -2,6 +2,28 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.116] - 2026-11-09
+
+Components: CasaOS-UI `v0.4.165`. Unchanged from v0.5.115: CasaOS `v0.4.107`, CasaOS-AppManagement `v0.4.93`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The storage manager, in the shape of the Backups windows.** Its four tabs are cards with an icon tile, a name, a chip that says where things stand, and rows under it ([ReCasaOS/CasaOS-UI#163](https://github.com/ReCasaOS/CasaOS-UI/pull/163)).
+  - **ZFS**: one card per pool with its health, layout, last scan and live read/write rates, the drives as chips; the datasets as a table whose rows open their snapshots in place, with what "own size" and "written since" mean.
+  - **Storage**: a card per storage with its tags (OS, Merged, SnapRAID, "80 % full"), its drive and mount point, the bar and what is free; the members of an array as chips, the one that failed in red with Take out.
+  - **Merged storage**: CasaOS HD with its sources as a table; SnapRAID as a card with its state, parity, last sync, last check and changes, Sync now in the head.
+  - **Drive**: a table with what each drive carries, its SMART health and its temperature.
+  - The window takes the width of the Backups one: six columns did not fit in the old 640 px.
+
+### Not in it
+
+- The rare actions stay as buttons rather than a menu; a missing merge source is not listed among the sources; nothing was looked at on a phone.
+- The new texts exist in English and French only.
+
+### Proof
+
+The dashboard's CI passed on the pull request (the full suite and the build), and the release run of CasaOS-UI v0.4.165 passed on its tag. The install check of this release: result added after the check.
+
 ## [0.5.115] - 2026-11-09
 
 Components: CasaOS-LocalStorage `v0.4.60`, CasaOS-UI `v0.4.164`. Unchanged from v0.5.114: CasaOS `v0.4.107`, CasaOS-AppManagement `v0.4.93`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
