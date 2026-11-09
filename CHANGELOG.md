@@ -2,6 +2,32 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.113] - 2026-11-09
+
+Components: CasaOS `v0.4.106`, CasaOS-UI `v0.4.163`, CasaOS-AppManagement `v0.4.93`. Unchanged from v0.5.112: CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A signed-in account could read a service's private routes as the box itself.** `GET /v1/sys/proxy` fetched the address the "add a link" panel gave it with CasaOS-Common's HTTP helpers, which add the internal secret to any request aimed at loopback, and relayed the whole response ([ReCasaOS/CasaOS#122](https://github.com/ReCasaOS/CasaOS/pull/122)).
+  - The route now sends a plain request, accepts `http` and `https` addresses only (400 otherwise), and gives back only the status the address answered with. The panel reads nothing else.
+  - A test shows the service receiving no `Authorization` header; it failed before the change.
+
+### Added
+
+- **An app that shows nothing in the dashboard's frame says why.** With "open apps in the dashboard" on, an app that forbids framing, serves an HTTPS certificate the browser does not trust, or is served over plain HTTP under an HTTPS dashboard opened as an empty dialog. The box now asks the app, the dashboard says which of the three it is and offers "Open in a new tab", and that app opens in a tab from then on ([ReCasaOS/CasaOS-AppManagement#47](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/47), [ReCasaOS/CasaOS-UI#151](https://github.com/ReCasaOS/CasaOS-UI/pull/151)).
+  - `GET /v2/app_management/web/frame-check`; a box without it changes nothing in the dashboard.
+- **Follow a running backup, and stop it.** CasaOS-AppManagement `v0.4.93` serves what the dashboard of v0.5.111 and v0.5.112 (CasaOS-UI `v0.4.162`) already asks for: what is copied, how fast, how much out of how much, and a Stop button (`GET /backup/running`, `POST /backup/running/{backup_id}/stop`) ([ReCasaOS/CasaOS-AppManagement#50](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/50), [ReCasaOS/CasaOS-UI#155](https://github.com/ReCasaOS/CasaOS-UI/pull/155)). That dashboard tolerates an AppManagement without the routes, and had nothing to show without them.
+
+### Not in it
+
+- The frame check is checked on the handler against a real box's apps (NiFi, Jellyfin) and in the dashboard's tests, not in a browser with both parts deployed.
+- The live progress of a backup was not run on a real box.
+- The upgrade from Ubuntu 22.04 to 24.04 of v0.5.112 is still unproven on a real guest.
+
+### Proof
+
+The CI of the three pull requests passed, and the release runs of CasaOS `v0.4.106`, CasaOS-AppManagement `v0.4.93` and CasaOS-UI `v0.4.163` passed on their tags. The install check of this release: result added after the check.
+
 ## [0.5.112] - 2026-11-09
 
 Components: CasaOS `v0.4.105`. Unchanged from v0.5.111: CasaOS-UI `v0.4.162`, CasaOS-AppManagement `v0.4.92`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
