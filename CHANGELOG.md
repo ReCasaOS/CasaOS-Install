@@ -2,6 +2,26 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.110] - 2026-11-09
+
+Components: CasaOS `v0.4.104`, CasaOS-UI `v0.4.161`, CasaOS-AppManagement `v0.4.92`. Unchanged from v0.5.109: CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The master of a fleet shows the backups of all its boxes, can start them and can verify them.**
+  - A Backups tab lists every box with the state of each app and destination (ok, failed, late, never run, suspended during an OS upgrade, unknown), when it last ran, and whether it is running now. A box is never shown green when it is offline, out of date or unreadable.
+  - From the master: back up now (one box or several), verify a backup by reading it back, check a restic repository, and set how often the boxes verify by themselves (off by default).
+  - Notifications come from the master only, with the name of the box: a failed or late backup, a failed verification.
+  - Apps whose scheduled backup is fine show a green badge, on the dashboard and in the fleet's container list. Apps without a schedule show none ([ReCasaOS/CasaOS-AppManagement#49](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/49), [ReCasaOS/CasaOS#119](https://github.com/ReCasaOS/CasaOS/pull/119), [ReCasaOS/CasaOS-UI#154](https://github.com/ReCasaOS/CasaOS-UI/pull/154)).
+
+### Fixed
+
+- A scheduled backup recorded when its tick began instead of when it began itself, which could show hours of duration on the app's tile.
+
+### Proof
+
+The CI of the three pull requests passed, and the release runs of CasaOS `v0.4.104` and CasaOS-UI `v0.4.161` passed on their tags; the release run of CasaOS-AppManagement `v0.4.92` failed once on a test that races with its own cancellation and passed on re-run. Not proven: a fleet of real boxes, and a real restic repository check from the master. Install check: result added after the check.
+
 ## [0.5.109] - 2026-11-09
 
 Components: CasaOS-UI `v0.4.160`, CasaOS-AppManagement `v0.4.91`. Unchanged from v0.5.108: CasaOS `v0.4.103`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
