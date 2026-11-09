@@ -2,6 +2,27 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.115] - 2026-11-09
+
+Components: CasaOS-LocalStorage `v0.4.60`, CasaOS-UI `v0.4.164`. Unchanged from v0.5.114: CasaOS `v0.4.107`, CasaOS-AppManagement `v0.4.93`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A box with ZFS shows its pools, datasets and snapshots.** A "ZFS" tab appears last in the Storage manager, only on a box that has ZFS with at least one pool; nothing changes on the others. It only reads: nothing in it creates, destroys, rolls back, restores or scrubs ([ReCasaOS/CasaOS-LocalStorage#27](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/27), [ReCasaOS/CasaOS-UI#157](https://github.com/ReCasaOS/CasaOS-UI/pull/157), design [ReCasaOS/CasaOS#124](https://github.com/ReCasaOS/CasaOS/pull/124), asked for in [discussion 66](https://github.com/ReCasaOS/CasaOS/discussions/66)).
+  - Per pool: health (green only for ONLINE; a pool whose state cannot be read is grey, never green), the drives and the disk each is on, the last scrub or resilver, capacity, fragmentation, the live read and write rates, and a detail with ZFS's own `status:` / `action:` lines and the tree of its vdevs with their error counters.
+  - Per dataset: a bar of what is used, the mount point (or why it is not mounted), what is available, referenced and held by snapshots; the snapshots of a dataset are listed when it is opened (the newest 200).
+  - `GET /v1/disks/zfs`, `/v1/disks/zfs/snapshots?dataset=` and `/v1/disks/zfs/io` (CasaOS-LocalStorage `v0.4.60`). Only `zpool list`, `zpool status` and `zfs list` are run, without a shell, with time-outs and one at a time, so that a pool that stopped answering cannot pile processes up. A box without ZFS answers `available: false` and the dashboard shows nothing.
+
+### Not in it
+
+- Checked on a real box only against what a user pasted from OpenZFS 2.4.1 (Ubuntu 26.04): `zpool list`, `zfs list` and `zpool status` of a healthy mirror. A degraded pool, a scrub or resilver in progress, log/cache/spare devices, a volume, a locked dataset and the I/O counters are tested on files written from the OpenZFS documentation, not on a real pool; OpenZFS 2.1, 2.2 and 2.3 were not tried.
+- The live rates come from the kernel's counters of each pool (`/proc/spl/kstat/zfs/<pool>/io`); they were not compared with `zpool iostat`.
+- The tab was not looked at in a browser.
+
+### Proof
+
+The CI of the three pull requests passed, and the release runs of CasaOS-LocalStorage `v0.4.60` and CasaOS-UI `v0.4.164` passed on their tags. The install check of this release: result added after the check.
+
 ## [0.5.114] - 2026-11-09
 
 Components: CasaOS `v0.4.107`. Unchanged from v0.5.113: CasaOS-UI `v0.4.163`, CasaOS-AppManagement `v0.4.93`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
