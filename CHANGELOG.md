@@ -2,6 +2,27 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.120] - 2026-11-09
+
+Components: CasaOS-Gateway `v0.4.33`, CasaOS-UI `v0.4.167`. Unchanged from v0.5.119: CasaOS `v0.4.108`, CasaOS-AppManagement `v0.4.96`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The snapshots of a ZFS dataset open.**
+  - The ZFS tab asked for them as `?params[dataset]=...`, so the box saw no dataset and answered "no such ZFS dataset" for every one ([ReCasaOS/CasaOS-UI#164](https://github.com/ReCasaOS/CasaOS-UI/pull/164)). Reported by se3 in [ReCasaOS/CasaOS#66](https://github.com/ReCasaOS/CasaOS/discussions/66).
+- **A long backup error wraps instead of overflowing the card and the notice.**
+  - restic and rclone errors are kilobytes of unbroken URLs; the card now keeps four lines (the whole text in the tooltip), and toasts and persistent notices wrap too (CasaOS-UI v0.4.166).
+
+### Changed
+
+- **The HTTPS port can be changed, or turned off, without a restart, and the gateway checks `address=` at start.**
+  - The Gateway side of the HTTPS port field in the port settings (the dashboard has had the field since v0.5.116 and keeps it hidden while the gateway has no such route, which was the case until now): `GET` and `PUT /v1/gateway/httpsport`, two changes in a row do not overlap ([ReCasaOS/CasaOS-Gateway#9](https://github.com/ReCasaOS/CasaOS-Gateway/pull/9)).
+  - `address=` is checked when the gateway starts and waited for at boot ([ReCasaOS/CasaOS-Gateway#8](https://github.com/ReCasaOS/CasaOS-Gateway/pull/8)).
+
+### Proof
+
+The CI of both Gateway pull requests and of the UI pull request passed, and the Gateway's tests ran with `-race`. No box with a ZFS pool, and no browser on a box with a changed HTTPS port, was available: se3's ZFS pool will tell for the snapshots. The install check of this release: result added after the check.
+
 ## [0.5.119] - 2026-11-09
 
 Components: CasaOS-AppManagement `v0.4.96`. Unchanged from v0.5.118: CasaOS `v0.4.108`, CasaOS-UI `v0.4.165`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
