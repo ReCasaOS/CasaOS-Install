@@ -920,6 +920,13 @@ reboot_cycle() {
         fi
         call "${tag}-status" GET "${STATUS_PATH}" "" 20
         reboot_try "${tag}-status" status "${tag}"
+        # a guest that restarts quicker than the look above (Ubuntu 26.04: 15 s) is back with another boot id: the call said again would be refused
+        id="$(boot_id)"
+        if [ -n "${id}" ] && [ "${id}" != "${old}" ]; then
+            now >"${OUT}/${tag}.lost-answer"
+            wait_boot "${tag}" "${old}" "${WAIT_BOOT:-1500}" || return 2
+            return 0
+        fi
         call "${tag}-post" POST "${REBOOT_PATH}" '{}' 30
         reboot_try "${tag}-post" post "${tag}"
     done

@@ -133,6 +133,7 @@ class World:
         self.cfg.update(cfg or {})
         self.session_n, self.clock_lag, self.unit_gen, self.last_state = 0, 0.0, 0, ""
         self.ssh_calls, self.faultlog, self.starts, self.delay_taken = {}, [], [], 0.0
+        self.boot_look_miss = False
         self.run_info, self.run_ids = {}, []
         self.t = 0.0
         self.lock = threading.RLock()
@@ -242,6 +243,7 @@ class World:
         """the guest goes away and comes back with another boot id: what the new release brings is on it"""
         self.boot = str(uuid.uuid4())
         self.down_until = at + self.cfg["down_seconds"]
+        self.boot_look_miss = bool(self.cfg.get("boot_look_missed"))
         self.rx = 40 << 20
         self.lock_held = False
         r = self.run
@@ -842,6 +844,9 @@ class World:
             if not m:
                 return (0, "") if cmd.strip() == "true" else (127, "")
             verb, arg = m.group(1), (m.group(2) or "").strip()
+            if verb == "boot_id" and self.boot_look_miss:
+                self.boot_look_miss = False
+                return 255, ""          # the first look after a restart found the guest away (boot_look_missed)
             n = self.ssh_calls[verb] = self.ssh_calls.get(verb, 0) + 1
             if n <= self.cfg["ssh_drops"].get(verb, 0):
                 return 255, ""          # the connection was missed: nothing was done
@@ -2275,6 +2280,9 @@ def scenarios_faults(base):
     # the restart that the core does not answer after a repair
     scenario("scenario: a core that does not answer POST reboot for 40 s after a repair", "faults", "f2", {"reboot_502_s": 40}, passes("F2 the unit killed after", "the core did not answer (HTTP 502)"), base=base)
     scenario("scenario: an answer to POST reboot that the shutdown cuts, after a power cut", "faults", "f4", {"reboot_lost_answer": True}, passes("F4 a power cut", "the answer to POST reboot was lost"), base=base)
+    # Ubuntu 26.04 on the runner: the answer was lost, the look at the boot id found the guest away, and the core answered the status with another boot id 15 s after the restart was asked for
+    scenario("scenario: a restart quicker than the look after a lost answer", "faults", "f2", {"reboot_lost_answer": True, "down_seconds": 1, "boot_look_missed": True},
+             passes("F2 the unit killed after", "the answer to POST reboot was lost"), base=base)
     _, _, text = scenario("scenario: a core that never accepts the restart after a repair", "faults", "f2", {"reboot_502_s": 10 ** 6}, fails("F2 the unit killed after", "POST reboot is accepted"), base=base)
     check("scenario: a core that never accepts the restart after a repair is one FAIL, no INVALID", not text or ("INVALID" not in head(text) and text.count("not reached") == 1), (text or "")[:1200])
 
