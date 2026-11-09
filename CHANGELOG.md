@@ -2,6 +2,25 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.109] - 2026-11-09
+
+Components: CasaOS-UI `v0.4.160`, CasaOS-AppManagement `v0.4.91`. Unchanged from v0.5.108: CasaOS `v0.4.103`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A OneDrive backup destination signs in from the dashboard, as Google Drive and Dropbox do.** Until now it took a token, a `drive_id` and a `drive_type` copied from `rclone config` on a computer that has a browser.
+  - The person opens Microsoft's sign-in page and pastes back the address of the page that then fails to load. The box finishes the sign-in, then asks Microsoft which drive the account has (`/me/drive`) and fills in its `drive_id` and `drive_type` ([ReCasaOS/CasaOS-AppManagement#48](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/48), [ReCasaOS/CasaOS-UI#153](https://github.com/ReCasaOS/CasaOS-UI/pull/153)).
+  - Microsoft's global cloud only: OneDrive in China or for the US government keeps the manual steps.
+- **Each box's card in the fleet shows its network rate** ([ReCasaOS/CasaOS-UI#152](https://github.com/ReCasaOS/CasaOS-UI/pull/152)).
+
+### Fixed
+
+- The French button "Connect OneDrive" read "Connectez Google Drive". It now reads "Connecter OneDrive".
+
+### Proof
+
+The CI of both pull requests passed, and the release runs of CasaOS-AppManagement `v0.4.91` and CasaOS-UI `v0.4.160` passed on their tags. Not proven: a sign-in with a real Microsoft account. The install check of this release: result added after it.
+
 ## [0.5.108] - 2026-11-09
 
 Components: CasaOS `v0.4.103`. Unchanged from v0.5.107: CasaOS-UI `v0.4.159`, CasaOS-AppManagement `v0.4.90`, CasaOS-LocalStorage `v0.4.59`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.32`, rclone `v1.75.1`, restic `v0.19.1`.
