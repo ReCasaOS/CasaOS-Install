@@ -428,6 +428,27 @@ refresh_notes() {
 
 core_version() { casaos -v 2>/dev/null | head -n 1; return 0; }
 
+# plan_sim <from codename> <to codename>: apt's own words on the full upgrade, as the plan's sandbox asks it (the distribution's sources moved to the next release, apt's lists and cache in a
+# directory of their own): the core keeps the problems of a blocked plan, not the text that apt printed. Read only: the box's sources, lists and dpkg are not touched.
+plan_sim() {
+    local d=/var/tmp/oup-sim f o
+    rm -rf "$d"
+    mkdir -p "$d/parts" "$d/lists/partial" "$d/cache/archives/partial"
+    if [ -f /etc/apt/sources.list ]; then sed "s/$1/$2/g" /etc/apt/sources.list >"$d/sources.list"; else : >"$d/sources.list"; fi
+    for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] && grep -qE 'ubuntu\.com|debian\.org' "$f" && sed "s/$1/$2/g" "$f" >"$d/parts/${f##*/}"
+    done
+    o="-o Dir::Etc::sourcelist=$d/sources.list -o Dir::Etc::sourceparts=$d/parts -o Dir::State::lists=$d/lists -o Dir::Cache=$d/cache -o Debug::NoLocking=true"
+    # shellcheck disable=SC2086
+    LC_ALL=C apt-get $o update >/dev/null 2>&1
+    echo "== update $?"
+    # shellcheck disable=SC2086
+    LC_ALL=C apt-get $o -o APT::Get::Always-Include-Phased-Updates=true -s dist-upgrade 2>&1
+    echo "== dist-upgrade $?"
+    rm -rf "$d"
+    return 0
+}
+
 verb="${1:-}"
 [ "$#" -eq 0 ] || shift
 case "${verb}" in
@@ -454,6 +475,7 @@ gap_prepare) gap_prepare ;;
 gap_undo) gap_undo ;;
 refresh_notes) refresh_notes ;;
 core_version) core_version ;;
+plan_sim) plan_sim "$@" ;;
 *) echo "unknown verb: ${verb}" >&2; exit 2 ;;
 esac
 OUP_GUEST
@@ -1158,6 +1180,11 @@ case_c3c() { sec_case c3c C3c port; }
 case_c4() {
     marker case_C4_start
     plan_make c4-plan || true
+    if ! plan_startable; then
+        # what apt said, for a plan that cannot be started from
+        read -r _ fc _ tc <<<"$(hop_facts "${HOP}")"
+        SSH_LIMIT=600 g plan_sim "${fc}" "${tc}" >"${OUT}/c4-plan-sim.txt" 2>&1 || true
+    fi
     if plan_startable; then
         snap c4-before || return 1
         start_run c4-start true full "${GUEST_HOST}" ""
