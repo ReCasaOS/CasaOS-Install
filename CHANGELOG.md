@@ -21,7 +21,7 @@ Components: CasaOS-Gateway `v0.4.33`, CasaOS-UI `v0.4.167`. Unchanged from v0.5.
 
 ### Proof
 
-The CI of both Gateway pull requests and of the UI pull request passed, and the Gateway's tests ran with `-race`. No box with a ZFS pool, and no browser on a box with a changed HTTPS port, was available: se3's ZFS pool will tell for the snapshots. The install check of this release: result added after the check.
+The CI of both Gateway pull requests and of the UI pull request passed, and the Gateway's tests ran with `-race`. No box with a ZFS pool, and no browser on a box with a changed HTTPS port, was available: se3's ZFS pool will tell for the snapshots. The install check passed on all 12 legs on the first try (run 42644976164), and the release runs of CasaOS-Gateway `v0.4.33` and CasaOS-UI `v0.4.167` passed on their tags.
 
 ## [0.5.119] - 2026-11-09
 
