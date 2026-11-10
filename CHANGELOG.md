@@ -23,7 +23,7 @@ CasaOS `v0.4.109` is `v0.4.108` with the one fix below, and CasaOS-Gateway `v0.4
 
 ### Proof
 
-Each fix came with a test that failed before it. The CI of the five pull requests passed, and the release runs passed on the five tags. No box was available for a real restore, a real cloud sign-in or a real disk. The install check of this release: result added after the check.
+Each fix came with a test that failed before it. The CI of the five pull requests passed, and the release runs passed on the five tags. No box was available for a real restore, a real cloud sign-in or a real disk. The install check passed on all 12 legs on the first try (run 42846736174).
 
 ## [0.5.121] - 2026-11-10
 
