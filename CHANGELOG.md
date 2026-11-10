@@ -2,6 +2,30 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.127] - 2026-11-10
+
+Components: CasaOS-UI `v0.4.172`. Unchanged from v0.5.126: CasaOS `v0.4.110`, CasaOS-AppManagement `v0.4.100`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+CasaOS-UI `v0.4.172` also holds the screens of public sharing ([ReCasaOS/CasaOS-UI#167](https://github.com/ReCasaOS/CasaOS-UI/pull/167)). They stay hidden on this release: the dashboard shows them only where the core answers `/v1/share`, and CasaOS `v0.4.110` does not.
+
+### Added
+
+- **A tile per VM on the new dashboard.** The classic dashboard shows each VM next to the Virtual Machines card, with its state. The new dashboard (beta) showed none. Each VM now has its tile in the System row, after that card: the mark of its system, its name and its state in words ([ReCasaOS/CasaOS-UI#174](https://github.com/ReCasaOS/CasaOS-UI/pull/174)).
+
+### Changed
+
+- **Windows of one width.** Every window opened as a card is as wide as the Virtual Machines one, 66rem. They ranged from 26.5 to 50rem. Statistics takes the size of Logs, 100rem and the height of the screen. The windows that were larger stay as they were (Files, App Store, Logs, Fleet, the storage manager, backups, the VM console), and so do the confirmation boxes and the power box ([ReCasaOS/CasaOS-UI#171](https://github.com/ReCasaOS/CasaOS-UI/pull/171)).
+
+### Fixed
+
+- **Text that is not the dashboard's own is shown as text.** The name of an app, the text of an error or a file name went into toasts, notifications and dialogs as it was, where it was read as HTML. Every message is now text written in the dashboard, a translation, or an escaped value, and a test reads the whole source to keep it so ([ReCasaOS/CasaOS-UI#173](https://github.com/ReCasaOS/CasaOS-UI/pull/173)).
+- **An app's web interface opens over http or https only.** The address was built with the scheme of the app's compose file, whatever it was. The same holds for the address of a box in the fleet. The `/launch` page, which nothing in the dashboard led to any more, is removed: a bookmark of it no longer opens ([ReCasaOS/CasaOS-UI#173](https://github.com/ReCasaOS/CasaOS-UI/pull/173)).
+- **The second line of a card of the new dashboard starts under its name.** It was centred under a longer name ([ReCasaOS/CasaOS-UI#174](https://github.com/ReCasaOS/CasaOS-UI/pull/174)).
+
+### Proof
+
+The CI of the four pull requests passed, the CI of the dashboard's `main` passed on the tagged commit, and the release run passed on the tag. The VM tiles were looked at in the mock dashboard at desktop and phone widths, and the widths of the windows were measured there on four of them. Not looked at: a real box, a click on a VM tile in a browser, the other windows one by one, the escaped messages in a browser, and the tiles and the new widths together. The install check of this release: result added after the check.
+
 ## [0.5.126] - 2026-11-10
 
 Components: CasaOS-UI `v0.4.171`, module `virt` `v0.2.5`. Unchanged from v0.5.125: CasaOS `v0.4.110`, CasaOS-AppManagement `v0.4.100`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
