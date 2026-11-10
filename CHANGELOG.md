@@ -12,7 +12,7 @@ Components: CasaOS-UserService `v0.4.36`. Unchanged from v0.5.129: CasaOS `v0.4.
 
 ### Proof
 
-Each case came with a test that failed before the change: a copied token after a password change, a token of a deleted account, a token made before the update. The CI of both pull requests passed, and the release runs of CasaOS-UserService `v0.4.36` and CasaOS-UI `v0.4.173` passed. Not looked at: a password change in a browser on a real box. The install check of this release: result added after the check.
+Each case came with a test that failed before the change: a copied token after a password change, a token of a deleted account, a token made before the update. The CI of both pull requests passed, and the release runs of CasaOS-UserService `v0.4.36` and CasaOS-UI `v0.4.173` passed. Not looked at: a password change in a browser on a real box. The install check passed on all 12 legs on the first try (run 42921254876).
 
 ## [0.5.129] - 2026-11-10
 
