@@ -2,7 +2,9 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
-## [0.5.128] - 2026-11-10
+## [0.5.129] - 2026-11-10
+
+v0.5.128 was tagged but never published: its build stopped at the check of the module catalogue, which did not know the core's new `share` route. This release is v0.5.128 with that fix.
 
 Components: CasaOS `v0.4.111`, CasaOS-Gateway `v0.4.35`, CasaOS-UI `v0.4.173`. Unchanged from v0.5.127: CasaOS-AppManagement `v0.4.100`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
 
@@ -15,6 +17,10 @@ CasaOS `v0.4.111` and CasaOS-Gateway `v0.4.35` are cut from `main` again: they h
 ### Changed
 
 - **After a password change, the dashboard keeps the session the user service answers with.** A user service that sends new tokens with the change has them stored where the requests and the message bus read them. CasaOS-UserService `v0.4.35`, in this release, sends none: nothing changes until it does ([ReCasaOS/CasaOS-UI#175](https://github.com/ReCasaOS/CasaOS-UI/pull/175)).
+
+### Fixed
+
+- **A module cannot take the route of public sharing.** The module catalogue refuses a module whose Gateway route is `/v1/share`, as the core does from `v0.4.111` ([ReCasaOS/CasaOS-Install#212](https://github.com/ReCasaOS/CasaOS-Install/pull/212)).
 
 ### Proof
 
