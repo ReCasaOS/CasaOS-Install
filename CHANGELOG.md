@@ -24,7 +24,7 @@ CasaOS `v0.4.111` and CasaOS-Gateway `v0.4.35` are cut from `main` again: they h
 
 ### Proof
 
-The CI of the pull requests passed, and the release runs of CasaOS `v0.4.111`, CasaOS-Gateway `v0.4.35` and CasaOS-UI `v0.4.173` passed. The core's sharing was tested with `-race` against doubles of the relay and the Gateway, and the Gateway's host routes and PROXY listener with `-race`. The dashboard's screens were tried in a browser against the development double of `/v1/share`: name, switch, address, badge, the Remote access list, stopping one app and all of them, the warning before turning remote access off. Not looked at: a real box sharing through a deployed relay, a real Let's Encrypt certificate. The install check of this release: result added after the check.
+The CI of the pull requests passed, and the release runs of CasaOS `v0.4.111`, CasaOS-Gateway `v0.4.35` and CasaOS-UI `v0.4.173` passed. The core's sharing was tested with `-race` against doubles of the relay and the Gateway, and the Gateway's host routes and PROXY listener with `-race`. The dashboard's screens were tried in a browser against the development double of `/v1/share`: name, switch, address, badge, the Remote access list, stopping one app and all of them, the warning before turning remote access off. Not looked at: a real box sharing through a deployed relay, a real Let's Encrypt certificate. The install check passed on all 12 legs on the first try (run 42918526701).
 
 ## [0.5.127] - 2026-11-10
 
