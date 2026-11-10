@@ -143,15 +143,30 @@ Detecting_CasaOS() {
 Unistall_Container() {
     if [[ ${UNINSTALL_ALL_CONTAINER} == true && "$(${sudo_cmd} docker ps -aq)" != "" ]]; then
         Show 2 "Start deleting containers."
-        ${sudo_cmd} docker stop "$(${sudo_cmd} docker ps -aq)" || Show 1 "Failed to stop containers."
-        ${sudo_cmd} docker rm "$(${sudo_cmd} docker ps -aq)" || Show 1 "Failed to delete all containers."
+        # one id per argument: all of them in one was refused as soon as there were two
+        local containers
+        mapfile -t containers < <(${sudo_cmd} docker ps -aq)
+        # stopped first, so that each app ends its writes: rm -f alone kills them
+        ${sudo_cmd} docker stop "${containers[@]}" || Show 1 "Failed to stop containers."
+        if ! ${sudo_cmd} docker rm -f "${containers[@]}"; then
+            Show 1 "Failed to delete all containers."
+            # the containers that are left still use their data and their images
+            if [[ ${REMOVE_APP_DATA} == true || ${REMOVE_IMAGES} == "all" ]]; then
+                REMOVE_APP_DATA=false
+                REMOVE_IMAGES="none"
+                Show 3 "AppData and the images are kept, for the containers that are left."
+            fi
+        fi
     fi
 }
 
 Remove_Images() {
     if [[ ${REMOVE_IMAGES} == "all" && "$(${sudo_cmd} docker images -q)" != "" ]]; then
         Show 2 "Start deleting all images."
-        ${sudo_cmd} docker rmi "$(${sudo_cmd} docker images -q)" || Show 1 "Failed to delete all images."
+        # one id per argument, each once: an image with two names is listed twice
+        local images
+        mapfile -t images < <(${sudo_cmd} docker images -q | sort -u)
+        ${sudo_cmd} docker rmi -f "${images[@]}" || Show 1 "Failed to delete all images."
     elif [[ ${REMOVE_IMAGES} == "unuse" && "$(${sudo_cmd} docker images -q)" != "" ]]; then
         Show 2 "Start deleting unuse images."
         ${sudo_cmd} docker image prune -af || Show 1 "Failed to delete unuse images."
