@@ -21,7 +21,7 @@ CasaOS `v0.4.110` is `v0.4.109` with the one fix below; the rest of its `main` w
 
 ### Proof
 
-Each fix came with a test that failed before it. The CI of the four pull requests passed, and the release runs passed on the three tags. Not looked at: a browser on a box whose session ran out, a real box with Wi-Fi alone, a real uninstall. The install check of this release: result added after the check.
+Each fix came with a test that failed before it. The CI of the four pull requests passed, and the release runs passed on the three tags. Not looked at: a browser on a box whose session ran out, a real box with Wi-Fi alone, a real uninstall. The install check passed on all 12 legs on the first try (run 42879958527).
 
 ## [0.5.124] - 2026-11-10
 
