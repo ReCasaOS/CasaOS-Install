@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.130] - 2026-11-11
+
+Components: CasaOS-UserService `v0.4.36`. Unchanged from v0.5.129: CasaOS `v0.4.111`, CasaOS-AppManagement `v0.4.100`, CasaOS-Gateway `v0.4.35`, CasaOS-UI `v0.4.173`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A password change ends the sessions opened before it.** A session renewed itself for seven days at a time without the account being read again, so one opened before a password change, or for an account since deleted, went on. The account now numbers its sessions: a password change, from the dashboard or from the command line, ends every session opened before it, and a session of a deleted account ends at its next renewal. The session that made the change goes on with the new tokens it is answered with, which the dashboard keeps. The update itself signs nobody out ([ReCasaOS/CasaOS-UserService#13](https://github.com/ReCasaOS/CasaOS-UserService/pull/13), [ReCasaOS/CasaOS-UI#175](https://github.com/ReCasaOS/CasaOS-UI/pull/175)).
+
+### Proof
+
+Each case came with a test that failed before the change: a copied token after a password change, a token of a deleted account, a token made before the update. The CI of both pull requests passed, and the release runs of CasaOS-UserService `v0.4.36` and CasaOS-UI `v0.4.173` passed. Not looked at: a password change in a browser on a real box. The install check of this release: result added after the check.
+
 ## [0.5.129] - 2026-11-10
 
 v0.5.128 was tagged but never published: its build stopped at the check of the module catalogue, which did not know the core's new `share` route. This release is v0.5.128 with that fix.
