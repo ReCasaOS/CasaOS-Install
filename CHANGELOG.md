@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.124] - 2026-11-10
+
+Components: CasaOS-UI `v0.4.169`. Unchanged from v0.5.123: CasaOS `v0.4.109`, CasaOS-AppManagement `v0.4.99`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **An app's settings show the folders it really uses.** For an app installed from the App Store, the host side of a volume read `/DATA/AppData/$AppID/data`. It now reads `/DATA/AppData/<app name>/data`, which is the folder the app has always used. Saving the settings keeps the app on that same folder. The install window still shows `$AppID` ([ReCasaOS/CasaOS-UI#169](https://github.com/ReCasaOS/CasaOS-UI/pull/169)).
+
+### Proof
+
+The change came with tests, the CI of the pull request passed, and the release run passed on the tag. It was not looked at in a browser, on stubbed answers or on a box. The install check of this release: result added after the check.
+
 ## [0.5.123] - 2026-11-10
 
 Components: CasaOS-AppManagement `v0.4.99`, CasaOS-UI `v0.4.168`. Unchanged from v0.5.122: CasaOS `v0.4.109`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
