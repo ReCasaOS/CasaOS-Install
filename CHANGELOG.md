@@ -2,6 +2,29 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.122] - 2026-11-10
+
+Components: CasaOS `v0.4.109`, CasaOS-AppManagement `v0.4.98`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`. Unchanged from v0.5.121: CasaOS-UI `v0.4.167`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+CasaOS `v0.4.109` is `v0.4.108` with the one fix below, and CasaOS-Gateway `v0.4.34` is `v0.4.33` with the one fix below; the rest of their `main` waits for its own release.
+
+### Fixed
+
+- **A restore puts each folder back where the app has it now, and an uninstall deletes only the app's own data folder.**
+  - A restore paired the folders of a backup with the app's folders by their place in the list. It now pairs them by service and by path in the container, and a folder the app no longer has is reported as missing. Removing an app with its data deletes `AppData/<app>` and nothing else ([ReCasaOS/CasaOS-AppManagement#56](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/56)).
+- **The first account is created once, and the box says less before a sign-in.**
+  - A registration key creates the first account only. An address a sign-in succeeded from keeps its own budget of tries. The picture route serves the pictures of the user folders only, and the user name route asks for a session ([ReCasaOS/CasaOS-UserService#12](https://github.com/ReCasaOS/CasaOS-UserService/pull/12)).
+- **A cloud sign-in is accepted only when it was started from this box.**
+  - The way back from Google Drive, Dropbox or OneDrive carries a value of the box, and a return without it is refused. The storage is said to be added only once it is saved and mounted ([ReCasaOS/CasaOS#132](https://github.com/ReCasaOS/CasaOS/pull/132)).
+- **The gateway keeps running when a service registers its routes while requests are served.**
+  - The table of path routes is read and written under a lock ([ReCasaOS/CasaOS-Gateway#11](https://github.com/ReCasaOS/CasaOS-Gateway/pull/11)).
+- **Mounting a disk takes the device and the folder as they are.**
+  - The device and the mount point reach the mount helper as two arguments, a mount point is always one folder of `/media`, and the helper reads the type of the filesystem as a value ([ReCasaOS/CasaOS-LocalStorage#28](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/28)).
+
+### Proof
+
+Each fix came with a test that failed before it. The CI of the five pull requests passed, and the release runs passed on the five tags. No box was available for a real restore, a real cloud sign-in or a real disk. The install check of this release: result added after the check.
+
 ## [0.5.121] - 2026-11-10
 
 Components: CasaOS-AppManagement `v0.4.97`. Unchanged from v0.5.120: CasaOS `v0.4.108`, CasaOS-UI `v0.4.167`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.33`, rclone `v1.75.1`, restic `v0.19.1`.
