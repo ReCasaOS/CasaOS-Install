@@ -13,7 +13,7 @@ Components: CasaOS-AppManagement `v0.4.97`. Unchanged from v0.5.120: CasaOS `v0.
 
 ### Proof
 
-The app manager's CI passed on the pull request, and its release run passed on its tag. Nothing in the dashboard reads that endpoint, so there is nothing to see in a browser. The install check of this release: result added after the check.
+The app manager's CI passed on the pull request, and its release run passed on its tag. Nothing in the dashboard reads that endpoint, so there is nothing to see in a browser. The install check passed on all 12 legs on the first try (run 42806845575).
 
 ## [0.5.120] - 2026-11-09
 
