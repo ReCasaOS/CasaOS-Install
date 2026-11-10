@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.128] - 2026-11-10
+
+Components: CasaOS `v0.4.111`, CasaOS-Gateway `v0.4.35`, CasaOS-UI `v0.4.173`. Unchanged from v0.5.127: CasaOS-AppManagement `v0.4.100`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+CasaOS `v0.4.111` and CasaOS-Gateway `v0.4.35` are cut from `main` again: they hold the fixes of the side tags `v0.4.110` and `v0.4.34`, and public sharing.
+
+### Added
+
+- **An app shared on the Internet, from its card.** The card's menu has "Share on the Internet". The box chooses its public name once, with the terms of Let's Encrypt, and the app answers at `https://<app>.<name>.box.recasaos.org` to anyone who has the address, with a certificate of its own, behind a CGNAT too. Its card shows a Public badge. The Remote access window lists the shared apps, their address, the certificate and the tunnel, and stops one or all of them. Sharing goes through remote access and its relay: it needs remote access on and a relay that supports it, and the dashboard says why when it is not available. Turning remote access off, leaving the fleet or changing the relay says beforehand that the public addresses stop answering and the name is released ([ReCasaOS/CasaOS#130](https://github.com/ReCasaOS/CasaOS/pull/130), [ReCasaOS/CasaOS-Gateway#10](https://github.com/ReCasaOS/CasaOS-Gateway/pull/10), [ReCasaOS/CasaOS-UI#167](https://github.com/ReCasaOS/CasaOS-UI/pull/167)).
+
+### Changed
+
+- **After a password change, the dashboard keeps the session the user service answers with.** A user service that sends new tokens with the change has them stored where the requests and the message bus read them. CasaOS-UserService `v0.4.35`, in this release, sends none: nothing changes until it does ([ReCasaOS/CasaOS-UI#175](https://github.com/ReCasaOS/CasaOS-UI/pull/175)).
+
+### Proof
+
+The CI of the pull requests passed, and the release runs of CasaOS `v0.4.111`, CasaOS-Gateway `v0.4.35` and CasaOS-UI `v0.4.173` passed. The core's sharing was tested with `-race` against doubles of the relay and the Gateway, and the Gateway's host routes and PROXY listener with `-race`. The dashboard's screens were tried in a browser against the development double of `/v1/share`: name, switch, address, badge, the Remote access list, stopping one app and all of them, the warning before turning remote access off. Not looked at: a real box sharing through a deployed relay, a real Let's Encrypt certificate. The install check of this release: result added after the check.
+
 ## [0.5.127] - 2026-11-10
 
 Components: CasaOS-UI `v0.4.172`. Unchanged from v0.5.126: CasaOS `v0.4.110`, CasaOS-AppManagement `v0.4.100`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
