@@ -2,6 +2,28 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.123] - 2026-11-10
+
+Components: CasaOS-AppManagement `v0.4.99`, CasaOS-UI `v0.4.168`. Unchanged from v0.5.122: CasaOS `v0.4.109`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Folders no backup of an app copies.** Settings › Backups has a "Left out" tab: one list for the box, one full path per line, for a share on a NAS or a media library kept somewhere else. A folder an app mounts from inside one of them is left out of every backup of that app, manual or scheduled, and the backup's manifest says so. A restore does not write to it either, even from an older backup that still holds it. The list is part of the box's own backup ([ReCasaOS/CasaOS-AppManagement#58](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/58), [ReCasaOS/CasaOS-UI#168](https://github.com/ReCasaOS/CasaOS-UI/pull/168)).
+
+### Fixed
+
+- **A backup no longer copies the kernel's modules.** A VPN app (wg-easy, Tailscale) mounts `/lib/modules` so it can load a module. The backup took that folder for the app's data and copied all of it, which made the backup very slow. It is now left out, like `/dev` and `/sys` ([ReCasaOS/CasaOS-AppManagement#57](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/57), reported in [ReCasaOS/CasaOS#131](https://github.com/ReCasaOS/CasaOS/issues/131)).
+
+### Not in it
+
+- A folder an app mounts that holds an excluded one (the app mounts `/DATA`, the list has `/DATA/nas`) is left out whole: the copy does not skip only the excluded part.
+- Paths are compared as written: a symlink to an excluded folder, and a named volume kept on one, are still copied.
+- CasaOS-UI `v0.4.168` also carries the switch that starts a VM with the box ([ReCasaOS/CasaOS-UI#165](https://github.com/ReCasaOS/CasaOS-UI/pull/165)). The module `virt` `v0.2.3` pinned here does not know it yet: the switch is hidden on a VM's page, and the one in the window that creates a VM has no effect until the module is released.
+
+### Proof
+
+Each change came with tests, the CI of the three pull requests passed, and the release runs passed on the two tags. The "Left out" tab was looked at against stubbed answers at desktop and phone widths, not on a box, and no real NAS share was backed up. The install check of this release: result added after the check.
+
 ## [0.5.122] - 2026-11-10
 
 Components: CasaOS `v0.4.109`, CasaOS-AppManagement `v0.4.98`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`. Unchanged from v0.5.121: CasaOS-UI `v0.4.167`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
