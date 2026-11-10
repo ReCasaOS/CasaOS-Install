@@ -60,7 +60,7 @@ CasaOS-UI `v0.4.172` also holds the screens of public sharing ([ReCasaOS/CasaOS-
 
 ### Proof
 
-The CI of the four pull requests passed, the CI of the dashboard's `main` passed on the tagged commit, and the release run passed on the tag. The VM tiles were looked at in the mock dashboard at desktop and phone widths, and the widths of the windows were measured there on four of them. Not looked at: a real box, a click on a VM tile in a browser, the other windows one by one, the escaped messages in a browser, and the tiles and the new widths together. The install check of this release: result added after the check.
+The CI of the four pull requests passed, the CI of the dashboard's `main` passed on the tagged commit, and the release run passed on the tag. The VM tiles were looked at in the mock dashboard at desktop and phone widths, and the widths of the windows were measured there on four of them. Not looked at: a real box, a click on a VM tile in a browser, the other windows one by one, the escaped messages in a browser, and the tiles and the new widths together. The install check passed on all 12 legs on the first try (run 42916424254).
 
 ## [0.5.126] - 2026-11-10
 
