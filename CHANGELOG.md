@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.126] - 2026-11-10
+
+Components: CasaOS-UI `v0.4.171`, module `virt` `v0.2.5`. Unchanged from v0.5.125: CasaOS `v0.4.110`, CasaOS-AppManagement `v0.4.100`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A snapshot of a VM that is on.** A running or paused VM no longer has to be shut down for a snapshot. Its disks are snapshotted together, all or none, with the VM paused for that instant and the guest's file systems frozen when its agent answers; a VM that was paused stays paused. Going back to a snapshot and deleting one still need the VM off ([ReCasaOS/CasaOS-VirtManagement#11](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/11), [ReCasaOS/CasaOS-UI#172](https://github.com/ReCasaOS/CasaOS-UI/pull/172)).
+- **A VM that starts with the machine, once created.** The switch was in the dashboard's settings of a VM, but a module that did not report the setting hid it, and `v0.2.3` did not ([ReCasaOS/CasaOS-VirtManagement#9](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/9)).
+- **Folders of the machine shared with a VM** over virtiofs, under `/DATA` or `/media`, through the module's API. The dashboard has no screen for it yet ([ReCasaOS/CasaOS-VirtManagement#10](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/10)).
+
+### Proof
+
+The CI of the four pull requests passed, the release runs of the module (`v0.2.4`, `v0.2.5`) and of the dashboard passed, and the catalogue of the modules was built from the published `v0.2.5` archives. The tests of the module cover the snapshot of a running VM against a double of libvirt: there is no QEMU in CI. Not looked at: a live snapshot on a real box, a restart of the machine with a VM set to start, a guest mounting a shared folder. The install check of this release: result added after the check.
+
 ## [0.5.125] - 2026-11-10
 
 Components: CasaOS `v0.4.110`, CasaOS-AppManagement `v0.4.100`, CasaOS-UI `v0.4.170`. Unchanged from v0.5.124: CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
