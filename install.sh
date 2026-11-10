@@ -597,9 +597,23 @@ Check_Memory() {
     Show 0 "Memory capacity check passed."
 }
 
+# Whether there is a terminal to ask on: a run started by the dashboard's update has none.
+Can_Ask() {
+    { : </dev/tty; } 2>/dev/null
+}
+
 # 5 Check Disk
 Check_Disk() {
     if [[ "${FREE_DISK_GB}" -lt "${MINIMUM_DISK_SIZE_GB}" ]]; then
+        # the question below reads the terminal: with none, the script stopped there without a word
+        if ! Can_Ask; then
+            # nobody to ask, and nothing is changed yet: under 1GB an update would stop halfway, its services down
+            if [[ "${FREE_DISK_GB}" -lt 1 ]]; then
+                Show 1 "Less than 1GB of free disk space. Free some room, then run this again."
+            fi
+            Show 3 "Recommended free disk space is greater than ${MINIMUM_DISK_SIZE_GB}GB, current free disk space is ${FREE_DISK_GB}GB. There is no terminal to ask on: going on."
+            return
+        fi
         echo -e "${aCOLOUR[4]}Recommended free disk space is greater than ${MINIMUM_DISK_SIZE_GB}GB, Current free disk space is ${aCOLOUR[3]}${FREE_DISK_GB}GB${COLOUR_RESET}${aCOLOUR[4]}.\nContinue installation?${COLOUR_RESET}"
         select yn in "Yes" "No"; do
             case $yn in
@@ -1062,11 +1076,15 @@ Install_Rclone() {
     if [ "$version" != "$target_version" ]; then
       Show 3 "Will change rclone from $version to $target_version."
       rclone_path=$(command -v rclone)
-      ${sudo_cmd} rm -rf "${rclone_path}"
+      # the new one first: a download that fails ends the install with the old rclone still there
+      Install_rclone_from_source
+      # then the old one, when it is another file than the new (-ef: /bin may be a link to /usr/bin)
+      if [[ ! "${rclone_path}" -ef "${PREFIX}/usr/bin/rclone" ]]; then
+        ${sudo_cmd} rm -rf "${rclone_path}"
+      fi
       if [[ -f "$rclone1" ]]; then
         ${sudo_cmd} rm -rf "$rclone1"
       fi
-      Install_rclone_from_source
     else
       Show 2 "Target version already installed."
     fi
@@ -1501,7 +1519,9 @@ Get_Gateway_Port() {
 # Get the physical NIC IP
 Get_IPs() {
     PORT=$(Get_Gateway_Port)
-    ALL_NIC=$($sudo_cmd ls /sys/class/net/ | grep -v "$(ls /sys/devices/virtual/net/)")
+    # every card but the virtual ones, each name taken whole: wlo1 holds "lo" and is not lo.
+    # A box with no hardware card has nothing to show, and still ends its install.
+    ALL_NIC=$($sudo_cmd ls /sys/class/net/ | grep -vxF -e "$(ls /sys/devices/virtual/net/)" || true)
     for NIC in ${ALL_NIC}; do
         IP=$($sudo_cmd ifconfig "${NIC}" | grep inet | grep -v 127.0.0.1 | grep -v inet6 | awk '{print $2}' | sed -e 's/addr://g')
         if [[ -n $IP ]]; then
