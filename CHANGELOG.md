@@ -2,6 +2,27 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.125] - 2026-11-10
+
+Components: CasaOS `v0.4.110`, CasaOS-AppManagement `v0.4.100`, CasaOS-UI `v0.4.170`. Unchanged from v0.5.124: CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+CasaOS `v0.4.110` is `v0.4.109` with the one fix below; the rest of its `main` waits for its own release.
+
+### Fixed
+
+- **A large copy no longer stops the core.** While a copy or a move runs, its progress measures the destination every three seconds. A file that left the folder between two readings stopped the whole service. The size is now read without it ([ReCasaOS/CasaOS#133](https://github.com/ReCasaOS/CasaOS/pull/133)).
+- **A file sent in chunks ends once, in the folder it was sent to.** The same file sent to a second folder shared the chunks counted for the first, and could take its name with a hole in it. The answer to the last chunk now says when the file could not take its name, and a chunk sent twice is not an error ([ReCasaOS/CasaOS#133](https://github.com/ReCasaOS/CasaOS/pull/133)).
+- **The app manager starts whatever a store's list or its file of global variables holds.** An `appid` that is not text in a store's recommend list, or a line with no `=` in the file of global variables, stopped the service at every start. Both are passed over. A value keeps the `=` it holds, a long value no longer hides the variables written after it, and a variable the file could not give back is refused when it is set. The variables are read and changed under a lock ([ReCasaOS/CasaOS-AppManagement#59](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/59)).
+- **A session that ran out no longer leaves the dashboard waiting.** When the box refused to renew the session, the page waited without end, and after signing in again in the same tab every screen waited as soon as the new session needed renewing. The calls now fail and the dashboard goes to the sign-in ([ReCasaOS/CasaOS-UI#170](https://github.com/ReCasaOS/CasaOS-UI/pull/170)).
+- **The install ends well on a box with Wi-Fi alone.** The closing banner dropped a card named `wlo1` because its name holds `lo`, and the install ended in error after everything was installed ([ReCasaOS/CasaOS-Install#204](https://github.com/ReCasaOS/CasaOS-Install/pull/204)).
+- **An update from the dashboard goes on with less than 5GB free.** The question was read from a terminal the update does not have, and it stopped without a word. It now says how much room is left and goes on, and stops with a message under 1GB, before anything is changed ([ReCasaOS/CasaOS-Install#204](https://github.com/ReCasaOS/CasaOS-Install/pull/204)).
+- **An rclone that cannot be downloaded leaves the one that was there.** The old one was removed before the new one was downloaded ([ReCasaOS/CasaOS-Install#204](https://github.com/ReCasaOS/CasaOS-Install/pull/204)).
+- **The uninstaller removes every container, or keeps their data.** With more than one container it removed none, then deleted AppData under them. Containers are stopped and removed one by one, and when some are left AppData and the images are kept ([ReCasaOS/CasaOS-Install#204](https://github.com/ReCasaOS/CasaOS-Install/pull/204)).
+
+### Proof
+
+Each fix came with a test that failed before it. The CI of the four pull requests passed, and the release runs passed on the three tags. Not looked at: a browser on a box whose session ran out, a real box with Wi-Fi alone, a real uninstall. The install check of this release: result added after the check.
+
 ## [0.5.124] - 2026-11-10
 
 Components: CasaOS-UI `v0.4.169`. Unchanged from v0.5.123: CasaOS `v0.4.109`, CasaOS-AppManagement `v0.4.99`, CasaOS-Gateway `v0.4.34`, CasaOS-UserService `v0.4.35`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
