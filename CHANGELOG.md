@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.121] - 2026-11-10
+
+Components: CasaOS-AppManagement `v0.4.97`. Unchanged from v0.5.120: CasaOS `v0.4.108`, CasaOS-UI `v0.4.167`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, CasaOS-Gateway `v0.4.33`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The upgradable app list names each app instead of printing a JSON object.**
+  - `GET /v2/app_management/apps/upgradable` marshalled the whole i18n title map into `title`, so it read `{"en_us":"Nextcloud"}`. It is now the `en_us` title, or the compose name when there is none, as the update-all planner already did ([ReCasaOS/CasaOS-AppManagement#55](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/55), by OpenDeernet). Reported in [ReCasaOS/CasaOS#129](https://github.com/ReCasaOS/CasaOS/issues/129).
+
+### Proof
+
+The app manager's CI passed on the pull request, and its release run passed on its tag. Nothing in the dashboard reads that endpoint, so there is nothing to see in a browser. The install check of this release: result added after the check.
+
 ## [0.5.120] - 2026-11-09
 
 Components: CasaOS-Gateway `v0.4.33`, CasaOS-UI `v0.4.167`. Unchanged from v0.5.119: CasaOS `v0.4.108`, CasaOS-AppManagement `v0.4.96`, CasaOS-LocalStorage `v0.4.60`, module `virt` `v0.2.3`, CasaOS-UserService `v0.4.34`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
