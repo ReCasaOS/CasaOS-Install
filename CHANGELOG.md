@@ -14,7 +14,7 @@ Components: CasaOS-UI `v0.4.171`, module `virt` `v0.2.5`. Unchanged from v0.5.12
 
 ### Proof
 
-The CI of the four pull requests passed, the release runs of the module (`v0.2.4`, `v0.2.5`) and of the dashboard passed, and the catalogue of the modules was built from the published `v0.2.5` archives. The tests of the module cover the snapshot of a running VM against a double of libvirt: there is no QEMU in CI. Not looked at: a live snapshot on a real box, a restart of the machine with a VM set to start, a guest mounting a shared folder. The install check of this release: result added after the check.
+The CI of the four pull requests passed, the release runs of the module (`v0.2.4`, `v0.2.5`) and of the dashboard passed, and the catalogue of the modules was built from the published `v0.2.5` archives. The tests of the module cover the snapshot of a running VM against a double of libvirt: there is no QEMU in CI. Not looked at: a live snapshot on a real box, a restart of the machine with a VM set to start, a guest mounting a shared folder. The install check passed on all 12 legs on the first try (run 42889550788).
 
 ## [0.5.125] - 2026-11-10
 
