@@ -76,13 +76,14 @@ name: docker-update-proof
 #
 # It installs a release that has the feature (a release before it fails on the first check, by
 # name), and it is meant to be run on a candidate before that release becomes the latest one:
-#   1. publish the installer release as a pre-release (gh release create vX.Y.Z --prerelease ...):
-#      GitHub does not call a pre-release the latest release, so nothing installs it by itself;
+#   1. tag the installer release with release/PRERELEASE in the tagged commit: release.yml then
+#      leaves it a pre-release, which GitHub does not call the latest release, so nothing installs
+#      it by itself;
 #   2. dispatch this workflow with tag=vX.Y.Z (a push run takes the tag from the repository
 #      variable DOCKER_PROOF_TAG instead, and stops at once when there is none);
 #   3. every leg green: promote it (gh release edit vX.Y.Z --prerelease=false --latest).
-# release.yml publishes a release as the latest one at once (prerelease: false), so a candidate has
-# to be made a pre-release by hand, or release.yml has to be told to; nothing here changes that.
+# Without release/PRERELEASE, release.yml makes the release the latest one as soon as its own
+# install check has passed, which is before this proof; nothing here changes that.
 # Left empty, the tag is the latest published release: the same proof, after the fact.
 # By hand only; it publishes nothing and changes nothing outside the guests. Every leg ends with
 # a failure injection (the major leg after its rollback), which waits for the unit's own timeouts,

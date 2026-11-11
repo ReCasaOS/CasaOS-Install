@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # release-is-prerelease.sh must say "true" only for a checkout that carries
 # release/PRERELEASE: a wrong "true" would hide a release from every box, a
-# wrong "false" would offer an unproven one to all of them.
+# wrong "false" would offer one that was held back for more proof to all of them.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

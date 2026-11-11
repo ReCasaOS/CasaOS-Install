@@ -25,13 +25,21 @@ on:
 permissions:
   contents: write
 
+# Every action is named by its commit: a tag is its owner's to move, and the
+# job that publishes holds a token that can write to this repository. No
+# checkout leaves that token behind for the steps that follow.
+
 jobs:
   release:
     name: Assemble and publish the installer
     runs-on: ubuntu-22.04
+    outputs:
+      held: ${{ steps.pre.outputs.value }}
     steps:
       - name: Checkout installer
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # The module catalogue builder judges the titles of manifests by the Unicode
       # tables of the Python that runs it, and the core judges them by those of
@@ -39,7 +47,7 @@ jobs:
       # tables are those of Unicode 13.0: it refuses 5318 characters that the core
       # takes. 3.12 has 15.0, so the version is pinned here and not left to the image.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -54,6 +62,9 @@ jobs:
 
       - name: Check the port the installer's closing banner shows
         run: bash scripts/test-install-banner.sh
+
+      - name: Check that nobody is offered a release before the install check
+        run: bash scripts/test-release-workflow.sh
 
       - name: Check how a pre-release is told from a release
         run: bash scripts/test-release-prerelease.sh
@@ -80,43 +91,49 @@ jobs:
           fi
 
       - name: Checkout CasaOS
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           repository: ${{ github.repository_owner }}/CasaOS
           ref: ${{ env.CASAOS_COMMIT }}
           path: work/CasaOS
 
       - name: Checkout CasaOS-Gateway
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           repository: ${{ github.repository_owner }}/CasaOS-Gateway
           ref: ${{ env.CASAOS_GATEWAY_COMMIT }}
           path: work/CasaOS-Gateway
 
       - name: Checkout CasaOS-UserService
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           repository: ${{ github.repository_owner }}/CasaOS-UserService
           ref: ${{ env.CASAOS_USER_SERVICE_COMMIT }}
           path: work/CasaOS-UserService
 
       - name: Checkout CasaOS-LocalStorage
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           repository: ${{ github.repository_owner }}/CasaOS-LocalStorage
           ref: ${{ env.CASAOS_LOCAL_STORAGE_COMMIT }}
           path: work/CasaOS-LocalStorage
 
       - name: Checkout CasaOS-MessageBus
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           repository: ${{ github.repository_owner }}/CasaOS-MessageBus
           ref: ${{ env.CASAOS_MESSAGE_BUS_COMMIT }}
           path: work/CasaOS-MessageBus
 
       - name: Checkout CasaOS-AppManagement
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           repository: ${{ github.repository_owner }}/CasaOS-AppManagement
           ref: ${{ env.CASAOS_APP_MANAGEMENT_COMMIT }}
           path: work/CasaOS-AppManagement
@@ -131,7 +148,7 @@ jobs:
 
       # Only a release that lists a module builds the core, to run it: prove_modules_core.
       - name: Set up Go for the proof of the module assistant
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: work/CasaOS/go.mod
           cache: false
@@ -186,20 +203,23 @@ jobs:
           fi
           { echo "files<<END"; echo "${files}"; echo "END"; } >> "$GITHUB_OUTPUT"
 
-      # The release is published as a pre-release while release/PRERELEASE
-      # exists in the tagged commit. Boxes (the in-app updater) and the
-      # one-line install command read releases/latest, which GitHub works out
-      # without pre-releases, so the release can be installed by its tag and
-      # proven (docker-update-proof.yml, install-check.yml) before anybody is
-      # offered it. To promote it:
+      # What is published here is always a pre-release. Boxes (the in-app
+      # updater) and the one-line install command read releases/latest, which
+      # GitHub works out without pre-releases, so nobody is offered the release
+      # before the install check below has passed: the promote job is what makes
+      # it the latest one.
+      #
+      # release/PRERELEASE in the tagged commit holds it back even then, for a
+      # release that has more to prove (docker-update-proof.yml, an upgrade
+      # proof) before anybody is offered it. To promote that one by hand:
       #   gh release edit <tag> -R ReCasaOS/CasaOS-Install --prerelease=false --latest
       # and delete release/PRERELEASE in the next commit.
-      - name: Is this a pre-release
+      - name: Is this release held back as a pre-release
         id: pre
         run: echo "value=$(bash scripts/release-is-prerelease.sh)" >> "$GITHUB_OUTPUT"
 
       - name: Publish release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           body_path: dist/release-notes.md
@@ -214,7 +234,7 @@ jobs:
             dist/checksums.txt
             ${{ steps.modules.outputs.files }}
           draft: false
-          prerelease: ${{ steps.pre.outputs.value == 'true' }}
+          prerelease: true
           fail_on_unmatched_files: true
 
   # Then install what was just published on a fresh machine and use it. Its own
@@ -225,3 +245,27 @@ jobs:
     uses: ./.github/workflows/install-check.yml
     with:
       tag: ${{ github.ref_name }}
+
+  # Only a release that passed the check on every leg is offered to boxes. A leg
+  # that failed for a reason of its own (a mirror that was down) is run again
+  # with "Re-run failed jobs", and this job with it. Not with "Re-run all jobs":
+  # that publishes again, and what is published is a pre-release.
+  promote:
+    name: Offer the release to boxes
+    needs: [release, install-check]
+    if: github.ref_type == 'tag' && needs.release.outputs.held == 'false'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Make it the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Never over a newer release: two tags can be in the check at once, and
+          # the run of an old tag can be started again.
+          latest="$(gh release view -R "${GITHUB_REPOSITORY}" --json tagName -q .tagName || true)"
+          if [ "$(printf '%s\n%s\n' "${latest}" "${GITHUB_REF_NAME}" | sort -V | tail -n 1)" != "${GITHUB_REF_NAME}" ]; then
+            echo "${latest} is the latest release and is newer: ${GITHUB_REF_NAME} stays a pre-release."
+            exit 0
+          fi
+          gh release edit "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" --prerelease=false --latest
