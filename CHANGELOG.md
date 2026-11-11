@@ -2,6 +2,28 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.131] - 2026-11-11
+
+Components: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.101`, CasaOS-LocalStorage `v0.4.62`. Unchanged from v0.5.130: CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, CasaOS-UI `v0.4.173`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A storage is looked at before it is erased or unmounted.** The dashboard offers only the disks that are free, but its list may be old. The routes that format, add or remove a storage now look at the device themselves, just before they do anything to it: adding a storage with a format takes a whole disk that holds nothing in use, formatting takes a storage this box mounted, and removing one unmounts only what is mounted under `/media` or `/mnt`. A device in use is refused with the reason, and nothing has been unmounted or erased ([ReCasaOS/CasaOS-LocalStorage#29](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/29)).
+- **A changed global variable no longer starts the apps that were stopped.** Changing or deleting a global variable (the time zone, for example) brought every app up again, the stopped ones too. A running app is still brought up again with the new values; a stopped app has its containers made again with them and stays stopped. Until it is started, such an app shows the state `created` in place of `exited` ([ReCasaOS/CasaOS-AppManagement#60](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/60)).
+
+### Changed
+
+- **A release is offered to boxes only after the install check.** What the release workflow publishes is always a pre-release, which neither the in-app updater nor the one-line install command reads. A last job, which waits for the install check, makes it the latest release, and never over a newer one. `release/PRERELEASE` in the tagged commit still holds a release back until it is promoted by hand. This release is the first one cut that way: it carries no `release/PRERELEASE` ([#217](https://github.com/ReCasaOS/CasaOS-Install/pull/217)).
+
+### Removed
+
+- **Code that nothing called.** Packages, handlers and scripts with no caller leave the core and CasaOS-AppManagement, among them the `cleanup/` scripts under `/usr/share/casaos`, which neither the installer nor the uninstaller ran, and the old `usb-mount` unit and script. Nothing that is served or run changes ([ReCasaOS/CasaOS#135](https://github.com/ReCasaOS/CasaOS/pull/135), [ReCasaOS/CasaOS-AppManagement#61](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/61)).
+- **A branch of the Docker install that could not be reached** ([#218](https://github.com/ReCasaOS/CasaOS-Install/pull/218)).
+
+### Proof
+
+The storage routes are held by tests that describe the disks of a box (system disk, array member, volume group, open encrypted volume, storages on a partition, an array and a logical volume, a blank disk) and check, route by route, what is refused with nothing done. The global variables are held by tests on a stand-in for compose: a stopped app is made again and not started, a running one is brought up again. The CI of every pull request passed, and the release runs of CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.101` and CasaOS-LocalStorage `v0.4.62` passed. Not looked at: a real disk formatted or ejected, a global variable changed on a real box. The install check of this release: result added after the check.
+
 ## [0.5.130] - 2026-11-11
 
 Components: CasaOS-UserService `v0.4.36`. Unchanged from v0.5.129: CasaOS `v0.4.111`, CasaOS-AppManagement `v0.4.100`, CasaOS-Gateway `v0.4.35`, CasaOS-UI `v0.4.173`, CasaOS-LocalStorage `v0.4.61`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
