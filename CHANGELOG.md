@@ -12,7 +12,7 @@ Components: CasaOS-AppManagement `v0.4.103`. Unchanged from v0.5.133: CasaOS `v0
 
 ### Proof
 
-A test gives the app service a zone file at UTC-3 and checks that its clock follows it, then that a zone set on the service itself, and a box with no zone file, keep the zone the service started with; it failed before the fix. The tests of the backups, of their schedules and of their verification passed, the CI of the pull request passed, and the release run of CasaOS-AppManagement `v0.4.103` passed. Not looked at: a real box whose zone is changed while the service runs. The person who reported it has not yet said whether a restart of the service put their schedule right. The install check of this release: result added after the check.
+A test gives the app service a zone file at UTC-3 and checks that its clock follows it, then that a zone set on the service itself, and a box with no zone file, keep the zone the service started with; it failed before the fix. The tests of the backups, of their schedules and of their verification passed, the CI of the pull request passed, and the release run of CasaOS-AppManagement `v0.4.103` passed. Not looked at: a real box whose zone is changed while the service runs. The person who reported it has not yet said whether a restart of the service put their schedule right. The install check passed on all 12 legs on the first try, and the workflow then made the release the latest one (run 43073450907).
 
 ## [0.5.133] - 2026-11-11
 
