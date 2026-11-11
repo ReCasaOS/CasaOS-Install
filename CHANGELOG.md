@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.134] - 2026-11-11
+
+Components: CasaOS-AppManagement `v0.4.103`. Unchanged from v0.5.133: CasaOS `v0.4.112`, CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.62`, CasaOS-UI `v0.4.174`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A backup set for 01:30 runs at 01:30 after the box's time zone is changed.** The app service read the time zone once, when it started. On a box whose zone was set afterwards (a cloud image that boots in UTC, for example), every schedule was still read in the old zone until the service restarted: a backup set for 01:30 in São Paulo went off at 22:30. The schedules of the backups and of their verification, and the last and next times the interface shows for them, now follow the zone the box has at that moment. On the day the zone is changed, a schedule whose time in the new zone has not run yet runs once more ([ReCasaOS/CasaOS-AppManagement#63](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/63), reported in [ReCasaOS/CasaOS#136](https://github.com/ReCasaOS/CasaOS/issues/136)).
+
+### Proof
+
+A test gives the app service a zone file at UTC-3 and checks that its clock follows it, then that a zone set on the service itself, and a box with no zone file, keep the zone the service started with; it failed before the fix. The tests of the backups, of their schedules and of their verification passed, the CI of the pull request passed, and the release run of CasaOS-AppManagement `v0.4.103` passed. Not looked at: a real box whose zone is changed while the service runs. The person who reported it has not yet said whether a restart of the service put their schedule right. The install check of this release: result added after the check.
+
 ## [0.5.133] - 2026-11-11
 
 Components: CasaOS-AppManagement `v0.4.102`, CasaOS-UI `v0.4.174`. Unchanged from v0.5.132: CasaOS `v0.4.112`, CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.62`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
