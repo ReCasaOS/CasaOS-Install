@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.135] - 2026-11-11
+
+Components: CasaOS-LocalStorage `v0.4.64`, CasaOS-UI `v0.4.175`. Unchanged from v0.5.134: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.103`, CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A dead mount no longer takes the storage list down.** The storage service read the system disk from `df`, and stopped altogether when `df` returned an error. `df` does that as soon as one mount cannot be read, a network share in `/etc/fstab` whose server has gone (`Stale file handle`) for example, while it still lists all the others. Every opening of the Storage manager or of the dashboard then restarted the service: the Storage tab read "No standalone storage is available" and the dashboard's Storage card showed only the system drive and the USB disks. The list now reads what `df` gives whatever its answer ([ReCasaOS/CasaOS-LocalStorage#30](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/30), reported in [ReCasaOS/CasaOS#67](https://github.com/ReCasaOS/CasaOS/issues/67)).
+
+### Added
+
+- **A mount that cannot be read is named in "Needs attention".** The new dashboard says which mount `df` cannot read and why ("The mount /media/fotos cannot be read (Stale file handle): check /etc/fstab or the server it comes from"), and when `df` itself does not answer within 15 s. Being refused another user's FUSE mount, as on a desktop, is not counted ([ReCasaOS/CasaOS-LocalStorage#31](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/31), [ReCasaOS/CasaOS-UI#178](https://github.com/ReCasaOS/CasaOS-UI/pull/178), suggested in [ReCasaOS/CasaOS#67](https://github.com/ReCasaOS/CasaOS/issues/67)).
+- **The ZFS pools in the dashboard's Storage card.** A pool's disks hold no mounted filesystem, so a pool never showed there. Each pool is now a row with its name, allocated and total size, and its state: healthy when online, its own word (Degraded, Faulted…) and a red bar otherwise ([ReCasaOS/CasaOS-UI#178](https://github.com/ReCasaOS/CasaOS-UI/pull/178), asked in [ReCasaOS/CasaOS#67](https://github.com/ReCasaOS/CasaOS/issues/67)).
+
+### Proof
+
+The person who reported it found `df` exiting with 1 on a dead network share of their box, and their Storage tab came back once that mount was taken out of `/etc/fstab`, which is the cause the fix removes. Tests put a fake `df` on the path that complains and exits 1, and check that the list is still read; others check the reading of `df`'s complaints (a dead share, a path with a space or a quote, the refusals left out) and a `df` that hangs. The dashboard is held by tests on the pool rows (online, degraded, unread state, with the storage list failing) and on the attention lines. The CI of the three pull requests passed, and the release runs of CasaOS-LocalStorage `v0.4.64` and CasaOS-UI `v0.4.175` passed. Not looked at: the dashboard in a browser, a real box with ZFS on this version, a real dead mount with the fix, and a `df` that really hangs. The install check of this release: result added after the check.
+
 ## [0.5.134] - 2026-11-11
 
 Components: CasaOS-AppManagement `v0.4.103`. Unchanged from v0.5.133: CasaOS `v0.4.112`, CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.62`, CasaOS-UI `v0.4.174`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
