@@ -2,7 +2,9 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
-## [0.5.131] - 2026-11-11
+## [0.5.132] - 2026-11-11
+
+v0.5.131 was tagged but never published: its build stopped at a check of the release workflow, which still expected the actions to be named by a tag. This release is v0.5.131 with that check brought up to date.
 
 Components: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.101`, CasaOS-LocalStorage `v0.4.62`. Unchanged from v0.5.130: CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, CasaOS-UI `v0.4.173`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
 
@@ -22,7 +24,7 @@ Components: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.101`, CasaOS-LocalStor
 
 ### Proof
 
-The storage routes are held by tests that describe the disks of a box (system disk, array member, volume group, open encrypted volume, storages on a partition, an array and a logical volume, a blank disk) and check, route by route, what is refused with nothing done. The global variables are held by tests on a stand-in for compose: a stopped app is made again and not started, a running one is brought up again. The CI of every pull request passed, and the release runs of CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.101` and CasaOS-LocalStorage `v0.4.62` passed. Not looked at: a real disk formatted or ejected, a global variable changed on a real box. The install check of this release: result added after the check.
+The storage routes are held by tests that describe the disks of a box (system disk, array member, volume group, open encrypted volume, storages on a partition, an array and a logical volume, a blank disk) and check, route by route, what is refused with nothing done. The global variables are held by tests on a stand-in for compose: a stopped app is made again and not started, a running one is brought up again. The CI of every pull request passed, and the release runs of CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.101` and CasaOS-LocalStorage `v0.4.62` passed. Not looked at: a real disk formatted or ejected, a global variable changed on a real box. Nothing was published by the run of v0.5.131: the build stops before the publishing step. The install check of this release: result added after the check.
 
 ## [0.5.130] - 2026-11-11
 

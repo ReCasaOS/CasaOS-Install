@@ -1818,7 +1818,7 @@ class Workflow(unittest.TestCase):
     def test_python_is_pinned_before_anything_runs_it(self):
         i = step_index(self.steps, "Set up Python")
         step = self.text("Set up Python")
-        self.assertRegex(step, r"uses: actions/setup-python@v[0-9]+\b")
+        self.assertRegex(step, r"uses: actions/setup-python@[0-9a-f]{40}\b")
         self.assertRegex(step, r'(?m)python-version: "?3\.12"?\s*$')
         for j, other in enumerate(self.steps[:i]):
             self.assertNotRegex("\n".join(other), r"python3?\b|\.py\b", "step %r runs python before it is pinned" % self.names[j])
@@ -1826,7 +1826,7 @@ class Workflow(unittest.TestCase):
     def test_go_is_set_up_from_the_core_it_builds_before_the_bundle_is_assembled(self):
         i = step_index(self.steps, "Set up Go for the proof of the module assistant")
         step = self.text("Set up Go for the proof of the module assistant")
-        self.assertRegex(step, r"uses: actions/setup-go@v[0-9]+\b")
+        self.assertRegex(step, r"uses: actions/setup-go@[0-9a-f]{40}\b")
         self.assertIn("go-version-file: work/CasaOS/go.mod", step)
         self.assertGreater(i, step_index(self.steps, "Checkout CasaOS"))
         self.assertLess(i, step_index(self.steps, "Assemble the release bundle"))
