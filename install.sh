@@ -177,7 +177,6 @@ TARGET_ARCH=""
 CASAOS_APP_MANAGEMENT_SHA256=""
 CASAOS_CORE_SHA256=""
 TMP_ROOT=/tmp/casaos-installer
-REGION="UNKNOWN"
 # Where the App Store catalogue is fetched from. Set it on the install line to use a
 # mirror -- curl <install.sh> | sudo CASA_DOWNLOAD_DOMAIN=https://mirror/ bash -- rather
 # than being geo-located: this script used to curl a geo-IP service to guess it.
@@ -1013,11 +1012,6 @@ Install_Docker() {
                 ${sudo_cmd} curl -fsSL https://get.docker.com | bash
             ) || docker_status=$?
         fi
-    elif [[ "${REGION}" = "China" ]] || [[ "${REGION}" = "CN" ]]; then
-        (
-            set -o pipefail
-            ${sudo_cmd} curl -fsSL https://play.cuse.eu.org/get_docker.sh | bash -s docker --mirror Aliyun
-        ) || docker_status=$?
     else
         (
             set -o pipefail

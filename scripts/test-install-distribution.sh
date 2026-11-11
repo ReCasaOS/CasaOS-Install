@@ -35,7 +35,6 @@ done
 # What those functions take from install.sh: its Show, which ends the install on 1,
 # and its globals; apt-get, curl and dpkg are recorders whose answers can be set.
 sudo_cmd=""
-REGION=""
 CALLS="${WORK}/calls.log"
 curl_status=0
 dpkg_arch=""
