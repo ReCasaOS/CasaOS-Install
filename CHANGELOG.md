@@ -2,6 +2,26 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.133] - 2026-11-11
+
+Components: CasaOS-AppManagement `v0.4.102`, CasaOS-UI `v0.4.174`. Unchanged from v0.5.132: CasaOS `v0.4.112`, CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.62`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The card of an install says what the install is doing.** It read "Installing 75%" and nothing else, then "Installation completed" at the end of the download, with the containers still to be created and started. It now reads, in turn: "Downloading", with how much of the image has arrived, of how much once every layer has said its size, which image of how many when the app has several, and the image's name under the bar; "Unpacking the image"; "Creating the containers"; "Starting, waiting for the app to answer". The last two are on a bar with no figure. The bar itself now moves while a layer downloads, where it waited for each layer to finish, and it no longer reaches the end with the image still being unpacked ([ReCasaOS/CasaOS-AppManagement#62](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/62), [ReCasaOS/CasaOS-UI#177](https://github.com/ReCasaOS/CasaOS-UI/pull/177)).
+
+### Fixed
+
+- **Three wrong first lines on that card.** A page opened half way through an install wrote the bare number, "25". Something beginning on a card left up read "Installing NaN%". The first line of an install went out in English whatever the language ([ReCasaOS/CasaOS-UI#177](https://github.com/ReCasaOS/CasaOS-UI/pull/177)).
+
+### Removed
+
+- **Ten dependencies of the dashboard that nothing imported** ([ReCasaOS/CasaOS-UI#176](https://github.com/ReCasaOS/CasaOS-UI/pull/176)).
+
+### Proof
+
+The counting of a download is held by tests that replay the lines the Docker daemon sends for a pull: a layer on its way, a layer unpacked, an image already on the box, the images of a stack one after the other. The card is held by tests on each step, on a late line of the download that must not take the card back, and on the wording an older app service still gets. The card was seen in a browser on the development server, the events sent by hand. The CI of the three pull requests passed, and the release runs of CasaOS-AppManagement `v0.4.102` and CasaOS-UI `v0.4.174` passed. Not looked at: a real install of an app, on a real box or elsewhere, and a box whose Docker keeps its images in containerd. The install check of this release: result added after the check.
+
 ## [0.5.132] - 2026-11-11
 
 v0.5.131 was tagged but never published: its build stopped at a check of the release workflow, which still expected the actions to be named by a tag. This release is v0.5.131 with that check brought up to date.
