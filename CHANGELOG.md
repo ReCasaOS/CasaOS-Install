@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.136] - 2026-11-12
+
+Components: CasaOS-Gateway `v0.4.36`. Unchanged from v0.5.135: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, CasaOS-UI `v0.4.175`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **Shared apps speak HTTP/2.** The listener that serves the visitors of a publicly shared app offered only HTTP/1.1, so a browser opened up to 6 connections per app, each one carried through the box's tunnel to the relay. It now offers HTTP/2 as well: one connection per visitor and app, and pages load faster. WebSockets keep using HTTP/1.1, as before. The dashboard itself is unchanged ([ReCasaOS/CasaOS-Gateway#12](https://github.com/ReCasaOS/CasaOS-Gateway/pull/12)). It goes with the relay's new per-visitor connection limits ([ReCasaOS/ReCasaOS-Relay#11](https://github.com/ReCasaOS/ReCasaOS-Relay/pull/11)), deployed on the relay separately.
+
+### Proof
+
+A test sends a request over HTTP/2 through the share listener, with its PROXY header and TLS, and checks the answer and that the app sees the visitor's address; a client that offers only HTTP/1.1 still gets HTTP/1.1. Go's HTTP/2 server was checked not to announce WebSockets over HTTP/2, so browsers keep opening them over HTTP/1.1. The CI of the pull request and the release run of CasaOS-Gateway `v0.4.36` passed. Not looked at: a shared app in a real browser through the relay. The install check of this release: result added after the check.
+
 ## [0.5.135] - 2026-11-11
 
 Components: CasaOS-LocalStorage `v0.4.64`, CasaOS-UI `v0.4.175`. Unchanged from v0.5.134: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.103`, CasaOS-Gateway `v0.4.35`, CasaOS-UserService `v0.4.36`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
