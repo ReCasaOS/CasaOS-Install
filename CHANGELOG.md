@@ -12,7 +12,7 @@ Components: CasaOS-Gateway `v0.4.36`. Unchanged from v0.5.135: CasaOS `v0.4.112`
 
 ### Proof
 
-A test sends a request over HTTP/2 through the share listener, with its PROXY header and TLS, and checks the answer and that the app sees the visitor's address; a client that offers only HTTP/1.1 still gets HTTP/1.1. Go's HTTP/2 server was checked not to announce WebSockets over HTTP/2, so browsers keep opening them over HTTP/1.1. The CI of the pull request and the release run of CasaOS-Gateway `v0.4.36` passed. Not looked at: a shared app in a real browser through the relay. The install check of this release: result added after the check.
+A test sends a request over HTTP/2 through the share listener, with its PROXY header and TLS, and checks the answer and that the app sees the visitor's address; a client that offers only HTTP/1.1 still gets HTTP/1.1. Go's HTTP/2 server was checked not to announce WebSockets over HTTP/2, so browsers keep opening them over HTTP/1.1. The CI of the pull request and the release run of CasaOS-Gateway `v0.4.36` passed. Not looked at: a shared app in a real browser through the relay. The install check passed on 11 of its 12 legs: Debian 11 and 12, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled). The Debian 13 leg did not run: Debian's `latest` Trixie folder had no `genericcloud` image to download (HTTP 404, as for v0.5.135). The release was made the latest one by hand ([run 43199171814](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/43199171814)).
 
 ## [0.5.135] - 2026-11-11
 
