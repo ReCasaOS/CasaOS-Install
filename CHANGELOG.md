@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.137] - 2026-11-12
+
+Components: CasaOS-UI `v0.4.177`. Unchanged from v0.5.136: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.103`, CasaOS-Gateway `v0.4.36`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The + menu opens above the update chips.** On the dashboard, the "Update" chip of a card showed through the open + menu. The menu now sits above it ([ReCasaOS/CasaOS-UI#180](https://github.com/ReCasaOS/CasaOS-UI/pull/180)).
+- **Storage sizes when `used` is missing.** The size falls back to `size - avail` ([ReCasaOS/CasaOS-UI#179](https://github.com/ReCasaOS/CasaOS-UI/pull/179)).
+
+### Proof
+
+The CI of both pull requests passed. Not looked at: the menu in a browser. The install check of this release: result added after the check.
+
 ## [0.5.136] - 2026-11-12
 
 Components: CasaOS-Gateway `v0.4.36`. Unchanged from v0.5.135: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, CasaOS-UI `v0.4.175`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
