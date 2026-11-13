@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.142] - 2026-11-13
+
+Components: CasaOS `v0.4.115`. Unchanged from v0.5.141: CasaOS-UI `v0.4.181`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Protection of shared apps at the relay.** On a relay that offers it, visitors of shared apps can be cut before they reach the box. In Remote access, the Protection section gains:
+  - **Filtering by the relay**, on by default: the relay cuts addresses its operator lists as malicious (block lists, operator bans).
+  - **Join the community protection**, off until the owner agrees in a dedicated window (never pre-ticked): the box then sends the relay the addresses it bans (the address, the reason and the app, nothing else), and addresses banned by boxes of two different owners within 24 hours are cut for every box that shares. The owner can stop at any time; the box's reports are then deleted from the relay. Leaving remote access stops sharing.
+  - **Cut at the relay**, a new tab of the journal, lists what the relay refused for this box over 7 days.
+  - With a relay that does not offer it yet, nothing changes and nothing is shown ([ReCasaOS/CasaOS#143](https://github.com/ReCasaOS/CasaOS/pull/143); the dashboard part shipped with CasaOS-UI `v0.4.181` in v0.5.141, [ReCasaOS/CasaOS-UI#184](https://github.com/ReCasaOS/CasaOS-UI/pull/184); relay side [ReCasaOS/ReCasaOS-Relay#12](https://github.com/ReCasaOS/ReCasaOS-Relay/pull/12); design in [ReCasaOS/CasaOS#144](https://github.com/ReCasaOS/CasaOS/pull/144)).
+
+### Proof
+
+The core, the dashboard and the relay were built task by task, each task reviewed, then each branch reviewed again and corrected before merge. The core's tests (with the race detector) cover the settings and the consent, their push to the relay, the reports sent and never sent, and an older relay; the dashboard's cover the agreement window and the new tab, and the screens were looked at in a browser against a stub of the core; the relay's end-to-end test shows two fleets reporting a visitor, a box that shares cutting it and a box that does not still answering. The CI of the three pull requests and of `main` passed, and the release run of CasaOS `v0.4.115` passed. Not tried: the relay at relay.recasaos.org does not offer it yet (it needs the relay's next version), so no real box has used it. The install check of this release: result added after the check.
+
 ## [0.5.141] - 2026-11-13
 
 Components: CasaOS-UI `v0.4.181`. Unchanged from v0.5.140: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
