@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.141] - 2026-11-13
+
+Components: CasaOS-UI `v0.4.181`. Unchanged from v0.5.140: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The menu of an app card could be cut off.** On a card of the second row the menu (Uninstall, Restart, Turn On...) opened upwards as soon as it did not fit below, without checking that the top had room, and its options were hidden. It now opens below when it fits, otherwise on the side with more room ([ReCasaOS/CasaOS-UI#185](https://github.com/ReCasaOS/CasaOS-UI/pull/185), reported in [ReCasaOS/CasaOS#139](https://github.com/ReCasaOS/CasaOS/issues/139)).
+
+### Proof
+
+The dashboard's CI passed on the pull request (the full suite and the build), and the release run of CasaOS-UI `v0.4.181` passed on its tag. Not tried in a browser with a real second-row card. The install check of this release: result added after the check.
+
 ## [0.5.140] - 2026-11-13
 
 Components: CasaOS-LocalStorage `v0.4.65`. Unchanged from v0.5.139: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UI `v0.4.180`, CasaOS-UserService `v0.4.36`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
