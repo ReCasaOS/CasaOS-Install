@@ -12,7 +12,7 @@ Components: CasaOS-AppManagement `v0.4.104`, CasaOS-UI `v0.4.184`. Unchanged fro
 
 ### Proof
 
-CI passed on both pull requests and the release runs of AppManagement `v0.4.104` and CasaOS-UI `v0.4.184` passed on their tags. The AppManagement test of a vanished container asserts the flag; the UI has two new specs. The Statistics change was not looked at in a browser. A date-bound log test of AppManagement, which had started failing as its fixed date left the 7-day window, now uses yesterday's date. The install check of this release: result added after the check.
+CI passed on both pull requests and the release runs of AppManagement `v0.4.104` and CasaOS-UI `v0.4.184` passed on their tags. The AppManagement test of a vanished container asserts the flag; the UI has two new specs. The Statistics change was not looked at in a browser. A date-bound log test of AppManagement, which had started failing as its fixed date left the 7-day window, now uses yesterday's date. The install check of this release passed on all 12 legs (run 43463675698).
 
 ## [0.5.144] - 2026-11-13
 
