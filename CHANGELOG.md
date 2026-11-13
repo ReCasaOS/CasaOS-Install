@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.139] - 2026-11-13
+
+Components: CasaOS-UI `v0.4.180`. Unchanged from v0.5.138: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The sharing part of the Remote access window, as cards.** Public sharing is a card with the public name under its title and the relay and certificate as chips, one row per shared app with Copy and Stop sharing, and Stop all sharing in its foot. The protection of shared apps is a card with its switch in the head; the people with an access code are a card with Add a person in the head and one row per person (a dot, the name, the apps as tags, the last use, the actions); the events have the titled head of the app's sharing window, filters and Refresh at the right ([ReCasaOS/CasaOS-UI#183](https://github.com/ReCasaOS/CasaOS-UI/pull/183)).
+
+### Fixed
+
+- **The ban rules of the protection settings are aligned** in the Remote access window: its taller fields had pushed their labels apart.
+- **Add a person was dark text on the dark card** and could hardly be seen.
+
+### Proof
+
+The dashboard's CI passed on the pull request (the full suite and the build), and the release run of CasaOS-UI `v0.4.180` passed on its tag. Looked at in a browser against a stub of the core. The install check of this release: result added after the check.
+
 ## [0.5.138] - 2026-11-13
 
 Components: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-UI `v0.4.179`. Unchanged from v0.5.137: CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
