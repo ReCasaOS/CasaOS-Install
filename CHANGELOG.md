@@ -16,7 +16,7 @@ Components: CasaOS-UI `v0.4.183`. Unchanged from v0.5.143: CasaOS `v0.4.115`, Ca
 
 ### Proof
 
-The dashboard's CI passed on both pull requests (the full suite and the build), and the release run of CasaOS-UI `v0.4.183` passed on its tag. The share tip was looked at in a browser on the mock dashboard; the Logs change has two unit tests and was not looked at in a browser. The install check of this release: result added after the check.
+The dashboard's CI passed on both pull requests (the full suite and the build), and the release run of CasaOS-UI `v0.4.183` passed on its tag. The share tip was looked at in a browser on the mock dashboard; the Logs change has two unit tests and was not looked at in a browser. The install check of this release passed on all 12 legs (run 43448977748; the DietPi Trixie leg timed out on its first boot in QEMU and passed on rerun).
 
 ## [0.5.143] - 2026-11-13
 
