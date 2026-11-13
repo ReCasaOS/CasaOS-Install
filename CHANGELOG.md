@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.140] - 2026-11-13
+
+Components: CasaOS-LocalStorage `v0.4.65`. Unchanged from v0.5.139: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UI `v0.4.180`, CasaOS-UserService `v0.4.36`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A disk with no partition showed an empty usage bar.** A filesystem made on the whole disk (such as `/dev/sdd`) has no partitions, and the storage list replaced its used space with the sum of its partitions, which is 0. The used space reported by the disk itself is now kept ([ReCasaOS/CasaOS-LocalStorage#32](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/32), reported in [ReCasaOS/CasaOS#142](https://github.com/ReCasaOS/CasaOS/issues/142)).
+
+### Proof
+
+The build of CasaOS-LocalStorage passed on the pull request. Not tried on a real disk without partition. The install check of this release: result added after the check.
+
 ## [0.5.139] - 2026-11-13
 
 Components: CasaOS-UI `v0.4.180`. Unchanged from v0.5.138: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
