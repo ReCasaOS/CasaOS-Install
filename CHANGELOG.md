@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.144] - 2026-11-13
+
+Components: CasaOS-UI `v0.4.183`. Unchanged from v0.5.143: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The Logs list hides the uninstalled apps by default.** A checkbox, shown only when there are some, lists them again; an uninstalled app that is selected, or that the page was opened on, stays listed ([ReCasaOS/CasaOS-UI#187](https://github.com/ReCasaOS/CasaOS-UI/pull/187), half of [ReCasaOS/CasaOS#146](https://github.com/ReCasaOS/CasaOS/issues/146)). The Statistics list still shows the removed containers: the backend lists them as stopped, so it needs a change first.
+
+### Fixed
+
+- **The first-visit tip of the Files sidebar no longer covers the Shared label.** It opens beside the Shared row, over the empty file area, with its full text, instead of over the label and clipped by the sidebar ([ReCasaOS/CasaOS-UI#188](https://github.com/ReCasaOS/CasaOS-UI/pull/188), reported in [ReCasaOS/CasaOS#145](https://github.com/ReCasaOS/CasaOS/issues/145)).
+
+### Proof
+
+The dashboard's CI passed on both pull requests (the full suite and the build), and the release run of CasaOS-UI `v0.4.183` passed on its tag. The share tip was looked at in a browser on the mock dashboard; the Logs change has two unit tests and was not looked at in a browser. The install check of this release: result added after the check.
+
 ## [0.5.143] - 2026-11-13
 
 Components: CasaOS-UI `v0.4.182`. Unchanged from v0.5.142: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
