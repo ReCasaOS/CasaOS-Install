@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.143] - 2026-11-13
+
+Components: CasaOS-UI `v0.4.182`. Unchanged from v0.5.142: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The menu of an app card is no longer cut off on a short window.** The correction of v0.5.141 never took effect: the menu was measured before it was shown. It is now measured once shown, opened on the side with more room, and capped to that room with its own scroll bar, so Uninstall and the other last entries stay reachable. Seen working in a browser on a 300 px high window; a normal window is unchanged ([ReCasaOS/CasaOS-UI#186](https://github.com/ReCasaOS/CasaOS-UI/pull/186), reported in [ReCasaOS/CasaOS#139](https://github.com/ReCasaOS/CasaOS/issues/139)).
+
+### Proof
+
+The dashboard's CI passed on the pull request (the full suite and the build), and the release run of CasaOS-UI `v0.4.182` passed on its tag. The install check of this release: result added after the check.
+
 ## [0.5.142] - 2026-11-13
 
 Components: CasaOS `v0.4.115`. Unchanged from v0.5.141: CasaOS-UI `v0.4.181`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
