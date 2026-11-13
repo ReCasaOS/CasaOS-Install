@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.145] - 2026-11-13
+
+Components: CasaOS-AppManagement `v0.4.104`, CasaOS-UI `v0.4.184`. Unchanged from v0.5.144: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The Statistics list hides the uninstalled apps by default.** AppManagement marks the containers Docker no longer lists with `removed: true` ([ReCasaOS/CasaOS-AppManagement#64](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/64)); the window leaves them out, and a switch, shown only when there are some, lists them again. One that is selected stays listed ([ReCasaOS/CasaOS-UI#189](https://github.com/ReCasaOS/CasaOS-UI/pull/189), second half of [ReCasaOS/CasaOS#146](https://github.com/ReCasaOS/CasaOS/issues/146); the Logs half is in v0.5.144).
+
+### Proof
+
+CI passed on both pull requests and the release runs of AppManagement `v0.4.104` and CasaOS-UI `v0.4.184` passed on their tags. The AppManagement test of a vanished container asserts the flag; the UI has two new specs. The Statistics change was not looked at in a browser. A date-bound log test of AppManagement, which had started failing as its fixed date left the 7-day window, now uses yesterday's date. The install check of this release: result added after the check.
+
 ## [0.5.144] - 2026-11-13
 
 Components: CasaOS-UI `v0.4.183`. Unchanged from v0.5.143: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
