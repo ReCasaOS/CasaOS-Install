@@ -24,7 +24,7 @@ Components: CasaOS-LocalStorage `v0.4.65`. Unchanged from v0.5.139: CasaOS `v0.4
 
 ### Proof
 
-The build of CasaOS-LocalStorage passed on the pull request. Not tried on a real disk without partition. The install check of this release: result added after the check.
+The build of CasaOS-LocalStorage passed on the pull request. Not tried on a real disk without partition. The install check passed on all 12 legs on the first try: Debian 11, 12 and 13, Ubuntu 24.04 and 26.04, Armbian and DietPi (x86, Trixie) and Linux Mint 22.3 under QEMU, and the four Docker legs (amd64 and arm64, Docker current and preinstalled); the workflow then made the release the latest one ([run 43391229057](https://github.com/ReCasaOS/CasaOS-Install/actions/runs/43391229057)).
 
 ## [0.5.139] - 2026-11-13
 
