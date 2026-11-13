@@ -2,6 +2,30 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.138] - 2026-11-13
+
+Components: CasaOS `v0.4.114`, CasaOS-Gateway `v0.4.37`, CasaOS-UI `v0.4.179`. Unchanged from v0.5.137: CasaOS-AppManagement `v0.4.103`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Protection of publicly shared apps.** In Remote access, a new "Protection of shared apps" section, and in each shared app's sharing window, its own access and protection:
+  - **Access codes per person.** An app can be "Protected by code": only the people given a code for it get in, after typing it once in their browser (they stay recognised for 30 days). Each person has their own code, which opens a chosen set of apps and can be regenerated or removed without touching the others. Mobile and sync apps cannot type a code: an app that must serve them stays open.
+  - **OWASP rules** (the Core Rule Set, through Coraza) per box or per app: off, observe (note what would be blocked) or block, with any rule switched off for one app from the journal.
+  - **Address and country lists, request limits and automatic bans** for scans, repeated rule hits, too many requests and wrong codes, with bans growing longer on repeat. An address always allowed is never refused or banned.
+  - **A journal** of refused and banned requests (date, address, country with its flag, network, app, reason) and the list of active bans, with Unban and Always allow this address. Country and network names come from DB-IP Lite, downloaded once a month while protection is on.
+  - **Needs attention** shows a wave of bans on a shared app, missing country data, and a reset of the protection settings.
+  - Protection is off by default: nothing changes for a box until its owner turns it on or protects an app ([ReCasaOS/CasaOS-Gateway#13](https://github.com/ReCasaOS/CasaOS-Gateway/pull/13), [ReCasaOS/CasaOS#140](https://github.com/ReCasaOS/CasaOS/pull/140), [ReCasaOS/CasaOS-UI#182](https://github.com/ReCasaOS/CasaOS-UI/pull/182); design in [ReCasaOS/CasaOS#141](https://github.com/ReCasaOS/CasaOS/pull/141)).
+- **The sharing window of an app laid out as cards** (address, access, protection, events), like the rest of the dashboard ([ReCasaOS/CasaOS-UI#182](https://github.com/ReCasaOS/CasaOS-UI/pull/182)).
+
+### Fixed
+
+- **A shared app whose port speaks plain HTTP** (Vaultwarden, for one) is reached over HTTP instead of failing with 502 ([ReCasaOS/CasaOS#137](https://github.com/ReCasaOS/CasaOS/pull/137)).
+- **The app menu opens upwards** when it does not fit below the card ([ReCasaOS/CasaOS-UI#181](https://github.com/ReCasaOS/CasaOS-UI/pull/181), reported in [ReCasaOS/CasaOS#139](https://github.com/ReCasaOS/CasaOS/issues/139)).
+
+### Proof
+
+Each of the three protection pull requests was built task by task, each task reviewed, then the whole branch reviewed again before merge. The Gateway's tests (with the race detector) cover the order of the filters, the access gate and its cookie, bans and their persistence, the country filter and the OWASP rules on shared hosts; the core's cover the settings file, its push to the Gateway before any shared host, and the API; the dashboard's suite passes (8 607 tests) and the screens were looked at in a browser against a stub of the core. The release runs of CasaOS-Gateway `v0.4.37`, CasaOS `v0.4.114` and CasaOS-UI `v0.4.179` passed. Memory with the OWASP rules on, measured on a test harness: about 50 MB more. Not looked at: a protected app opened through the relay from a phone, the OWASP rules on a real box, a real ARM box's memory. The install check of this release: result added after the check.
+
 ## [0.5.137] - 2026-11-12
 
 Components: CasaOS-UI `v0.4.177`. Unchanged from v0.5.136: CasaOS `v0.4.112`, CasaOS-AppManagement `v0.4.103`, CasaOS-Gateway `v0.4.36`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.64`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
