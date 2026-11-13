@@ -2,6 +2,21 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.146] - 2026-11-13
+
+Components: CasaOS-AppManagement `v0.4.105`, CasaOS-UI `v0.4.186`. Unchanged from v0.5.145: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **An app with a one-shot service no longer reads Stopped.** A service that finished its job (exit code 0) is left out of the app's state while another of its containers runs. A crash, a manual stop or a restarting service still count, and an app with nothing running still reads stopped ([ReCasaOS/CasaOS-AppManagement#65](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/65), part of [ReCasaOS/CasaOS#149](https://github.com/ReCasaOS/CasaOS/issues/149)).
+- **`no` can be chosen as a restart policy, and is kept.** The settings form had no such choice and rewrote `restart: no` to `unless-stopped` on save, so a one-shot service was restarted for ever ([ReCasaOS/CasaOS-UI#192](https://github.com/ReCasaOS/CasaOS-UI/pull/192), the other part of #149).
+- **The first-visit tip of the Files sidebar stays beside its row.** In full screen it covered the Shared button, and after closing Files it stayed on the home screen ([ReCasaOS/CasaOS-UI#190](https://github.com/ReCasaOS/CasaOS-UI/pull/190), [ReCasaOS/CasaOS#145](https://github.com/ReCasaOS/CasaOS/issues/145)).
+- **The Open tip of an app card no longer covers the next card.** It goes above or below the card, never beside it ([ReCasaOS/CasaOS-UI#191](https://github.com/ReCasaOS/CasaOS-UI/pull/191), [ReCasaOS/CasaOS#147](https://github.com/ReCasaOS/CasaOS/issues/147)).
+
+### Proof
+
+CI passed on every pull request and the release runs of AppManagement `v0.4.105`, CasaOS-UI `v0.4.185` and `v0.4.186` passed on their tags. The two tips were looked at in a browser on the mock dashboard (the Files tip in the window, in full screen and after closing; the card tip on the last column). The state rule has a test of five cases, run in WSL; the restart policy has four specs. The restart form was not looked at in a browser, and no multi-service app was run for real. The install check of this release: result added after the check.
+
 ## [0.5.145] - 2026-11-13
 
 Components: CasaOS-AppManagement `v0.4.104`, CasaOS-UI `v0.4.184`. Unchanged from v0.5.144: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
