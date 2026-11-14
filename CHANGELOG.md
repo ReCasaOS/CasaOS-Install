@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.147] - 2026-11-14
+
+Components: CasaOS-UI `v0.4.187`. Unchanged from v0.5.146: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.105`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The Files sidebar tip about sharing shows only while the Shared row is hovered.** The first-visit tip stayed on screen and covered the last row in list view; it, its close button and its `shared_init_data` setting are gone ([ReCasaOS/CasaOS-UI#193](https://github.com/ReCasaOS/CasaOS-UI/pull/193), [ReCasaOS/CasaOS#145](https://github.com/ReCasaOS/CasaOS/issues/145)). The row is not focusable, so the keyboard does not show the tip.
+
+### Proof
+
+CI passed on the pull request and the release run of CasaOS-UI `v0.4.187` passed on its tag. The tip was looked at in a browser on the mock dashboard with a real hover and leave; four specs cover it. The install check of this release: result added after the check.
+
 ## [0.5.146] - 2026-11-13
 
 Components: CasaOS-AppManagement `v0.4.105`, CasaOS-UI `v0.4.186`. Unchanged from v0.5.145: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
