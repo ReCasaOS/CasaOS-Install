@@ -12,7 +12,7 @@ Components: CasaOS-UI `v0.4.187`. Unchanged from v0.5.146: CasaOS `v0.4.115`, Ca
 
 ### Proof
 
-CI passed on the pull request and the release run of CasaOS-UI `v0.4.187` passed on its tag. The tip was looked at in a browser on the mock dashboard with a real hover and leave; four specs cover it. The install check of this release: result added after the check.
+CI passed on the pull request and the release run of CasaOS-UI `v0.4.187` passed on its tag. The tip was looked at in a browser on the mock dashboard with a real hover and leave; four specs cover it. The install check of this release passed on all 12 legs (run 43586975458).
 
 ## [0.5.146] - 2026-11-13
 
