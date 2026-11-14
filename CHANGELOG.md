@@ -15,7 +15,7 @@ Components: CasaOS-AppManagement `v0.4.105`, CasaOS-UI `v0.4.186`. Unchanged fro
 
 ### Proof
 
-CI passed on every pull request and the release runs of AppManagement `v0.4.105`, CasaOS-UI `v0.4.185` and `v0.4.186` passed on their tags. The two tips were looked at in a browser on the mock dashboard (the Files tip in the window, in full screen and after closing; the card tip on the last column). The state rule has a test of five cases, run in WSL; the restart policy has four specs. The restart form was not looked at in a browser, and no multi-service app was run for real. The install check of this release: result added after the check.
+CI passed on every pull request and the release runs of AppManagement `v0.4.105`, CasaOS-UI `v0.4.185` and `v0.4.186` passed on their tags. The two tips were looked at in a browser on the mock dashboard (the Files tip in the window, in full screen and after closing; the card tip on the last column). The state rule has a test of five cases, run in WSL; the restart policy has four specs. The restart form was not looked at in a browser, and no multi-service app was run for real. The install check of this release passed on all 12 legs (run 43480526233).
 
 ## [0.5.145] - 2026-11-13
 
