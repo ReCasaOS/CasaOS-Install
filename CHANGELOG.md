@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.149] - 2026-11-15
+
+Components: CasaOS-UserService `v0.4.37`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.108`, CasaOS-UI `v0.4.189`. Unchanged from v0.5.148: CasaOS `v0.4.115`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **User accounts, closed by default.** The owner can create accounts with the role `user`. A `user` reaches only their own account and the apps that are not hidden from them; every other request is refused by the Gateway. The owner can grant a read-only right per module (storage, virtual machines, backups, fleet, system) in the Accounts window, hide an app from chosen accounts, and remove the hidden entry of an app that is no longer installed. A `user` sees no write control, no terminal and no files, and the dashboard refreshes by polling instead of the message bus ([ReCasaOS/CasaOS-UserService#14](https://github.com/ReCasaOS/CasaOS-UserService/pull/14), [ReCasaOS/CasaOS-Gateway#14](https://github.com/ReCasaOS/CasaOS-Gateway/pull/14), [ReCasaOS/CasaOS-AppManagement#68](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/68), [ReCasaOS/CasaOS-UI#195](https://github.com/ReCasaOS/CasaOS-UI/pull/195), [ReCasaOS/CasaOS#150](https://github.com/ReCasaOS/CasaOS/issues/150)).
+
+### Proof
+
+CI passed on every pull request and on the release run of each component. The accounts proof (`dev/accounts-proof`) passed in release mode on a local stack built from the merged code, with the owner and one `user` account, and its negative controls turned the checks red. It was not run on a real guest yet and the dashboard was not walked through in a browser with a `user` account. This release is held as a pre-release for that reason. The install check of this release: result added after the check.
+
 ## [0.5.148] - 2026-11-15
 
 Components: CasaOS-AppManagement `v0.4.107`, CasaOS-UI `v0.4.188`. Unchanged from v0.5.147: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
