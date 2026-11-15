@@ -14,7 +14,7 @@ Components: CasaOS-AppManagement `v0.4.107`, CasaOS-UI `v0.4.188`. Unchanged fro
 
 ### Proof
 
-CI passed on every pull request. The digest fix was checked against ghcr.io with the image of the report, which now returns its digest; three test cases cover the address. The port rule has a test of five cases, run in WSL, and the hostname rule has two specs. Neither hostname fix was tried on a box behind a reverse proxy. The install check of this release: result added after the check.
+CI passed on every pull request. The digest fix was checked against ghcr.io with the image of the report, which now returns its digest; three test cases cover the address. The port rule has a test of five cases, run in WSL, and the hostname rule has two specs. Neither hostname fix was tried on a box behind a reverse proxy. The install check of this release passed on all 12 legs (run 43715941583).
 
 ## [0.5.147] - 2026-11-14
 
