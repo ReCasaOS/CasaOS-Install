@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.148] - 2026-11-15
+
+Components: CasaOS-AppManagement `v0.4.107`, CasaOS-UI `v0.4.188`. Unchanged from v0.5.147: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **"Check then update" works for an image pinned by digest.** For an image written `repo:tag@sha256:...`, the tag stayed in the address asked of the registry, which answered 404, and the check said `its registry could not be reached` ([ReCasaOS/CasaOS-AppManagement#66](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/66), [ReCasaOS/CasaOS#152](https://github.com/ReCasaOS/CasaOS/issues/152)).
+- **An app behind a reverse proxy opens on its hostname, with no port added.** With a hostname set under Settings › Web UI and the port left empty, the card opened `https://app.example.com:10443/`, a port Docker publishes on the box. A port is now guessed only for an app that names neither a port nor a hostname ([ReCasaOS/CasaOS-AppManagement#67](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/67)).
+- **An app that names only a hostname can be opened.** With no published port and no index, such as Home Assistant on the host network, the dashboard said the app had no web interface ([ReCasaOS/CasaOS-UI#194](https://github.com/ReCasaOS/CasaOS-UI/pull/194); both are [ReCasaOS/CasaOS#151](https://github.com/ReCasaOS/CasaOS/issues/151)).
+
+### Proof
+
+CI passed on every pull request. The digest fix was checked against ghcr.io with the image of the report, which now returns its digest; three test cases cover the address. The port rule has a test of five cases, run in WSL, and the hostname rule has two specs. Neither hostname fix was tried on a box behind a reverse proxy. The install check of this release: result added after the check.
+
 ## [0.5.147] - 2026-11-14
 
 Components: CasaOS-UI `v0.4.187`. Unchanged from v0.5.146: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.37`, CasaOS-AppManagement `v0.4.105`, CasaOS-UserService `v0.4.36`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
