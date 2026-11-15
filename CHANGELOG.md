@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.150] - 2026-11-15
+
+Components: CasaOS-UI `v0.4.190`. Unchanged from v0.5.149: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.108`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The Accounts window shows each account on its own rows.** An account's rights and their help lines were drawn over the next account and over the form that creates an account, because the row kept the fixed height of the settings menu ([ReCasaOS/CasaOS-UI#196](https://github.com/ReCasaOS/CasaOS-UI/pull/196), [ReCasaOS/CasaOS#150](https://github.com/ReCasaOS/CasaOS/issues/150)).
+
+### Proof
+
+CI passed on the pull request and the release run of CasaOS-UI `v0.4.190` passed on its tag. The fault was seen in a browser on a stack built from the released components, walked through with the owner, a `user` account with no right and one with every right; the rule of the fix was tried in that page, not on a build of the dashboard. This release is held as a pre-release until the window has been looked at on the released dashboard. The install check of this release: result added after the check.
+
 ## [0.5.149] - 2026-11-15
 
 Components: CasaOS-UserService `v0.4.37`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.108`, CasaOS-UI `v0.4.189`. Unchanged from v0.5.148: CasaOS `v0.4.115`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
