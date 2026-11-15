@@ -12,7 +12,7 @@ Components: CasaOS-UserService `v0.4.37`, CasaOS-Gateway `v0.4.38`, CasaOS-AppMa
 
 ### Proof
 
-CI passed on every pull request and on the release run of each component. The accounts proof (`dev/accounts-proof`) passed in release mode on a local stack built from the merged code, with the owner and one `user` account, and its negative controls turned the checks red. It was not run on a real guest yet and the dashboard was not walked through in a browser with a `user` account. This release is held as a pre-release for that reason. The install check of this release: result added after the check.
+CI passed on every pull request and on the release run of each component. The accounts proof (`dev/accounts-proof`) passed in release mode on a local stack built from the merged code, with the owner and one `user` account, and its negative controls turned the checks red. It was not run on a real guest yet and the dashboard was not walked through in a browser with a `user` account. This release is held as a pre-release for that reason. The install check of this release passed on all 12 legs (run 43754533308).
 
 ## [0.5.148] - 2026-11-15
 
