@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.158] - 2026-11-16
+
+Components: CasaOS `v0.4.116`, CasaOS-UI `v0.4.196`. Unchanged from v0.5.157: CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.111`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An icon next to the version checks for updates now.** The box keeps the latest version it read for 20 minutes, and nothing asked again: a box just updated could not see a release published a few minutes later. In Settings > Updates, a small refresh icon next to the current version asks the box to look at once. The check is open on the network, so the box looks past its cache at most once per half minute ([ReCasaOS/CasaOS#160](https://github.com/ReCasaOS/CasaOS/pull/160), [ReCasaOS/CasaOS-UI#202](https://github.com/ReCasaOS/CasaOS-UI/pull/202)).
+
+### Proof
+
+CI passed on both pull requests. Tests cover the check with and without the refresh, three refreshes in a row looking once, and the icon's call. The icon was seen in a browser on the mock server; it was not tried on a box against GitHub. The install check of this release: result added after the check.
+
 ## [0.5.157] - 2026-11-16
 
 Components: CasaOS-UI `v0.4.195`. Unchanged from v0.5.156: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.111`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
