@@ -24,7 +24,7 @@ Components: CasaOS-UI `v0.4.195`. Unchanged from v0.5.156: CasaOS `v0.4.115`, Ca
 
 ### Proof
 
-CI passed on the pull request, with two tests on the figure shown. The window was not opened in a browser. The install check of this release: result added after the check.
+CI passed on the pull request, with two tests on the figure shown. The window was not opened in a browser. The release run of CasaOS-UI `v0.4.195` passed on its tag. The install check of this release passed on all 12 legs (run 43867992032), the Armbian one after a 31-minute download of its image, and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.156] - 2026-11-16
 
