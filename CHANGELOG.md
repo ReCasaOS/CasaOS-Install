@@ -12,7 +12,7 @@ Components: CasaOS `v0.4.117`. Unchanged from v0.5.159: CasaOS-Gateway `v0.4.38`
 
 ### Proof
 
-CI passed on the pull request, with one test on the names. Not tried on a box with a sync running. The release run of CasaOS `v0.4.117` passed on its tag. The install check result is added by a follow-up pull request.
+CI passed on the pull request, with one test on the names. Not tried on a box with a sync running. The release run of CasaOS `v0.4.117` passed on its tag. The install check of this release passed on all 12 legs (run 43954910936), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.159] - 2026-11-16
 
