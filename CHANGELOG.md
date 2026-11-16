@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.152] - 2026-11-16
+
+Components: CasaOS-UI `v0.4.192`. Unchanged from v0.5.151: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.109`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.66`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A window of the dashboard stays inside a narrow browser window.** In a browser window between 769 and 1088 px wide, the windows opened as a card (Accounts, for one) were wider than the space they had: their right edge was cut off, with part of the Close button ([ReCasaOS/CasaOS-UI#198](https://github.com/ReCasaOS/CasaOS-UI/pull/198)).
+
+### Proof
+
+CI passed on the pull request and the release run of CasaOS-UI `v0.4.192` passed on its tag. The fault was seen on the Accounts window of the released dashboard at 1024 px. The rule was tried on a page loading the stylesheets of the released dashboard, at 1024 and 1400 px, and is present in the stylesheets of `v0.4.192`; the dashboard itself was not opened with it. The install check of this release: result added after the check.
+
 ## [0.5.151] - 2026-11-16
 
 Components: CasaOS-AppManagement `v0.4.109`, CasaOS-UI `v0.4.191`, CasaOS-LocalStorage `v0.4.66`. Unchanged from v0.5.150: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
