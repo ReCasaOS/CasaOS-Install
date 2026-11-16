@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.154] - 2026-11-16
+
+Components: CasaOS-AppManagement `v0.4.110`, CasaOS-UI `v0.4.193`, module `virt` `v0.2.6`. Unchanged from v0.5.153: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.67`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **Each module shows on the new dashboard with its own right.** The new dashboard is offered to an account that reads at least one module. Its storage, backups and fleet cards and the virtual machines' tiles each need their own right only; the load, memory, disk space and network of the box need System. Before, Storage, Backups, Fleet or Virtual Machines without System showed nothing there. The help under each box of Settings → Accounts says so ([ReCasaOS/CasaOS-UI#199](https://github.com/ReCasaOS/CasaOS-UI/pull/199)).
+- **A container started outside an app is the owner's alone.** An account of role `user` no longer has it on its dashboard, nor in Statistics, in the containers' load or in the logs. An app installed before the compose apps keeps its card, its details and its logs ([ReCasaOS/CasaOS-AppManagement#70](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/70)).
+- **Where a virtual machine's files are on the box is the administrator's alone.** An account with the Virtual Machines right still reads the machines, their state, their disks and their shared folders, without their place on the box; the ISO in a drive is not named ([ReCasaOS/CasaOS-VirtManagement#12](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/12)).
+
+### Proof
+
+CI passed on the three pull requests. Tests cover each right alone on the new dashboard (with no call outside what the box allows it), the containers no app owns on each list, and a virtual machine read by an account that is not the administrator. Not seen in a browser, not run on a real box, and the virtual machines' change not tried against a real libvirt. Release runs of the components and install check: result added after the check.
+
 ## [0.5.153] - 2026-11-16
 
 Components: CasaOS-LocalStorage `v0.4.67`. Unchanged from v0.5.152: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.109`, CasaOS-UserService `v0.4.37`, CasaOS-UI `v0.4.192`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
