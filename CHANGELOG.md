@@ -12,7 +12,7 @@ Components: CasaOS-LocalStorage `v0.4.67`. Unchanged from v0.5.152: CasaOS `v0.4
 
 ### Proof
 
-CI passed on the pull request. Tests built from the reporter's drive list cover the system storage and the cases where nothing is guessed. Not run on a box with an overlay root, and the dashboard was not opened on it. The install check of this release: result added after the check.
+CI passed on the pull request. Tests built from the reporter's drive list cover the system storage and the cases where nothing is guessed. Not run on a box with an overlay root, and the dashboard was not opened on it. The release run of CasaOS-LocalStorage `v0.4.67` passed on its tag. The install check of this release passed on all 12 legs (run 43846136746), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.152] - 2026-11-16
 
