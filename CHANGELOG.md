@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.160] - 2026-11-16
+
+Components: CasaOS `v0.4.117`. Unchanged from v0.5.159: CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.112`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, CasaOS-UI `v0.4.197`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A folder sync that holds back an OS upgrade is named.** While a folder sync runs, the box refuses an OS upgrade or a Docker update, and the refusal showed the sync as `(invalid name)`. It now reads `folder-sync` ([ReCasaOS/CasaOS#162](https://github.com/ReCasaOS/CasaOS/pull/162)).
+
+### Proof
+
+CI passed on the pull request, with one test on the names. Not tried on a box with a sync running. The release run of CasaOS `v0.4.117` passed on its tag. The install check result is added by a follow-up pull request.
+
 ## [0.5.159] - 2026-11-16
 
 Components: CasaOS-AppManagement `v0.4.112`, CasaOS-UI `v0.4.197`. Unchanged from v0.5.158: CasaOS `v0.4.116`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
