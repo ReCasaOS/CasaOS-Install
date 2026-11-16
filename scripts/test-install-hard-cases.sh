@@ -149,6 +149,8 @@ cd "${WORK}/box"
 # \${LINKED}: the usual place is also reached through a link, as /bin is on a merged /usr
 [[ "\${LINKED:-no}" != yes ]] || ln -s root/usr/bin "${WORK}/box/bin"
 rclone_saying "\${OLD}" v1.60.0
+# \${KEEP}: the owner runs their own rclone and says so with a marker file
+[[ "\${KEEP:-no}" != yes ]] || { mkdir -p "${WORK}/box/root/etc/casaos"; : >"${WORK}/box/root/etc/casaos/keep-rclone"; }
 
 sudo_cmd=""
 PREFIX="${WORK}/box/root"
@@ -193,6 +195,11 @@ got="$(LINKED=yes change_rclone "${pinned}" yes)"
 grep -qx "${GOES_ON}" <<<"${got}" || fail "Install_Rclone failed on an rclone found through a link: ${got}"
 [[ "$("${pinned}" 2>/dev/null)" == "rclone v1.75.1" ]] || fail "the new rclone was removed: the old one was found through a link to the same folder"
 pass "an old rclone found through a link to the usual place is replaced, and the new one stays"
+
+got="$(KEEP=yes change_rclone "${pinned}" yes)"
+grep -qx "${GOES_ON}" <<<"${got}" || fail "Install_Rclone failed with the keep-rclone marker: ${got}"
+[[ "$("${pinned}" 2>/dev/null)" == "rclone v1.60.0" ]] || fail "the keep-rclone marker did not keep the box's own rclone"
+pass "with /etc/casaos/keep-rclone, the box's own rclone is not replaced"
 
 ###############################################################################
 # Removing the containers and the images of a box that has several            #
