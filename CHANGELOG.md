@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.159] - 2026-11-16
+
+Components: CasaOS-AppManagement `v0.4.112`, CasaOS-UI `v0.4.197`. Unchanged from v0.5.158: CasaOS `v0.4.116`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A folder of the box can be kept in sync with a cloud account, on a schedule.** Settings has a new entry, Folder sync. A task pairs a folder under `/DATA`, `/media` or `/mnt` with a folder of one of the backup destinations (S3, Dropbox, Google Drive, OneDrive and the others), in one of three directions: cloud to box, box to cloud, or both ways. It runs every hour, every day or every week, or at once from its card. One-way tasks copy without deleting, or mirror the source. What a pass overwrites or deletes goes to an archive folder next to the synced one, kept 30 days by default. A pass that would delete more than half of a side stops and waits for the owner's confirmation, an empty or missing side never empties the other, and a folder that holds the box's backups is refused. In both ways, a file changed on both sides is kept twice, as `photo.conflict1.jpg` and `photo.conflict2.jpg`; after a stopped pass, files deleted since the last good pass can come back, and the task says so. A running pass shows in the top bar and holds back an OS upgrade. Only the owner sees and manages the tasks ([ReCasaOS/CasaOS-AppManagement#73](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/73), [ReCasaOS/CasaOS-UI#203](https://github.com/ReCasaOS/CasaOS-UI/pull/203), [ReCasaOS/CasaOS#153](https://github.com/ReCasaOS/CasaOS/issues/153); design in [ReCasaOS/CasaOS#161](https://github.com/ReCasaOS/CasaOS/pull/161)).
+
+### Proof
+
+CI passed on the three pull requests. Tests run the passes against the real rclone `v1.75.1` daemon, with local folders and an S3 served by rclone: the three directions, the archive, the delete cap and its confirmation, the first two-way pass and the refusals. The window was driven in a browser on the mock server, before its last round of fixes. Not tried: an installed box, and a real Dropbox, Google Drive, OneDrive or AWS S3 account. The release runs of CasaOS-AppManagement `v0.4.112` and CasaOS-UI `v0.4.197` passed on their tags. The install check result is added by a follow-up pull request.
+
 ## [0.5.158] - 2026-11-16
 
 Components: CasaOS `v0.4.116`, CasaOS-UI `v0.4.196`. Unchanged from v0.5.157: CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.111`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
