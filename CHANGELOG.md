@@ -28,7 +28,7 @@ Components: CasaOS-AppManagement `v0.4.109`, CasaOS-UI `v0.4.191`, CasaOS-LocalS
 
 ### Proof
 
-CI passed on every pull request. The dashboard switch was walked through in a browser on a local stack built from the merged code, with the owner and a `user` account: the routes, the icon leaving the list, the owner's line and the uninstall. It was not tried on a real box. The storage fix has its tests and the kernel check was tried by hand on mounted devices; it was not run on a box with an overlay system, and the Storage manager of such a box still lists no system storage. The install check of this release: result added after the check.
+CI passed on every pull request. The dashboard switch was walked through in a browser on a local stack built from the merged code, with the owner and a `user` account: the routes, the icon leaving the list, the owner's line and the uninstall. It was not tried on a real box. The storage fix has its tests and the kernel check was tried by hand on mounted devices; it was not run on a box with an overlay system, and the Storage manager of such a box still lists no system storage. The component release runs passed on their tags. The install check of this release passed on all 12 legs (run 43824045205), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.150] - 2026-11-15
 
