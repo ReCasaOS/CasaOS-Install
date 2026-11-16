@@ -12,7 +12,7 @@ Components: CasaOS-UI `v0.4.192`. Unchanged from v0.5.151: CasaOS `v0.4.115`, Ca
 
 ### Proof
 
-CI passed on the pull request and the release run of CasaOS-UI `v0.4.192` passed on its tag. The fault was seen on the Accounts window of the released dashboard at 1024 px. The rule was tried on a page loading the stylesheets of the released dashboard, at 1024 and 1400 px, and is present in the stylesheets of `v0.4.192`; the dashboard itself was not opened with it. The install check of this release: result added after the check.
+CI passed on the pull request and the release run of CasaOS-UI `v0.4.192` passed on its tag. The fault was seen on the Accounts window of the released dashboard at 1024 px. The rule was tried on a page loading the stylesheets of the released dashboard, at 1024 and 1400 px, and is present in the stylesheets of `v0.4.192`; the dashboard itself was not opened with it. The install check of this release passed on all 12 legs (run 43826700356).
 
 ## [0.5.151] - 2026-11-16
 
