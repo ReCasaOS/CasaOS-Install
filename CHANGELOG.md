@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.153] - 2026-11-16
+
+Components: CasaOS-LocalStorage `v0.4.67`. Unchanged from v0.5.152: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.109`, CasaOS-UserService `v0.4.37`, CasaOS-UI `v0.4.192`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A system that runs on an overlay is a storage, on its drive.** On such a box (FriendlyElec images, for one) the Storage tab of the Storage manager listed no system storage, and the dashboard showed the system drive without its temperature. The system storage is now listed with the space the system reports for `/`, on the one drive that holds a filesystem the kernel uses although it is not listed as mounted. When no drive or several match, nothing is guessed and the list is as before ([ReCasaOS/CasaOS-LocalStorage#34](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/34), [ReCasaOS/CasaOS#155](https://github.com/ReCasaOS/CasaOS/issues/155)).
+
+### Proof
+
+CI passed on the pull request. Tests built from the reporter's drive list cover the system storage and the cases where nothing is guessed. Not run on a box with an overlay root, and the dashboard was not opened on it. The install check of this release: result added after the check.
+
 ## [0.5.152] - 2026-11-16
 
 Components: CasaOS-UI `v0.4.192`. Unchanged from v0.5.151: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.109`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.66`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
