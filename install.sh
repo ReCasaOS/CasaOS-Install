@@ -1067,7 +1067,10 @@ Install_Rclone() {
     version=$(rclone --version 2>>errors | head -n 1)
     target_version="rclone ${RCLONE_TAG}"
     rclone1="${PREFIX}/usr/share/man/man1/rclone.1.gz"
-    if [ "$version" != "$target_version" ]; then
+    if [[ -e "${PREFIX}/etc/casaos/keep-rclone" ]]; then
+      # the box's owner runs their own build (a fork): never swapped for the pinned one
+      Show 2 "Keeping your rclone (${PREFIX}/etc/casaos/keep-rclone exists): $version."
+    elif [ "$version" != "$target_version" ]; then
       Show 3 "Will change rclone from $version to $target_version."
       rclone_path=$(command -v rclone)
       # the new one first: a download that fails ends the install with the old rclone still there
