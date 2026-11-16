@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.157] - 2026-11-16
+
+Components: CasaOS-UI `v0.4.195`. Unchanged from v0.5.156: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.111`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The Merge storages window shows the space the box says is used.** It showed the size of a storage minus its free space, which counts the space ext4 keeps for the administrator as used: 13.68 GB for a system drive that holds 1.83 GB, while the dashboard said 1.83 GB. It now shows the used space the box reports, as the Storage tab does ([ReCasaOS/CasaOS-UI#201](https://github.com/ReCasaOS/CasaOS-UI/pull/201), [ReCasaOS/CasaOS#155](https://github.com/ReCasaOS/CasaOS/issues/155)).
+
+### Proof
+
+CI passed on the pull request, with two tests on the figure shown. The window was not opened in a browser. The install check of this release: result added after the check.
+
 ## [0.5.156] - 2026-11-16
 
 Components: CasaOS-AppManagement `v0.4.111`. Unchanged from v0.5.155: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, CasaOS-UI `v0.4.194`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
