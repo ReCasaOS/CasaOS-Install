@@ -12,7 +12,7 @@ Components: CasaOS-AppManagement `v0.4.112`, CasaOS-UI `v0.4.197`. Unchanged fro
 
 ### Proof
 
-CI passed on the three pull requests. Tests run the passes against the real rclone `v1.75.1` daemon, with local folders and an S3 served by rclone: the three directions, the archive, the delete cap and its confirmation, the first two-way pass and the refusals. The window was driven in a browser on the mock server, before its last round of fixes. Not tried: an installed box, and a real Dropbox, Google Drive, OneDrive or AWS S3 account. The release runs of CasaOS-AppManagement `v0.4.112` and CasaOS-UI `v0.4.197` passed on their tags. The install check result is added by a follow-up pull request.
+CI passed on the three pull requests. Tests run the passes against the real rclone `v1.75.1` daemon, with local folders and an S3 served by rclone: the three directions, the archive, the delete cap and its confirmation, the first two-way pass and the refusals. The window was driven in a browser on the mock server, before its last round of fixes. Not tried: an installed box, and a real Dropbox, Google Drive, OneDrive or AWS S3 account. The release runs of CasaOS-AppManagement `v0.4.112` and CasaOS-UI `v0.4.197` passed on their tags. The install check of this release passed on all 12 legs (run 43935438219), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.158] - 2026-11-16
 
