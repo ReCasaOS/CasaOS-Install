@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.156] - 2026-11-16
+
+Components: CasaOS-AppManagement `v0.4.111`. Unchanged from v0.5.155: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, CasaOS-UI `v0.4.194`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A box can keep its owner's own rclone.** The installer replaces any rclone that is not the pinned version, so a rclone the owner built or patched was swapped for the stock one on every update. With the file `/etc/casaos/keep-rclone` present (`touch /etc/casaos/keep-rclone`), the installer leaves rclone alone; without it nothing changes. A kept rclone may lack what the backups rely on ([#265](https://github.com/ReCasaOS/CasaOS-Install/pull/265), [ReCasaOS/CasaOS#159](https://github.com/ReCasaOS/CasaOS/issues/159)).
+
+### Changed
+
+- **Where the logs are kept is the owner's alone.** An account of role `user` reads the settings of the logs (retention, size, use) without the folder they are kept in ([ReCasaOS/CasaOS-AppManagement#71](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/71)).
+
+### Proof
+
+CI passed on the pull requests. A test reads the settings of the logs as the owner, as a service of the box and as two accounts of role `user`; a test of the installer covers a box with the file and one without. The build of CasaOS-AppManagement failed once on a test of the backup schedules that set the zone of the process while another task read the clock; the test no longer does ([ReCasaOS/CasaOS-AppManagement#72](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/72)). Not run on a real box. Release run of CasaOS-AppManagement and install check: result added after the check.
+
 ## [0.5.155] - 2026-11-16
 
 Components: CasaOS-LocalStorage `v0.4.68`, CasaOS-UI `v0.4.194`. Unchanged from v0.5.154: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.110`, CasaOS-UserService `v0.4.37`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
