@@ -12,7 +12,7 @@ Components: CasaOS-UI `v0.4.190`. Unchanged from v0.5.149: CasaOS `v0.4.115`, Ca
 
 ### Proof
 
-CI passed on the pull request and the release run of CasaOS-UI `v0.4.190` passed on its tag. The fault was seen in a browser on a stack built from the released components, walked through with the owner, a `user` account with no right and one with every right; the rule of the fix was tried in that page, not on a build of the dashboard. This release is held as a pre-release until the window has been looked at on the released dashboard. The install check of this release: result added after the check.
+CI passed on the pull request and the release run of CasaOS-UI `v0.4.190` passed on its tag. The fault was seen in a browser on a stack built from the released components, walked through with the owner, a `user` account with no right and one with every right; the rule of the fix was tried in that page, not on a build of the dashboard. The window was then looked at on the released dashboard `v0.4.190`, served by the same stack: each account keeps its own rows. The install check of this release passed on all 12 legs (run 43790738413), and the release was made the latest one on 2026-11-16.
 
 ## [0.5.149] - 2026-11-15
 
@@ -24,7 +24,7 @@ Components: CasaOS-UserService `v0.4.37`, CasaOS-Gateway `v0.4.38`, CasaOS-AppMa
 
 ### Proof
 
-CI passed on every pull request and on the release run of each component. The accounts proof (`dev/accounts-proof`) passed in release mode on a local stack built from the merged code, with the owner and one `user` account, and its negative controls turned the checks red. It was not run on a real guest yet and the dashboard was not walked through in a browser with a `user` account. This release is held as a pre-release for that reason. The install check of this release: result added after the check.
+CI passed on every pull request and on the release run of each component. The accounts proof (`dev/accounts-proof`) passed in release mode on a local stack built from the merged code, with the owner and one `user` account, and its negative controls turned the checks red. It was not run on a real guest yet and the dashboard was not walked through in a browser with a `user` account. This release stayed a pre-release for that reason and was never offered to boxes: v0.5.150 replaces it. The install check of this release passed on all 12 legs (run 43754533308).
 
 ## [0.5.148] - 2026-11-15
 
