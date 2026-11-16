@@ -12,7 +12,7 @@ Components: CasaOS `v0.4.116`, CasaOS-UI `v0.4.196`. Unchanged from v0.5.157: Ca
 
 ### Proof
 
-CI passed on both pull requests. Tests cover the check with and without the refresh, three refreshes in a row looking once, and the icon's call. The icon was seen in a browser on the mock server; it was not tried on a box against GitHub. The install check of this release: result added after the check.
+CI passed on both pull requests. Tests cover the check with and without the refresh, three refreshes in a row looking once, and the icon's call. The icon was seen in a browser on the mock server; it was not tried on a box against GitHub. The release runs of CasaOS `v0.4.116` and CasaOS-UI `v0.4.196` passed on their tags. The install check of this release passed on all 12 legs (run 43873807348), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.157] - 2026-11-16
 
