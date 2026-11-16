@@ -29,7 +29,7 @@ Components: CasaOS-LocalStorage `v0.4.68`, CasaOS-UI `v0.4.194`. Unchanged from 
 
 ### Proof
 
-CI passed on both pull requests. Tests cover the reporter's eMMC, a layout whose names are in no list, an old Windows disk and a disk with one named partition; and the four texts of the drive row. Not run on the board, and the Drives tab was not opened in a browser. The install check of this release: result added after the check.
+CI passed on both pull requests. Tests cover the reporter's eMMC, a layout whose names are in no list, an old Windows disk and a disk with one named partition; and the four texts of the drive row. Not run on the board, and the Drives tab was not opened in a browser. The release runs of CasaOS-LocalStorage `v0.4.68` and CasaOS-UI `v0.4.194` passed on their tags. The install check of this release passed on all 12 legs (run 43862326872), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.154] - 2026-11-16
 
