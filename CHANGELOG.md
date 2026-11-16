@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.151] - 2026-11-16
+
+Components: CasaOS-AppManagement `v0.4.109`, CasaOS-UI `v0.4.191`, CasaOS-LocalStorage `v0.4.66`. Unchanged from v0.5.150: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Hide an app from the dashboard, for every account.** An app's Settings > Visibility tab has a "Hide from the dashboard" switch, next to the ticks that hide the app from chosen accounts. It removes the app's icon from the dashboard of every account, the owner's included; the app keeps running and stays reachable by its address. A line under the app list, shown to the owner only, counts the hidden apps and draws them again, greyed, so the switch can be turned off. Uninstalling the app forgets the choice ([ReCasaOS/CasaOS-AppManagement#69](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/69), [ReCasaOS/CasaOS-UI#197](https://github.com/ReCasaOS/CasaOS-UI/pull/197), [ReCasaOS/CasaOS#156](https://github.com/ReCasaOS/CasaOS/issues/156)).
+
+### Fixed
+
+- **The Storage widget shows the system disk on a box whose system runs on an overlay.** On such a box (FriendlyElec images, for one) no partition is listed as mounted on `/`, and the dashboard showed 0 of 0. The widget now falls back to what the system itself reports for `/`. A disk the kernel holds is also no longer offered for formatting, even when none of its partitions is listed as mounted ([ReCasaOS/CasaOS-LocalStorage#33](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/33), [ReCasaOS/CasaOS#155](https://github.com/ReCasaOS/CasaOS/issues/155)).
+
+### Proof
+
+CI passed on every pull request. The dashboard switch was walked through in a browser on a local stack built from the merged code, with the owner and a `user` account: the routes, the icon leaving the list, the owner's line and the uninstall. It was not tried on a real box. The storage fix has its tests and the kernel check was tried by hand on mounted devices; it was not run on a box with an overlay system, and the Storage manager of such a box still lists no system storage. The install check of this release: result added after the check.
+
 ## [0.5.150] - 2026-11-15
 
 Components: CasaOS-UI `v0.4.190`. Unchanged from v0.5.149: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.108`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.65`, module `virt` `v0.2.5`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
