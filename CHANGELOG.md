@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.155] - 2026-11-16
+
+Components: CasaOS-LocalStorage `v0.4.68`, CasaOS-UI `v0.4.194`. Unchanged from v0.5.154: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.110`, CasaOS-UserService `v0.4.37`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A drive a board boots from is no longer offered for formatting.** The eMMC of a NanoPi R5S holds the board's loader and kernel in partitions with no filesystem; nothing mounts them, so Create Storage offered the drive, and formatting it would have left the board unable to start. A drive is now held back when it carries a partition with no filesystem under a name a board's loader looks for (`uboot`, `kernel`, `boot`, ...), or two partitions or more with no filesystem and a name of their own, whatever the maker. The default names of partitioning tools do not count, so an old PC disk stays free to erase. A loader written in raw sectors outside any partition (Armbian images, for one) cannot be seen this way ([ReCasaOS/CasaOS-LocalStorage#35](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/35), [ReCasaOS/CasaOS#155](https://github.com/ReCasaOS/CasaOS/issues/155)).
+- **A drive in use no longer reads "Free drive".** In Storage manager > Drive, a drive whose partitions show no mount point was always called free: the system drive of a box with an overlay root, the member of an array, a drive the box holds back. The row now shows the mount points of the storages on the drive, or "In use" when the box does not offer it for a new storage ([ReCasaOS/CasaOS-UI#200](https://github.com/ReCasaOS/CasaOS-UI/pull/200)).
+
+### Proof
+
+CI passed on both pull requests. Tests cover the reporter's eMMC, a layout whose names are in no list, an old Windows disk and a disk with one named partition; and the four texts of the drive row. Not run on the board, and the Drives tab was not opened in a browser. The install check of this release: result added after the check.
+
 ## [0.5.154] - 2026-11-16
 
 Components: CasaOS-AppManagement `v0.4.110`, CasaOS-UI `v0.4.193`, module `virt` `v0.2.6`. Unchanged from v0.5.153: CasaOS `v0.4.115`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.67`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
