@@ -27,7 +27,7 @@ Components: CasaOS-AppManagement `v0.4.110`, CasaOS-UI `v0.4.193`, module `virt`
 
 ### Proof
 
-CI passed on the three pull requests. Tests cover each right alone on the new dashboard (with no call outside what the box allows it), the containers no app owns on each list, and a virtual machine read by an account that is not the administrator. Not seen in a browser, not run on a real box, and the virtual machines' change not tried against a real libvirt. Release runs of the components and install check: result added after the check.
+CI passed on the three pull requests. Tests cover each right alone on the new dashboard (with no call outside what the box allows it), the containers no app owns on each list, and a virtual machine read by an account that is not the administrator. Not seen in a browser, not run on a real box, and the virtual machines' change not tried against a real libvirt. The release runs of CasaOS-AppManagement `v0.4.110`, CasaOS-UI `v0.4.193` and the module `virt` `v0.2.6` passed on their tags. The install check of this release passed on all 12 legs (run 43856762621), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.153] - 2026-11-16
 
