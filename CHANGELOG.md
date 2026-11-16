@@ -16,7 +16,7 @@ Components: CasaOS-AppManagement `v0.4.111`. Unchanged from v0.5.155: CasaOS `v0
 
 ### Proof
 
-CI passed on the pull requests. A test reads the settings of the logs as the owner, as a service of the box and as two accounts of role `user`; a test of the installer covers a box with the file and one without. The build of CasaOS-AppManagement failed once on a test of the backup schedules that set the zone of the process while another task read the clock; the test no longer does ([ReCasaOS/CasaOS-AppManagement#72](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/72)). Not run on a real box. Release run of CasaOS-AppManagement and install check: result added after the check.
+CI passed on the pull requests. A test reads the settings of the logs as the owner, as a service of the box and as two accounts of role `user`; a test of the installer covers a box with the file and one without. The build of CasaOS-AppManagement failed once on a test of the backup schedules that set the zone of the process while another task read the clock; the test no longer does ([ReCasaOS/CasaOS-AppManagement#72](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/72)). Not run on a real box. The release run of CasaOS-AppManagement `v0.4.111` passed on its tag. The first release run of this version stopped before publishing anything, because its tag was pushed before CasaOS-AppManagement `v0.4.111` was published; run again, the install check passed on all 12 legs (run 43864395541), and the workflow made the release the latest one on 2026-11-16.
 
 ## [0.5.155] - 2026-11-16
 
