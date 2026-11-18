@@ -28,7 +28,7 @@ INSTALL_SH="${WORK}/install.sh"
 tr -d '\r' <"${ROOT}/install.sh" >"${INSTALL_SH}"
 bash -n "${INSTALL_SH}" || fail "install.sh does not parse"
 
-for f in Answer_Is_Yes Debian_Archive_Agreed Use_Debian_Archive Package_Install_Failed Check_Docker_Install Check_Docker_Install_Final Update_Package_Resource; do
+for f in Answer_Is_Yes Debian_Archive_Agreed Use_Debian_Archive Package_Install_Failed Warn_Docker_On_Overlay Check_Docker_Install Check_Docker_Install_Final Update_Package_Resource; do
     eval "$(sed -n "/^${f}() {\$/,/^}\$/p" "${INSTALL_SH}")"
     declare -F "${f}" >/dev/null || fail "install.sh defines no ${f}()"
 done
@@ -247,6 +247,14 @@ docker_says() { # <what docker answers, or "down"; "none" for no docker> <expect
     )" || status=$?
     [[ "${status}" -eq "$2" ]] || fail "docker '$1': status ${status}, wanted $2: ${out}"
 }
+# a root that is an overlay is said, and the install goes on; any other file system says nothing
+stat() { echo overlayfs; }
+out="$(Warn_Docker_On_Overlay)" || fail "overlay root: the warning ended the install"
+grep -q 'overlay file system' <<<"${out}" || fail "overlay root: not said: ${out}"
+stat() { echo ext2/ext3; }
+out="$(Warn_Docker_On_Overlay)"
+[[ -z "${out}" ]] || fail "ext4 root: warned: ${out}"
+unset -f stat
 docker_says 28.0.4 0
 grep -q 'Current Docker version is 28.0.4' <<<"${out}" || fail "docker 28.0.4: not said to be fine"
 docker_says "26.1.5+dfsg1" 0
