@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.161] - 2026-11-18
+
+Components: CasaOS-UI `v0.4.198`. Unchanged from v0.5.160: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.112`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **Featured apps no longer slide on their own.** The row at the top of the app store moved by itself, with no way to stop it. It now stays still, and the arrows move it as before ([ReCasaOS/CasaOS#163](https://github.com/ReCasaOS/CasaOS/issues/163), [ReCasaOS/CasaOS-UI#205](https://github.com/ReCasaOS/CasaOS-UI/pull/205)).
+- **The installer says when Docker cannot work on the system's root.** On a system whose root is itself an overlay (FriendlyElec images for the NanoPi R5S), Docker cannot unpack images and apps fail to install. The installer now prints a notice with the two ways out, and goes on ([#277](https://github.com/ReCasaOS/CasaOS-Install/pull/277)).
+
+### Proof
+
+CI passed on both pull requests; the installer's test covers an overlay and an ext4 root. The featured row was not seen in a browser, and the notice was not tried on a box with an overlay root. The release run of CasaOS-UI `v0.4.198` passed on its tag. The install check result is added by a follow-up pull request.
+
 ## [0.5.160] - 2026-11-16
 
 Components: CasaOS `v0.4.117`. Unchanged from v0.5.159: CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.112`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, CasaOS-UI `v0.4.197`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
