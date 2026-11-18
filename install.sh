@@ -890,6 +890,19 @@ Check_Docker_Running() {
     done
 }
 
+# A root that is itself an overlay (FriendlyElec images, some live systems): Docker
+# cannot make its own overlay layers on it, and a pull ends at "failed to convert
+# whiteout file ... operation not permitted". Said before Docker is installed or used;
+# the install goes on, as Docker's folder may be put elsewhere afterwards.
+Warn_Docker_On_Overlay() {
+    local dir=/var/lib/docker
+    [[ -d "${dir}" ]] || dir=/var/lib
+    if [[ "$(stat -f -c %T "${dir}" 2>/dev/null)" == overlay* ]]; then
+        Show 3 "${dir} is on an overlay file system: Docker cannot unpack images there, and apps will fail to install.
+Put /var/lib/docker on a real disk (ext4, a partition of its own), or turn the overlay root off as this system's maker documents, then run this installer again."
+    fi
+}
+
 #Check Docker Installed and version
 Check_Docker_Install() {
     if [[ -x "$(command -v docker)" ]]; then
@@ -2134,6 +2147,7 @@ Check_Dependency_Installation
 Install_SMB_Discovery_Depends
 
 # Step 6: Check And Install Docker
+Warn_Docker_On_Overlay
 Check_Docker_Install
 
 # Step 7: Configuration Addon
