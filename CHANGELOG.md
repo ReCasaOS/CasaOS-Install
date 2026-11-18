@@ -13,7 +13,7 @@ Components: CasaOS-UI `v0.4.198`. Unchanged from v0.5.160: CasaOS `v0.4.117`, Ca
 
 ### Proof
 
-CI passed on both pull requests; the installer's test covers an overlay and an ext4 root. The featured row was not seen in a browser, and the notice was not tried on a box with an overlay root. The release run of CasaOS-UI `v0.4.198` passed on its tag. The install check result is added by a follow-up pull request.
+CI passed on both pull requests; the installer's test covers an overlay and an ext4 root. The featured row was not seen in a browser, and the notice was not tried on a box with an overlay root. The release run of CasaOS-UI `v0.4.198` passed on its tag. The install check of this release passed on all 12 legs (run 44212153164), and the workflow made the release the latest one on 2026-11-18.
 
 ## [0.5.160] - 2026-11-16
 
