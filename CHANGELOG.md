@@ -17,7 +17,7 @@ Components: CasaOS-AppManagement `v0.4.114`, CasaOS-UI `v0.4.200`. Unchanged fro
 
 ### Proof
 
-CI passed on both pull requests, with the back end's tests run against Docker. The window was driven in a browser on the mock server: the review of volumes, the question, a refused volume. No deletion was run against the Docker of an installed box. Not in this release, from the request: a schedule, a run history, stopped containers of no app, unused networks. The release runs of CasaOS-AppManagement `v0.4.114` and CasaOS-UI `v0.4.200` passed on their tags. The install check result is added by a follow-up pull request.
+CI passed on both pull requests, with the back end's tests run against Docker. The window was driven in a browser on the mock server: the review of volumes, the question, a refused volume. No deletion was run against the Docker of an installed box. Not in this release, from the request: a schedule, a run history, stopped containers of no app, unused networks. The release runs of CasaOS-AppManagement `v0.4.114` and CasaOS-UI `v0.4.200` passed on their tags. The install check of this release passed on all 12 legs (run 44621273737): 11 at once, and Ubuntu 26.04 on a second try, after archive.ubuntu.com answered 520 during the first. The workflow made the release the latest one on 2026-11-19.
 
 ## [0.5.162] - 2026-11-19
 
