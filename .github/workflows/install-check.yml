@@ -663,7 +663,7 @@ jobs:
             if [ -d "/var/lib/casaos/${d}" ]; then kept_dirs="${kept_dirs} /var/lib/casaos/${d}"; fi
           done
           if [ -n "${kept_dirs}" ]; then
-            sudo find ${kept_dirs} -mindepth 1 -printf '%p %y %s\n' | sort > kept-before.txt
+            sudo find ${kept_dirs} -mindepth 1 -maxdepth 1 -printf '%p %y\n' | sort > kept-before.txt
           else
             : > kept-before.txt
           fi
@@ -723,7 +723,7 @@ jobs:
           test "$(sudo cat /var/lib/casaos/install-check-unknown.json)" = "unknown file"
           test "$(sudo cat /var/lib/casaos/install-check-unknown/marker)" = "unknown folder"
           if [ -n "${kept_dirs}" ]; then
-            sudo find ${kept_dirs} -mindepth 1 -printf '%p %y %s\n' | sort > kept-after.txt
+            sudo find ${kept_dirs} -mindepth 1 -maxdepth 1 -printf '%p %y\n' | sort > kept-after.txt
           else
             : > kept-after.txt
           fi
