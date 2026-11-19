@@ -721,7 +721,7 @@ jobs:
           test "$(jq -r '.error // ""' <<<"${run}")" = ""
           # nothing the manifest named was refused
           test "$(jq -r '.skipped_count // 0' <<<"${run}")" = 0
-          test "$(cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
+          test "$(sudo cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
           test "$(sudo cat /var/lib/casaos/install-check-unknown.json)" = "unknown file"
           test "$(sudo cat /var/lib/casaos/install-check-unknown/marker)" = "unknown folder"
           if [ -n "${kept_dirs}" ]; then
