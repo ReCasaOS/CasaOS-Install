@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.163] - 2026-11-19
+
+Components: CasaOS-AppManagement `v0.4.114`, CasaOS-UI `v0.4.200`. Unchanged from v0.5.162: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Docker cleanup, in the settings.** A new window lists what apps left behind on the disk and frees it, one row at a time: the old versions an update replaced, the build cache, the images no container uses, and the volumes no container uses. Images and volumes are judged against the installed apps, not against what runs: a stopped app, or one between the two halves of an update, keeps its images and its data. Images open ticked, since an app that needs one again downloads it. Volumes open with nothing ticked, each with the app that made it, its size and its date, and the question before a deletion names them. What Docker refuses is listed with its reason. Only the owner sees the window ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#75](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/75), [ReCasaOS/CasaOS-UI#207](https://github.com/ReCasaOS/CasaOS-UI/pull/207)).
+
+### Changed
+
+- **Nothing is deleted while something runs on an app.** During an install, an update, a backup, a restore, a folder sync or a move of Docker's data, the window offers nothing and says why. The same when the compose file of an app cannot be read, which it names. While a cleanup deletes, no install or update starts.
+- **The old app versions leave alone an image an app pins by its digest.** "Free up" in the Storage widget and in the new window removes each old version by itself, never forced, and skips an image an installed app names by digest.
+
+### Proof
+
+CI passed on both pull requests, with the back end's tests run against Docker. The window was driven in a browser on the mock server: the review of volumes, the question, a refused volume. No deletion was run against the Docker of an installed box. Not in this release, from the request: a schedule, a run history, stopped containers of no app, unused networks. The release runs of CasaOS-AppManagement `v0.4.114` and CasaOS-UI `v0.4.200` passed on their tags. The install check result is added by a follow-up pull request.
+
 ## [0.5.162] - 2026-11-19
 
 Components: CasaOS-AppManagement `v0.4.113`, CasaOS-UI `v0.4.199`. Unchanged from v0.5.161: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
