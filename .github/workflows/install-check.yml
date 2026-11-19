@@ -656,7 +656,17 @@ jobs:
           echo "excluded" | sudo tee /var/lib/casaos/stats/install-check-excluded >/dev/null
           sudo fallocate -l 60M /var/lib/casaos/install-check-big
           # what the restore must leave alone: apps and modules are kept as they are
-          sudo ls -la /var/lib/casaos/apps /var/lib/casaos/modules > kept-before.txt
+          # (names, types and sizes only: a directory's own mtime moves with every entry
+          # beside it, and a folder this box never had is simply not listed)
+          kept_dirs=""
+          for d in apps modules; do
+            if [ -d "/var/lib/casaos/${d}" ]; then kept_dirs="${kept_dirs} /var/lib/casaos/${d}"; fi
+          done
+          if [ -n "${kept_dirs}" ]; then
+            sudo find ${kept_dirs} -mindepth 1 -printf '%p %y %s\n' | sort > kept-before.txt
+          else
+            : > kept-before.txt
+          fi
           before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           sleep 1
           curl -fsS -X POST "${CASA_URL}/v2/app_management/backup/system" \
@@ -712,7 +722,11 @@ jobs:
           test "$(cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
           test "$(sudo cat /var/lib/casaos/install-check-unknown.json)" = "unknown file"
           test "$(sudo cat /var/lib/casaos/install-check-unknown/marker)" = "unknown folder"
-          sudo ls -la /var/lib/casaos/apps /var/lib/casaos/modules > kept-after.txt
+          if [ -n "${kept_dirs}" ]; then
+            sudo find ${kept_dirs} -mindepth 1 -printf '%p %y %s\n' | sort > kept-after.txt
+          else
+            : > kept-after.txt
+          fi
           diff kept-before.txt kept-after.txt
           # the gateway restarts at the very end of the restore: give it a moment to
           # begin, then wait until it answers again before the checks that need it
