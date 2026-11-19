@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.162] - 2026-11-19
+
+Components: CasaOS-AppManagement `v0.4.113`, CasaOS-UI `v0.4.199`. Unchanged from v0.5.161: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The dashboard says when an app runs but its health check fails.** An app whose database stopped answering looked like one in good shape. The card of a running app now reads "Unhealthy" when one of its containers fails its Docker health check, and "Starting up" while a check has not passed yet. An app with no health check shows nothing more than before ([ReCasaOS/CasaOS#166](https://github.com/ReCasaOS/CasaOS/issues/166), [ReCasaOS/CasaOS-AppManagement#74](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/74), [ReCasaOS/CasaOS-UI#206](https://github.com/ReCasaOS/CasaOS-UI/pull/206)).
+- **The Health chip of a container opens its check.** In the Containers tab of an app, the chip shows the command Docker runs, how often, and the last five runs with what they printed. Two buttons lead to the Compose tab, where a check is edited, and to the container's logs. The command and its output are shown to the owner only.
+
+### Proof
+
+CI passed on both pull requests. The card was seen in a browser on the mock server; the Containers tab was not, and is covered by component tests. The shape of a check was read from a real Docker daemon; the new route was not tried on an installed box. The release runs of CasaOS-AppManagement `v0.4.113` and CasaOS-UI `v0.4.199` passed on their tags. The install check result is added by a follow-up pull request.
+
 ## [0.5.161] - 2026-11-18
 
 Components: CasaOS-UI `v0.4.198`. Unchanged from v0.5.160: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.112`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
