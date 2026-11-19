@@ -646,6 +646,17 @@ jobs:
           # still ends in the `test -n` below.
           sudo mkdir -p /var/lib/casaos/conf
           echo "box marker ${CASAOS_RELEASE_TAG}" | sudo tee /var/lib/casaos/conf/install-check-marker >/dev/null
+          # The box backup takes everything under /var/lib/casaos except a named list,
+          # so state it has never heard of must go out too: a file and a folder nobody
+          # declared. A file in an excluded folder (stats) must stay out, and so must
+          # a new entry over 50 MB, which is skipped with a reason.
+          echo "unknown file" | sudo tee /var/lib/casaos/install-check-unknown.json >/dev/null
+          sudo mkdir -p /var/lib/casaos/install-check-unknown /var/lib/casaos/stats
+          echo "unknown folder" | sudo tee /var/lib/casaos/install-check-unknown/marker >/dev/null
+          echo "excluded" | sudo tee /var/lib/casaos/stats/install-check-excluded >/dev/null
+          sudo fallocate -l 60M /var/lib/casaos/install-check-big
+          # what the restore must leave alone: apps and modules are kept as they are
+          sudo ls -la /var/lib/casaos/apps /var/lib/casaos/modules > kept-before.txt
           before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           sleep 1
           curl -fsS -X POST "${CASA_URL}/v2/app_management/backup/system" \
@@ -663,20 +674,35 @@ jobs:
           sudo find /var/tmp/casaos-backup-smoke/casaos-system -type f | tee box-files.txt
           grep -q 'install-check-marker$' box-files.txt
           grep -q 'rclone.conf$' box-files.txt
+          grep -q 'install-check-unknown.json$' box-files.txt
+          grep -q 'install-check-unknown/marker$' box-files.txt
+          # no pipe into a reader that stops early: grep on the file, in an if
+          if grep -q 'install-check-excluded$' box-files.txt; then echo "a file of an excluded folder went out"; exit 1; fi
+          if grep -q 'install-check-big$' box-files.txt; then echo "the 60 MB entry went out"; exit 1; fi
+          # the run says it left something out, and the manifest names it with the reason
+          test "$(jq -r '.skipped_count // 0' <<<"${run}")" -ge 1
+          stamp="$(jq -r '.stamp' <<<"${run}")"
+          sudo cat "/var/tmp/casaos-backup-smoke/casaos-system/${stamp}/manifest.json" > box-manifest.json
+          jq -e '.skipped | map(select(.path == "/var/lib/casaos/install-check-big" and (.skip | contains("over 50 MB")))) | length == 1' box-manifest.json >/dev/null
+          # and the copy stayed small: the 60 MB file is not in it
+          size="$(sudo du -sb "/var/tmp/casaos-backup-smoke/casaos-system/${stamp}" | cut -f1)"
+          echo "box backup size: ${size}"
+          test "${size}" -lt 52428800
           for unit in casaos casaos-user-service casaos-local-storage; do test "$(systemctl is-active ${unit}.service)" = active; done
           # the destination knows the box, and knows it is here
           curl -fsS "${CASA_URL}/v2/app_management/backup/destinations/smoke/runs" -H "Authorization: ${CASA_TOKEN}" \
             | jq -e '.data | map(select(.app == "casaos-system")) | first | .installed == true' >/dev/null
-          stamp="$(jq -r '.stamp' <<<"${run}")"
-          sudo rm -f /var/lib/casaos/conf/install-check-marker
+          sudo rm -rf /var/lib/casaos/conf/install-check-marker /var/lib/casaos/install-check-unknown.json /var/lib/casaos/install-check-unknown
           before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           sleep 1
           curl -fsS -X POST "${CASA_URL}/v2/app_management/backup/restore" \
             -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
             -d "{\"destination\":\"smoke\",\"app\":\"casaos-system\",\"stamp\":\"${stamp}\"}" | jq .
           for _ in $(seq 1 60); do
+            # the restore ends by restarting the gateway, which is what CASA_URL talks to:
+            # a refused connection here is not a failure, the poll goes on
             run="$(curl -sS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
-              | jq -c --arg b "${before}" '.data // [] | map(select(.app == "casaos-system" and .restore == true and .started_at > $b)) | first // empty')"
+              | jq -c --arg b "${before}" '.data // [] | map(select(.app == "casaos-system" and .restore == true and .started_at > $b)) | first // empty' || true)"
             [ -n "${run}" ] && break
             sleep 3
           done
@@ -684,12 +710,27 @@ jobs:
           test -n "${run}"
           test "$(jq -r '.error // ""' <<<"${run}")" = ""
           test "$(cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
-          for unit in casaos casaos-user-service casaos-local-storage rclone; do test "$(systemctl is-active ${unit}.service)" = active; done
+          test "$(sudo cat /var/lib/casaos/install-check-unknown.json)" = "unknown file"
+          test "$(sudo cat /var/lib/casaos/install-check-unknown/marker)" = "unknown folder"
+          sudo ls -la /var/lib/casaos/apps /var/lib/casaos/modules > kept-after.txt
+          diff kept-before.txt kept-after.txt
+          # the gateway restarts at the very end of the restore: give it a moment to
+          # begin, then wait until it answers again before the checks that need it
+          sleep 5
+          up=""
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /dev/null --max-time 5 "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}"; then up=yes; break; fi
+            sleep 2
+          done
+          test "${up}" = yes
+          for unit in casaos casaos-gateway casaos-user-service casaos-local-storage rclone; do test "$(systemctl is-active ${unit}.service)" = active; done
           # the dashboard is back, and so is the login
           port="$(sed -nE 's/^[[:space:]]*HttpPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' /etc/casaos/gateway.ini | sed -n 1p)"
           curl -fsS -o /dev/null "http://127.0.0.1:${port:-80}/"
           curl -fsS -X POST "${CASA_URL}/v1/users/login" -H 'content-type: application/json' \
             -d '{"username":"smoke","password":"Smoke-test-1"}' | jq -e '.data.token.access_token != null' >/dev/null
+          # leave the box as the next steps expect it
+          sudo rm -rf /var/lib/casaos/install-check-unknown.json /var/lib/casaos/install-check-unknown /var/lib/casaos/stats/install-check-excluded /var/lib/casaos/install-check-big
 
       # A backup somebody asks for carries a retention since v0.4.84: once it has
       # landed, older backups of that app at that destination beyond `keep` are
