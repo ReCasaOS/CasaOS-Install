@@ -13,7 +13,7 @@ Components: CasaOS-AppManagement `v0.4.113`, CasaOS-UI `v0.4.199`. Unchanged fro
 
 ### Proof
 
-CI passed on both pull requests. The card was seen in a browser on the mock server; the Containers tab was not, and is covered by component tests. The shape of a check was read from a real Docker daemon; the new route was not tried on an installed box. The release runs of CasaOS-AppManagement `v0.4.113` and CasaOS-UI `v0.4.199` passed on their tags. The install check result is added by a follow-up pull request.
+CI passed on both pull requests. The card was seen in a browser on the mock server; the Containers tab was not, and is covered by component tests. The shape of a check was read from a real Docker daemon; the new route was not tried on an installed box. The release runs of CasaOS-AppManagement `v0.4.113` and CasaOS-UI `v0.4.199` passed on their tags. The install check of this release passed on all 12 legs (run 44535021646), and the workflow made the release the latest one on 2026-11-19.
 
 ## [0.5.161] - 2026-11-18
 
