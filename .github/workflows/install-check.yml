@@ -719,6 +719,8 @@ jobs:
           echo "box restore run: ${run}"
           test -n "${run}"
           test "$(jq -r '.error // ""' <<<"${run}")" = ""
+          # nothing the manifest named was refused
+          test "$(jq -r '.skipped_count // 0' <<<"${run}")" = 0
           test "$(cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
           test "$(sudo cat /var/lib/casaos/install-check-unknown.json)" = "unknown file"
           test "$(sudo cat /var/lib/casaos/install-check-unknown/marker)" = "unknown folder"
@@ -728,8 +730,9 @@ jobs:
             : > kept-after.txt
           fi
           diff kept-before.txt kept-after.txt
-          # the gateway restarts at the very end of the restore: give it a moment to
-          # begin, then wait until it answers again before the checks that need it
+          # the run is written only after the restart returned, but the gateway may
+          # still be taking up its restored files: wait, bounded, until it answers
+          # again before the checks that need it
           sleep 5
           up=""
           for _ in $(seq 1 30); do
@@ -737,6 +740,8 @@ jobs:
             sleep 2
           done
           test "${up}" = yes
+          # the key came back through the copy with the modes of the restore, then tightened
+          test "$(sudo stat -c '%a %U' /var/lib/casaos/tls/gateway.key)" = "600 root"
           for unit in casaos casaos-gateway casaos-user-service casaos-local-storage rclone; do test "$(systemctl is-active ${unit}.service)" = active; done
           # the dashboard is back, and so is the login
           port="$(sed -nE 's/^[[:space:]]*HttpPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' /etc/casaos/gateway.ini | sed -n 1p)"
