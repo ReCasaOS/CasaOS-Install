@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.165] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.116`, CasaOS-UI `v0.4.202`. Unchanged from v0.5.164: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The Docker cleanup lists the folders of apps that are gone.** An install that failed, or an app whose containers were removed by hand, leaves a folder among the apps with no container to go with it. Such an app is not on the dashboard, and its folder kept its images and volumes out of the cleanup for ever. The window now lists these folders first, with nothing ticked, and moves the ones chosen to `apps-removed`, beside the folder of the apps. Moved, not deleted: a folder holds the compose file of the app. The list is shown when an app cannot be read too, since such a folder is the usual reason ([ReCasaOS/CasaOS-AppManagement#77](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/77), [ReCasaOS/CasaOS-UI#209](https://github.com/ReCasaOS/CasaOS-UI/pull/209)).
+
+### Fixed
+
+- **An image name Docker cannot read no longer stops the Docker cleanup.** On a real box an app named its image `ghcr.io/mckaywrigley/chatbot-ui@undefined`, and the window offered nothing. No image was ever pulled under such a name, so it holds nothing back any more; every image of its repository is kept ([ReCasaOS/CasaOS-AppManagement#78](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/78)).
+
+### Proof
+
+CI passed on the three pull requests, with the back end's tests run against Docker: a folder with no container is listed and moved aside, the folder of an app that has one is refused, and an unreadable image name holds nothing. The new row was seen in a browser on the mock server. Not tried on the box that showed the faults. The release runs of CasaOS-AppManagement `v0.4.116` and CasaOS-UI `v0.4.202` passed on their tags. The install check result is added by a follow-up pull request.
+
 ## [0.5.164] - 2026-11-20
 
 Components: CasaOS-AppManagement `v0.4.115`, CasaOS-UI `v0.4.201`. Unchanged from v0.5.163: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
