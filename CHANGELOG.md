@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.167] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.118`, CasaOS-UI `v0.4.204`. Unchanged from v0.5.166: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Apps can update by themselves at night, app by app.** Settings has a new entry, Automatic app updates, with a switch per app, off for every app. Every night at two, on the box's clock, the apps turned on are updated one after another when they have an update, with the update button's own update. An update is applied only once it has been known for a few days, three unless the owner chooses otherwise, since an image published broken is usually replaced within a day or two. An app that does not start again is put back on the version it ran, and the alert of a failed update is raised; an app that fails two nights in a row is left alone until its switch is turned off and on again. The night waits while something runs on an app or an upgrade of the system is open, the box's own update waits for the night, and a night that cannot start within two hours is skipped. Apps built from a repository deploy by themselves already and are not offered ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#80](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/80), [ReCasaOS/CasaOS-UI#211](https://github.com/ReCasaOS/CasaOS-UI/pull/211)).
+
+### Fixed
+
+- **A failed update puts the app back on the image it ran.** When an update kept its tag, `latest` pulled again for a newer build, putting the old compose file back started the app on the new image all the same, since the tag had moved. The image each service ran is now noted before the pull, and a failed update points the tag back at it, unless another app runs the new one. This holds for updates made by hand too.
+
+### Proof
+
+CI passed on both pull requests: the night's rules (off until turned on, the first night after, the wait, the window, two failures, apps that are gone or busy, no second night at once, the exclusion of "Update every app") and the rollback of a moved tag are tested. The window was seen in a browser on the mock server. No night has run on an installed box, and the rollback of a moved tag has only met a fake daemon. The release runs of CasaOS-AppManagement `v0.4.118` and CasaOS-UI `v0.4.204` passed on their tags. The install check result is added by a follow-up pull request.
+
 ## [0.5.166] - 2026-11-20
 
 Components: CasaOS-AppManagement `v0.4.117`, CasaOS-UI `v0.4.203`. Unchanged from v0.5.165: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
