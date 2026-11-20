@@ -2,6 +2,16 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.168] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.119`, CasaOS-UI `v0.4.205`. Unchanged from v0.5.167: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Newer versions of an image pinned to one are said.** An app pinned to a version, like `1.40.2`, never gets an update: the newer version is another tag. Once a day the box reads the tags the registry holds for every pinned image, once per repository, and keeps for each the highest bug-fix, minor and major version of the same flavour, as the registry spells them: only a trailing build number may differ, and an architecture, a distribution release or a CUDA or PHP version is never crossed. A prerelease is offered the release it leads to; prereleases are offered to nothing else. The card shows the next bug-fix or minor version as a badge, never a major version alone, and the Tag list in the app's settings offers every newer version, major ones included. Nothing is applied by itself. A registry that does not answer keeps what the last day found, and a repository with more than 50,000 tags is not concluded on ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#81](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/81), [ReCasaOS/CasaOS-UI#212](https://github.com/ReCasaOS/CasaOS-UI/pull/212)).
+
+The install check result is added by a follow-up pull request.
+
 ## [0.5.167] - 2026-11-20
 
 Components: CasaOS-AppManagement `v0.4.118`, CasaOS-UI `v0.4.204`. Unchanged from v0.5.166: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
