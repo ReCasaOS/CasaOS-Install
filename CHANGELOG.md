@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.172] - 2026-11-20
+
+Components: CasaOS-UI `v0.4.209`. Unchanged from v0.5.171: CasaOS `v0.4.118`, CasaOS-AppManagement `v0.4.120`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: what it adds to v0.5.171, and v0.5.170 and v0.5.171 themselves, have not met a real box yet.
+
+### Added
+
+- **An account's network shares, from Accounts.** Each account other than the owner has a section Network shares. Give network access makes the share account of the same name, with a password of its own (network shares cannot use the sign-in password); then the network password can be changed, the access removed, the account's network folders set, and its folders in Files opened on the network: they are ticked in the network folders window, each read-only or read-write as in Files, to review before saving. A folder already shared keeps its other accounts; a folder shared for the first time is shared with this account alone. A name a network account cannot take is said ([ReCasaOS/CasaOS#168](https://github.com/ReCasaOS/CasaOS/issues/168), [ReCasaOS/CasaOS-UI#216](https://github.com/ReCasaOS/CasaOS-UI/pull/216)).
+
+The install check result is added by a follow-up pull request.
+
 ## [0.5.171] - 2026-11-20
 
 Components: CasaOS `v0.4.118`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-UI `v0.4.208` (with CasaOS-Common `v0.4.35`). Unchanged from v0.5.170: CasaOS-AppManagement `v0.4.120`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
