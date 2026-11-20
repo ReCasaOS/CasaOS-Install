@@ -17,7 +17,7 @@ Components: CasaOS-AppManagement `v0.4.115`, CasaOS-UI `v0.4.201`. Unchanged fro
 
 ### Proof
 
-CI passed on the three pull requests; a test loads a compose file with `network_mode` and `networks` and reads its image and its volume. The fix was not yet tried on the box that showed the fault. The release runs of CasaOS-AppManagement `v0.4.115` and CasaOS-UI `v0.4.201` passed on their tags. The install check result is added by a follow-up pull request.
+CI passed on the three pull requests; a test loads a compose file with `network_mode` and `networks` and reads its image and its volume. The fix was not yet tried on the box that showed the fault. The release runs of CasaOS-AppManagement `v0.4.115` and CasaOS-UI `v0.4.201` passed on their tags. The install check of this release passed on all 12 legs (run 44699819717), and the workflow made the release the latest one on 2026-11-20.
 
 ## [0.5.163] - 2026-11-19
 
