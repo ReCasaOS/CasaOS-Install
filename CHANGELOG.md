@@ -12,7 +12,9 @@ Published as a pre-release: what it adds to v0.5.172, and v0.5.170 to v0.5.172 t
 
 - **Three more alerts, in two new categories of Settings › Alerts.** App updates: what the night's automatic updates did (the apps updated, and those whose update failed, each still running the version it had; a night that changed nothing says nothing), and the newer versions of images pinned to one, each told once, even across a restart. Cleanup: what the weekly cleanup freed, or why it failed. Both are on by default and can be turned off like the others ([ReCasaOS/CasaOS#170](https://github.com/ReCasaOS/CasaOS/issues/170), [ReCasaOS/CasaOS-AppManagement#83](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/83), [ReCasaOS/CasaOS#173](https://github.com/ReCasaOS/CasaOS/pull/173), [ReCasaOS/CasaOS-UI#217](https://github.com/ReCasaOS/CasaOS-UI/pull/217)).
 
-The install check result is added by a follow-up pull request.
+### Proof
+
+CI passed on the three pull requests: the events of AppManagement (a night that changed nothing says nothing, a newer version told once across restarts, the cleanup's result or failure), the alerts the core makes of them, and the two switches of Settings › Alerts. No alert has been sent from a real box yet: the release stays a pre-release. The release runs of the components passed on their tags. The install check of this release passed on all 12 legs at once (run 44807722488); `release/PRERELEASE` kept it a pre-release.
 
 ## [0.5.172] - 2026-11-20
 
