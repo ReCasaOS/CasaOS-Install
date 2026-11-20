@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.166] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.117`, CasaOS-UI `v0.4.203`. Unchanged from v0.5.165: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The Docker cleanup can run by itself every week.** A switch at the bottom of the window, off by default, makes the box free the old app versions and the build cache on Sunday at four in the morning, on its own clock. Nothing else: images and volumes of no app are only ever deleted in the window, after a list. Turned on, the first run is the next Sunday, never at once. A run waits while something runs on an app or while an upgrade of the system is open, and a box that was off on Sunday runs when it is back ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#79](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/79), [ReCasaOS/CasaOS-UI#210](https://github.com/ReCasaOS/CasaOS-UI/pull/210)).
+- **The window lists the last cleanups.** What each one freed, whether the box made it by itself or it was done by hand, and why a run failed.
+
+### Proof
+
+CI passed on both pull requests: the weekly run frees the old versions and the build cache and nothing else, waits while the box is busy, and writes a failure once. The card was seen in a browser on the mock server. The weekly run has not met the Docker of an installed box. The release runs of CasaOS-AppManagement `v0.4.117` and CasaOS-UI `v0.4.203` passed on their tags. The install check result is added by a follow-up pull request.
+
 ## [0.5.165] - 2026-11-20
 
 Components: CasaOS-AppManagement `v0.4.116`, CasaOS-UI `v0.4.202`. Unchanged from v0.5.164: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
