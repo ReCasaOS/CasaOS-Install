@@ -16,7 +16,9 @@ Published as a pre-release: the container files have not met a real box yet.
 
 - **App icons in the Automatic app updates window.** An app whose icon does not load, or that has none, shows the dashboard's default icon instead of a broken image ([ReCasaOS/CasaOS-UI#213](https://github.com/ReCasaOS/CasaOS-UI/pull/213)).
 
-The install check result is added by a follow-up pull request.
+### Proof
+
+CI passed on both pull requests: reading (folders, modes and owners, links and `..` kept inside, device nodes, FIFOs and /proc never opened) and writing (owner of the folder, a replaced file keeping its mode, a name taken meanwhile left alone, a mount point or a folder holding one never removed, a file bound in written in place, the app held) are tested as root, the mounts made in another mount namespace as Docker makes them. Neither the window nor the routes have met a real container yet: the release stays a pre-release until they are tried on a box. The release runs of CasaOS-AppManagement `v0.4.120` and CasaOS-UI `v0.4.207` passed on their tags. The install check of this release passed on all 12 legs at once (run 44769721824); `release/PRERELEASE` kept it a pre-release.
 
 ## [0.5.169] - 2026-11-20
 
