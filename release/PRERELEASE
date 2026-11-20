@@ -1,3 +1,3 @@
-This release is published as a pre-release until the container files (v0.5.170) and the folders of an account are tried on a real box.
-Promote it with: gh release edit v0.5.171 -R ReCasaOS/CasaOS-Install --prerelease=false --latest
+This release is published as a pre-release until the container files (v0.5.170), the folders of an account (v0.5.171) and its network shares are tried on a real box.
+Promote it with: gh release edit v0.5.172 -R ReCasaOS/CasaOS-Install --prerelease=false --latest
 then delete this file in the next commit.
