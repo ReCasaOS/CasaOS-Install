@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.171] - 2026-11-20
+
+Components: CasaOS `v0.4.118`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-UI `v0.4.208` (with CasaOS-Common `v0.4.35`). Unchanged from v0.5.170: CasaOS-AppManagement `v0.4.120`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: the folders of an account, and the container files of v0.5.170, have not met a real box yet.
+
+### Added
+
+- **An account can be given folders in Files, each to read or to read and write.** In Accounts, each account other than the owner has a section Folders in Files: add a folder with the folder picker, set it to Read or Read and write, take it away. An account given folders sees the Files app with those folders only; above them it sees only the way down to them. In a folder it may only read, nothing can be made, sent, pasted, renamed, moved or deleted. The drives, the shares, the transfer between devices and the trash stay the owner's: an account deletes for good. With no folder, Files stays closed, as before. The box confines every path of such an account to its folders: each read and change goes through the folder itself as the system opened it, so a folder swapped for a link out of it, by the account or by an app writing there, leads nowhere outside; a copy or a move waiting in the queue reads the account's folders again when it runs. A folder taken away applies within five seconds ([ReCasaOS/CasaOS#168](https://github.com/ReCasaOS/CasaOS/issues/168), [ReCasaOS/CasaOS#172](https://github.com/ReCasaOS/CasaOS/pull/172), [ReCasaOS/CasaOS-UserService#15](https://github.com/ReCasaOS/CasaOS-UserService/pull/15), [ReCasaOS/CasaOS-Gateway#15](https://github.com/ReCasaOS/CasaOS-Gateway/pull/15), [ReCasaOS/CasaOS-UI#215](https://github.com/ReCasaOS/CasaOS-UI/pull/215), [ReCasaOS/CasaOS-Common#15](https://github.com/ReCasaOS/CasaOS-Common/pull/15)).
+
+The install check result is added by a follow-up pull request.
+
 ## [0.5.170] - 2026-11-20
 
 Components: CasaOS-AppManagement `v0.4.120`, CasaOS-UI `v0.4.207`. Unchanged from v0.5.169: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
