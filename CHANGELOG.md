@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.170] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.120`, CasaOS-UI `v0.4.207`. Unchanged from v0.5.169: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: the container files have not met a real box yet.
+
+### Added
+
+- **The files inside an app's container, in a Files tab.** Beside Terminal and Logs, and as a button per running container in the Containers tab, for the owner of the box: folders with their size, permissions, owner and date, a text file read, edited and saved in place, a file downloaded to the disk as it comes, files sent with their progress, a new folder or file, a deletion after a confirmation. The window says whether a folder is on a volume, kept when the app is updated, or in the container itself, lost then. The files are read from the box, so an image without a shell is browsed too, and nothing leaves the container: a link or `..` resolves inside it, no device or file of /proc and /sys is opened, a file bound in from the box is written in place, and a volume, or a folder holding one, is never deleted. Nothing is written while the app is updated, restored or removed. Needs Linux 5.6 or newer ([ReCasaOS/CasaOS#169](https://github.com/ReCasaOS/CasaOS/issues/169), [ReCasaOS/CasaOS-AppManagement#82](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/82), [ReCasaOS/CasaOS-UI#214](https://github.com/ReCasaOS/CasaOS-UI/pull/214)).
+
+### Fixed
+
+- **App icons in the Automatic app updates window.** An app whose icon does not load, or that has none, shows the dashboard's default icon instead of a broken image ([ReCasaOS/CasaOS-UI#213](https://github.com/ReCasaOS/CasaOS-UI/pull/213)).
+
+The install check result is added by a follow-up pull request.
+
 ## [0.5.169] - 2026-11-20
 
 v0.5.168 was tagged but never published: its build stopped at once, since the release tag in `release/components.env` still named v0.5.167. This release is v0.5.168 with that tag set.
