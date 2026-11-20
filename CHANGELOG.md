@@ -13,7 +13,7 @@ Components: CasaOS-AppManagement `v0.4.117`, CasaOS-UI `v0.4.203`. Unchanged fro
 
 ### Proof
 
-CI passed on both pull requests: the weekly run frees the old versions and the build cache and nothing else, waits while the box is busy, and writes a failure once. The card was seen in a browser on the mock server. The weekly run has not met the Docker of an installed box. The release runs of CasaOS-AppManagement `v0.4.117` and CasaOS-UI `v0.4.203` passed on their tags. The install check result is added by a follow-up pull request.
+CI passed on both pull requests: the weekly run frees the old versions and the build cache and nothing else, waits while the box is busy, and writes a failure once. The card was seen in a browser on the mock server. The weekly run has not met the Docker of an installed box. The release runs of CasaOS-AppManagement `v0.4.117` and CasaOS-UI `v0.4.203` passed on their tags. The install check of this release passed on all 12 legs (run 44719679771): 11 at once, and Ubuntu 24.04 on a second try, after apt stalled three times while the machine was being prepared. The workflow made the release the latest one on 2026-11-20.
 
 ## [0.5.165] - 2026-11-20
 
