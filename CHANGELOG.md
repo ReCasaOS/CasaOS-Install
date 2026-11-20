@@ -12,7 +12,9 @@ Published as a pre-release: what it adds to v0.5.171, and v0.5.170 and v0.5.171 
 
 - **An account's network shares, from Accounts.** Each account other than the owner has a section Network shares. Give network access makes the share account of the same name, with a password of its own (network shares cannot use the sign-in password); then the network password can be changed, the access removed, the account's network folders set, and its folders in Files opened on the network: they are ticked in the network folders window, each read-only or read-write as in Files, to review before saving. A folder already shared keeps its other accounts; a folder shared for the first time is shared with this account alone. A name a network account cannot take is said ([ReCasaOS/CasaOS#168](https://github.com/ReCasaOS/CasaOS/issues/168), [ReCasaOS/CasaOS-UI#216](https://github.com/ReCasaOS/CasaOS-UI/pull/216)).
 
-The install check result is added by a follow-up pull request.
+### Proof
+
+CI passed on the pull request; the Accounts screen and the network folders window are covered by their specs. Nothing of it has met a real box yet: the release stays a pre-release. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs at once (run 44800818044); `release/PRERELEASE` kept it a pre-release.
 
 ## [0.5.171] - 2026-11-20
 
