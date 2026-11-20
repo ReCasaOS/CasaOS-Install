@@ -2,7 +2,9 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
-## [0.5.168] - 2026-11-20
+## [0.5.169] - 2026-11-20
+
+v0.5.168 was tagged but never published: its build stopped at once, since the release tag in `release/components.env` still named v0.5.167. This release is v0.5.168 with that tag set.
 
 Components: CasaOS-AppManagement `v0.4.119`, CasaOS-UI `v0.4.205`. Unchanged from v0.5.167: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
 
