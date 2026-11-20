@@ -12,7 +12,9 @@ Components: CasaOS-AppManagement `v0.4.119`, CasaOS-UI `v0.4.205`. Unchanged fro
 
 - **Newer versions of an image pinned to one are said.** An app pinned to a version, like `1.40.2`, never gets an update: the newer version is another tag. Once a day the box reads the tags the registry holds for every pinned image, once per repository, and keeps for each the highest bug-fix, minor and major version of the same flavour, as the registry spells them: only a trailing build number may differ, and an architecture, a distribution release or a CUDA or PHP version is never crossed. A prerelease is offered the release it leads to; prereleases are offered to nothing else. The card shows the next bug-fix or minor version as a badge, never a major version alone, and the Tag list in the app's settings offers every newer version, major ones included. Nothing is applied by itself. A registry that does not answer keeps what the last day found, and a repository with more than 50,000 tags is not concluded on ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#81](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/81), [ReCasaOS/CasaOS-UI#212](https://github.com/ReCasaOS/CasaOS-UI/pull/212)).
 
-The install check result is added by a follow-up pull request.
+### Proof
+
+CI passed on both pull requests: reading the tags (as the registry spells them, only a trailing build number differing within a flavour, a prerelease offered its release, one read per repository, a failed registry keeping the last day, a list too long not concluded on) and the card and Tag list are tested. The badge was seen in a browser on the mock server; the reading ran against the real registries once on a development box before the review fixes, not since. The release runs of CasaOS-AppManagement `v0.4.119` and CasaOS-UI `v0.4.205` passed on their tags. The install check of this release passed on all 12 legs (run 44748873065): 11 at once, and amd64 with Docker preinstalled on a second try, after apt stalled while the machine was being prepared. The workflow made the release the latest one on 2026-11-20.
 
 ## [0.5.167] - 2026-11-20
 
