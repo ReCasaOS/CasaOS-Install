@@ -16,7 +16,7 @@ Components: CasaOS-AppManagement `v0.4.116`, CasaOS-UI `v0.4.202`. Unchanged fro
 
 ### Proof
 
-CI passed on the three pull requests, with the back end's tests run against Docker: a folder with no container is listed and moved aside, the folder of an app that has one is refused, and an unreadable image name holds nothing. The new row was seen in a browser on the mock server. Not tried on the box that showed the faults. The release runs of CasaOS-AppManagement `v0.4.116` and CasaOS-UI `v0.4.202` passed on their tags. The install check result is added by a follow-up pull request.
+CI passed on the three pull requests, with the back end's tests run against Docker: a folder with no container is listed and moved aside, the folder of an app that has one is refused, and an unreadable image name holds nothing. The new row was seen in a browser on the mock server. Not tried on the box that showed the faults. The release runs of CasaOS-AppManagement `v0.4.116` and CasaOS-UI `v0.4.202` passed on their tags. The install check of this release passed on all 12 legs (run 44705737828), and the workflow made the release the latest one on 2026-11-20.
 
 ## [0.5.164] - 2026-11-20
 
