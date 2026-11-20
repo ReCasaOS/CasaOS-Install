@@ -16,7 +16,7 @@ Components: CasaOS-AppManagement `v0.4.118`, CasaOS-UI `v0.4.204`. Unchanged fro
 
 ### Proof
 
-CI passed on both pull requests: the night's rules (off until turned on, the first night after, the wait, the window, two failures, apps that are gone or busy, no second night at once, the exclusion of "Update every app") and the rollback of a moved tag are tested. The window was seen in a browser on the mock server. No night has run on an installed box, and the rollback of a moved tag has only met a fake daemon. The release runs of CasaOS-AppManagement `v0.4.118` and CasaOS-UI `v0.4.204` passed on their tags. The install check result is added by a follow-up pull request.
+CI passed on both pull requests: the night's rules (off until turned on, the first night after, the wait, the window, two failures, apps that are gone or busy, no second night at once, the exclusion of "Update every app") and the rollback of a moved tag are tested. The window was seen in a browser on the mock server. No night has run on an installed box, and the rollback of a moved tag has only met a fake daemon. The release runs of CasaOS-AppManagement `v0.4.118` and CasaOS-UI `v0.4.204` passed on their tags. The install check of this release passed on all 12 legs (run 44733735942): 11 at once, and Armbian on a second try, after apt stalled while the machine was being prepared. The workflow made the release the latest one on 2026-11-20.
 
 ## [0.5.166] - 2026-11-20
 
