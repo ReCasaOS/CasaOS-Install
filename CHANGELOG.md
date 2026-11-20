@@ -2,6 +2,23 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.164] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.115`, CasaOS-UI `v0.4.201`. Unchanged from v0.5.163: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The Docker cleanup no longer stops on a compose file that Docker Compose would refuse.** On a real box the window said it could not read what an app needs, and offered nothing: the folder of an app that was gone still held a compose file whose service set both `network_mode` and `networks`. Such a file still says which images and volumes are the app's, and the cleanup now reads them from it. A file that does not parse still holds the cleanup, naming the app ([ReCasaOS/CasaOS-AppManagement#76](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/76)).
+- **The build cache can be freed when an app cannot be read.** It holds the data of no app; its button was greyed out with the rest ([ReCasaOS/CasaOS-UI#208](https://github.com/ReCasaOS/CasaOS-UI/pull/208)).
+
+### Changed
+
+- **The folder sync window says what an account reaches.** A backup destination added with a folder only reaches inside that folder, so a sync task on it only showed the backup files. The window now says so under the list of accounts, and that adding the same account again with its folder left empty reaches the rest ([ReCasaOS/CasaOS#153](https://github.com/ReCasaOS/CasaOS/issues/153), [ReCasaOS/CasaOS-UI#204](https://github.com/ReCasaOS/CasaOS-UI/pull/204)).
+
+### Proof
+
+CI passed on the three pull requests; a test loads a compose file with `network_mode` and `networks` and reads its image and its volume. The fix was not yet tried on the box that showed the fault. The release runs of CasaOS-AppManagement `v0.4.115` and CasaOS-UI `v0.4.201` passed on their tags. The install check result is added by a follow-up pull request.
+
 ## [0.5.163] - 2026-11-19
 
 Components: CasaOS-AppManagement `v0.4.114`, CasaOS-UI `v0.4.200`. Unchanged from v0.5.162: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
