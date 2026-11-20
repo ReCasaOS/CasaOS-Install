@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.173] - 2026-11-20
+
+Components: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-UI `v0.4.210`. Unchanged from v0.5.172: CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: what it adds to v0.5.172, and v0.5.170 to v0.5.172 themselves, have not met a real box yet.
+
+### Added
+
+- **Three more alerts, in two new categories of Settings › Alerts.** App updates: what the night's automatic updates did (the apps updated, and those whose update failed, each still running the version it had; a night that changed nothing says nothing), and the newer versions of images pinned to one, each told once, even across a restart. Cleanup: what the weekly cleanup freed, or why it failed. Both are on by default and can be turned off like the others ([ReCasaOS/CasaOS#170](https://github.com/ReCasaOS/CasaOS/issues/170), [ReCasaOS/CasaOS-AppManagement#83](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/83), [ReCasaOS/CasaOS#173](https://github.com/ReCasaOS/CasaOS/pull/173), [ReCasaOS/CasaOS-UI#217](https://github.com/ReCasaOS/CasaOS-UI/pull/217)).
+
+The install check result is added by a follow-up pull request.
+
 ## [0.5.172] - 2026-11-20
 
 Components: CasaOS-UI `v0.4.209`. Unchanged from v0.5.171: CasaOS `v0.4.118`, CasaOS-AppManagement `v0.4.120`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
