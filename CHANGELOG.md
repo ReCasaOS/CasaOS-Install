@@ -12,7 +12,7 @@ Components: CasaOS-UI `v0.4.211`. Unchanged from v0.5.173: CasaOS `v0.4.119`, Ca
 
 ### Proof
 
-CI passed on CasaOS-UI#218, with new tests of the sort (folders first, natural name order, date, size and type both ways), and the sort was tried in a browser on a mock dashboard: grid view by name and by date modified, list view by size from its header. Not tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on 11 legs of 12 (run 45140296793); the Armbian leg never reached the install: dl.armbian.com broke off the image download (curl error 92), and its rerun was still stuck in that download after half an hour. The release was promoted to Latest by hand.
+CI passed on CasaOS-UI#218, with new tests of the sort (folders first, natural name order, date, size and type both ways), and the sort was tried in a browser on a mock dashboard: grid view by name and by date modified, list view by size from its header. Not tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs (run 45140296793), the Armbian leg on a rerun: on the first try dl.armbian.com broke off the image download (curl error 92). The release was promoted to Latest by hand while that rerun was still downloading; the promote job confirmed it once the rerun passed.
 
 ## [0.5.173] - 2026-11-20
 
