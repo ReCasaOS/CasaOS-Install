@@ -13,7 +13,7 @@ Components: CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.212`. Unchanged from 
 
 ### Proof
 
-CI passed on CasaOS-LocalStorage#36, with a new test that the mergerfs mount keeps `allow_other`, `use_ino` and its `fsname`, and on CasaOS-UI#219. The menu was checked in a browser on a mock dashboard: without the fix the first choice sat under the list header, with it every choice is on top. Neither fix has been tried on a real box. The release runs of both components passed on their tags.
+CI passed on CasaOS-LocalStorage#36, with a new test that the mergerfs mount keeps `allow_other`, `use_ino` and its `fsname`, and on CasaOS-UI#219. The menu was checked in a browser on a mock dashboard: without the fix the first choice sat under the list header, with it every choice is on top. The reporter of #175 mounted test branches by hand on Ubuntu 24.04.5 with mergerfs 2.33.5: with the old options neither a non-root user nor a container running as `1000:1000` could read them, with the new ones both could. A full upgrade to this release has not met a real box yet, and the menu has not been seen on one. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs (run 45215726468), the DietPi leg on a rerun: on the first try the runner's own apt ran out its timeout while unpacking QEMU's packages, before the installer started (fixed by #308, whose run 45220532281 passed all 12 legs on this release). The release was promoted to Latest by hand while that rerun was going; the promote job confirmed it once the rerun passed.
 
 ## [0.5.174] - 2026-11-23
 
