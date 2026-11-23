@@ -12,7 +12,7 @@ Components: CasaOS-UI `v0.4.213`. Unchanged from v0.5.175: CasaOS `v0.4.119`, Ca
 
 ### Proof
 
-The pt_BR file has exactly the keys of the English one, none dropped, and keeps every `{placeholder}` and the `@` and `|` signs vue-i18n reads. Not seen in a browser.
+The pt_BR file has exactly the keys of the English one, none dropped, and keeps every `{placeholder}` and the `@` and `|` signs vue-i18n reads. Not seen in a browser. The release run of CasaOS-UI passed on its tag. The first tag run of this release stopped before publishing anything, because `CASAOS_RELEASE_TAG` had not been bumped (fixed by #311). The install check of this release then passed on all 12 legs on the first try (run 45250310084), and the promote job made it Latest.
 
 ## [0.5.175] - 2026-11-23
 
