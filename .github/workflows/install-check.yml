@@ -2882,9 +2882,11 @@ jobs:
           [ "${UEFI}" != true ] || pkgs="${pkgs} ovmf"
           [ "${SEED}" != customize ] || pkgs="${pkgs} libguestfs-tools"
           # The runner's apt sometimes stalls without a word (it has taken a whole job
-          # before): a few bounded tries, for that and for nothing else.
+          # before): a few bounded tries, for that and for nothing else. The download
+          # comes first, alone: a slow mirror once ran the 300 s out mid-unpack, and
+          # the dpkg left behind held the lock against every later try.
           for attempt in 1 2 3; do
-            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq ${pkgs} && break
+            sudo timeout 120 apt-get update -qq && sudo timeout 600 apt-get install -y -qq -o DPkg::Lock::Timeout=120 --download-only ${pkgs} && sudo timeout 600 apt-get install -y -qq -o DPkg::Lock::Timeout=120 ${pkgs} && break
             [ "${attempt}" -lt 3 ] || exit 1
             echo "apt stalled or failed (try ${attempt}), again"
             sudo dpkg --configure -a || true
