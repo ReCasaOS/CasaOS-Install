@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.175] - 2026-11-23
+
+Components: CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.212`. Unchanged from v0.5.174: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **`/DATA` is readable by every user again.** The merged `/DATA` was mounted without `allow_other`, so on boxes whose mergerfs is older than 2.35 (Ubuntu 24.04 ships 2.33.5) only root could read it, and containers running as another user (PUID 1000, for example) got `Permission denied` after an upgrade from CasaOS v0.4.15. It is mounted with `defaults,allow_other,use_ino` again, as in CasaOS v0.4.15 ([ReCasaOS/CasaOS#175](https://github.com/ReCasaOS/CasaOS/issues/175), [ReCasaOS/CasaOS-LocalStorage#36](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/36)).
+- **The File Manager's Sort by menu opens over the list.** In list view the column headers covered the top of the menu. The Type column and sort choice are now translated in every language ([ReCasaOS/CasaOS#174](https://github.com/ReCasaOS/CasaOS/issues/174), [ReCasaOS/CasaOS-UI#219](https://github.com/ReCasaOS/CasaOS-UI/pull/219)).
+
+### Proof
+
+CI passed on CasaOS-LocalStorage#36, with a new test that the mergerfs mount keeps `allow_other`, `use_ino` and its `fsname`, and on CasaOS-UI#219. The menu was checked in a browser on a mock dashboard: without the fix the first choice sat under the list header, with it every choice is on top. Neither fix has been tried on a real box. The release runs of both components passed on their tags.
+
 ## [0.5.174] - 2026-11-23
 
 Components: CasaOS-UI `v0.4.211`. Unchanged from v0.5.173: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
