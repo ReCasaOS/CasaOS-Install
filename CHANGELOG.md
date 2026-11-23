@@ -2,6 +2,16 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.174] - 2026-11-23
+
+Components: CasaOS-UI `v0.4.211`. Unchanged from v0.5.173: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The File Manager sorts again.** In list view the Name, Type, Date modified and Size headers sort, and a second click reverses the order; the grid view gets a Sort by menu with the same choices. Folders stay first, names sort in natural order (`b2` before `b10`), and the choice is kept in the browser ([ReCasaOS/CasaOS#174](https://github.com/ReCasaOS/CasaOS/issues/174), [ReCasaOS/CasaOS-UI#218](https://github.com/ReCasaOS/CasaOS-UI/pull/218)).
+
+The install check result is added by a follow-up pull request.
+
 ## [0.5.173] - 2026-11-20
 
 Components: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-UI `v0.4.210`. Unchanged from v0.5.172: CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
