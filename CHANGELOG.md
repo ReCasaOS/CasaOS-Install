@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.176] - 2026-11-23
+
+Components: CasaOS-UI `v0.4.213`. Unchanged from v0.5.175: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The dashboard is fully translated into Brazilian Portuguese.** Every text of the dashboard now has a pt_BR translation, where only about one in ten had one, and the existing ones were reviewed. Contributed by @kendikaku ([ReCasaOS/CasaOS-UI#220](https://github.com/ReCasaOS/CasaOS-UI/pull/220)).
+
+### Proof
+
+The pt_BR file has exactly the keys of the English one, none dropped, and keeps every `{placeholder}` and the `@` and `|` signs vue-i18n reads. Not seen in a browser.
+
 ## [0.5.175] - 2026-11-23
 
 Components: CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.212`. Unchanged from v0.5.174: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
