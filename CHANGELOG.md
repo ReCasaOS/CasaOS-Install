@@ -24,7 +24,7 @@ Components: CasaOS-UI `v0.4.220`. Unchanged from v0.5.183: CasaOS `v0.4.122`, Ca
 
 ### Proof
 
-CI passed on CasaOS-UI#227, with two new tests that failed before the fix: a save from a list lacking saved apps keeps them at their place, and a list read before the apps are back does not lose their order. A real box's user-service log showed the cause on a plain reload: four saves of the order within a second, one without the Logs and Security cards. The fix has not been tried on a real box.
+CI passed on CasaOS-UI#227, with two new tests that failed before the fix: a save from a list lacking saved apps keeps them at their place, and a list read before the apps are back does not lose their order. A real box's user-service log showed the cause on a plain reload: four saves of the order within a second, one without the Logs and Security cards. The fix has not been tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45417354753), and the promote job made it Latest.
 
 ## [0.5.183] - 2026-11-24
 
