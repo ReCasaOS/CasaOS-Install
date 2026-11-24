@@ -13,7 +13,7 @@ Components: CasaOS-UI `v0.4.225`, module `vuln-scan` `v0.1.3`. Unchanged from v0
 
 ### Proof
 
-CI passed on ReCasaOS-VulnScan#4, with a new test of the scope's command line, and on CasaOS-UI#234, with new tests of the probe (true, false on 404, null with no answer, a bounded wait) and of the card asked for again at its saved place. The freeze was seen on a real box (memory pressure at 85 % full, the status route pending); after a restart of the module the card came back. On that box `systemd-run --scope` gave a command its own cgroup and kept the service's nice 19 and idle I/O class. A full scan under the new scope has not been watched on a real box yet. The release runs of both components passed on their tags.
+CI passed on ReCasaOS-VulnScan#4, with a new test of the scope's command line, and on CasaOS-UI#234, with new tests of the probe (true, false on 404, null with no answer, a bounded wait) and of the card asked for again at its saved place. The freeze was seen on a real box (memory pressure at 85 % full, the status route pending); after a restart of the module the card came back. On that box `systemd-run --scope` gave a command its own cgroup and kept the service's nice 19 and idle I/O class. A full scan under the new scope has not been watched on a real box yet. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45499238798), and the promote job made it Latest.
 
 ## [0.5.189] - 2026-11-24
 
