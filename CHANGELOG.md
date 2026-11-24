@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.184] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.220`. Unchanged from v0.5.183: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The order you give your apps is kept.** Each save of the order forgot the apps the dashboard did not show at that moment, and a page load saves it a few times: a card joining (Logs, Security, Fleet, Virtual Machines), or the list read right after an update, before every app is back. An app missing from one such save lost its place and came back at the end, so the arrangement looked reset after updates. Every app now keeps its saved place. An order already lost has to be arranged once more ([ReCasaOS/CasaOS#183](https://github.com/ReCasaOS/CasaOS/issues/183), [ReCasaOS/CasaOS-UI#227](https://github.com/ReCasaOS/CasaOS-UI/pull/227)).
+
+### Proof
+
+CI passed on CasaOS-UI#227, with two new tests that failed before the fix: a save from a list lacking saved apps keeps them at their place, and a list read before the apps are back does not lose their order. A real box's user-service log showed the cause on a plain reload: four saves of the order within a second, one without the Logs and Security cards. The fix has not been tried on a real box.
+
 ## [0.5.183] - 2026-11-24
 
 Components: CasaOS-UI `v0.4.219`. Unchanged from v0.5.182: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
