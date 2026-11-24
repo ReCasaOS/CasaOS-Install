@@ -12,7 +12,7 @@ Components: CasaOS `v0.4.124`, CasaOS-UI `v0.4.224`. Unchanged from v0.5.188: Ca
 
 ### Proof
 
-CI passed on CasaOS#186, with new tests of the channel (release until chosen, back to release, an unknown or unreadable channel), of the pre-release offered (the newest one newer than the last release, drafts left out, the release offered again once newer, a feed set in config unchanged) and of the routes behind the token, and on CasaOS-UI#233, with new tests of the row and of saving the channel. Not looked at in a browser, nor tried on a real box: the first pre-release offered this way will be the proof.
+CI passed on CasaOS#186, with new tests of the channel (release until chosen, back to release, an unknown or unreadable channel), of the pre-release offered (the newest one newer than the last release, drafts left out, the release offered again once newer, a feed set in config unchanged) and of the routes behind the token, and on CasaOS-UI#233, with new tests of the row and of saving the channel. Not looked at in a browser, nor tried on a real box: the first pre-release offered this way will be the proof. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45475179625), and the promote job made it Latest.
 
 ## [0.5.188] - 2026-11-24
 
