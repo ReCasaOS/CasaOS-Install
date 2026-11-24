@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.181] - 2026-11-24
+
+Components: CasaOS `v0.4.121`, CasaOS-UI `v0.4.218`. Unchanged from v0.5.180: CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Headlines of your own RSS or Atom feeds in the dashboard's footer.** Settings > *Footer news*: a switch, off by default, and up to ten feeds, one address per line. The footer shows one headline at a time, the next every few seconds, paused while pointed at; a click opens it in a new tab. The box reads the feeds every 30 minutes, from the Internet only: a feed served by the box itself or its own network is refused, and the settings say why a feed could not be read. For the owner's account only ([ReCasaOS/CasaOS#180](https://github.com/ReCasaOS/CasaOS/issues/180), [ReCasaOS/CasaOS#181](https://github.com/ReCasaOS/CasaOS/pull/181), [ReCasaOS/CasaOS-UI#225](https://github.com/ReCasaOS/CasaOS-UI/pull/225)).
+
+### Proof
+
+CI passed on CasaOS#181, with new tests of the feeds (RSS 2.0, RSS 1.0 and Atom, a Latin-1 feed, relative links, links that must be dropped, the addresses refused, a redirect toward a refused address, nothing read while off, the cache and a failed refresh keeping its headlines, refused settings writing nothing), and on CasaOS-UI#225, with new tests of the footer and the settings. The footer and the settings were checked in a browser on the classic mock dashboard; the new dashboard's footer is the same bar, not looked at there. Not tried on a real box.
+
 ## [0.5.180] - 2026-11-24
 
 Components: CasaOS-AppManagement `v0.4.122`, CasaOS-UI `v0.4.217`. Unchanged from v0.5.179: CasaOS `v0.4.120`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
