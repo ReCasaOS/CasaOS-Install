@@ -12,7 +12,7 @@ Components: unchanged from v0.5.191: CasaOS `v0.4.124`, CasaOS-AppManagement `v0
 
 ### Proof
 
-The module was tried on a real box by its maintainer before this release. The catalogue was built from the published archives of the three modules, with `mcp` at `v0.1.0` in the core tier.
+The module was tried on a real box by its maintainer before this release. The catalogue was built from the published archives of the three modules, with `mcp` at `v0.1.0` in the core tier. The install check of this release passed on all 12 legs on the first try (run 45505321694), and the promote job made it Latest.
 
 ## [0.5.191] - 2026-11-24
 
