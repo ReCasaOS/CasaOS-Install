@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.189] - 2026-11-24
+
+Components: CasaOS `v0.4.124`, CasaOS-UI `v0.4.224`. Unchanged from v0.5.188: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An update channel: releases, or pre-releases too.** Settings > Updates > *Update channel*. With *Pre-releases too*, the Update button also offers a pre-release newer than the last release, and installs it by its own tag; once a release is newer, the release is offered again. The night's automatic update still installs releases only, whatever the channel. A box going back to *Releases* keeps the version it runs until a newer release comes ([ReCasaOS/CasaOS#186](https://github.com/ReCasaOS/CasaOS/pull/186), [ReCasaOS/CasaOS-UI#233](https://github.com/ReCasaOS/CasaOS-UI/pull/233)).
+
+### Proof
+
+CI passed on CasaOS#186, with new tests of the channel (release until chosen, back to release, an unknown or unreadable channel), of the pre-release offered (the newest one newer than the last release, drafts left out, the release offered again once newer, a feed set in config unchanged) and of the routes behind the token, and on CasaOS-UI#233, with new tests of the row and of saving the channel. Not looked at in a browser, nor tried on a real box: the first pre-release offered this way will be the proof.
+
 ## [0.5.188] - 2026-11-24
 
 Components: CasaOS `v0.4.123`, CasaOS-UI `v0.4.223`. Unchanged from v0.5.187: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
