@@ -18,7 +18,7 @@ All for the owner's account, in Files ([ReCasaOS/CasaOS#184](https://github.com/
 
 ### Proof
 
-CI passed on CasaOS#185, with new tests of the search (names, case, a link not walked through, each limit, network mounts and overlays read from the mount table, a search held to the roots as the listing is, from `/` and from inside a root, paths outside refused), and on CasaOS-UI#230, #231 and #232, with new tests of the path typed, the copy, the room left, the trash size, the badges, the search and the drives' bars. An independent review of the search route found nothing that reveals names past what Files may list; its two points before a release (a network mount that stops answering, container layers filling the budget) were fixed before the merge. Not looked at in a browser, nor tried on a real box.
+CI passed on CasaOS#185, with new tests of the search (names, case, a link not walked through, each limit, network mounts and overlays read from the mount table, a search held to the roots as the listing is, from `/` and from inside a root, paths outside refused), and on CasaOS-UI#230, #231 and #232, with new tests of the path typed, the copy, the room left, the trash size, the badges, the search and the drives' bars. An independent review of the search route found nothing that reveals names past what Files may list; its two points before a release (a network mount that stops answering, container layers filling the budget) were fixed before the merge. Not looked at in a browser, nor tried on a real box. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45467972917), and the promote job made it Latest.
 
 ## [0.5.187] - 2026-11-24
 
