@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.183] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.219`. Unchanged from v0.5.182: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The new dashboard's apps can be sorted.** A *Sort by* menu next to the All / Running / Stopped / Updates filters: *Custom order* (the order you drag, still the default), *Name* A to Z or Z to A, *Memory used* (largest first), *Running first*. It works with the filters, and the browser remembers the choice. Apps are dragged in the custom order only, so a sorted view never changes the saved order. The classic dashboard is unchanged ([ReCasaOS/CasaOS#183](https://github.com/ReCasaOS/CasaOS/issues/183), [ReCasaOS/CasaOS-UI#226](https://github.com/ReCasaOS/CasaOS-UI/pull/226)).
+
+### Proof
+
+CI passed on CasaOS-UI#226, with new tests of each order, ties kept in the custom order, the remembered choice (and a browser refusing its storage), a sorted grid combined with a filter, and a drag of a sorted grid saving nothing. Not looked at in a browser, nor tried on a real box.
+
 ## [0.5.182] - 2026-11-24
 
 Components: CasaOS `v0.4.122`. Unchanged from v0.5.181: CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.218`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
