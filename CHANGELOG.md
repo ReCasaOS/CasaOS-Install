@@ -12,7 +12,7 @@ Components: CasaOS-UI `v0.4.222`. Unchanged from v0.5.186: CasaOS `v0.4.122`, Ca
 
 ### Proof
 
-CI passed on CasaOS-UI#229, with the card's test now checking the version is on its own line and whole on hover. Not looked at in a browser, nor tried on a real box.
+CI passed on CasaOS-UI#229, with the card's test now checking the version is on its own line and whole on hover. Not looked at in a browser, nor tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45444518651), and the promote job made it Latest.
 
 ## [0.5.186] - 2026-11-24
 
