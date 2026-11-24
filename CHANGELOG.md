@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.190] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.225`, module `vuln-scan` `v0.1.3`. Unchanged from v0.5.189: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A scan no longer freezes the vulnerability scan module.** The scan and the module's API shared one 512 MB memory cap. A scan of a large image went over it, the module stopped answering for as long as the scan crawled (50 minutes on a real box), and the dashboard left out its Security card. Trivy now runs in a systemd scope of its own, capped at 1.5 GB, with the same low CPU and I/O priority; the API keeps its 512 MB ([ReCasaOS/ReCasaOS-VulnScan#4](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/4)).
+- **The Security card comes back by itself.** A module that does not answer within 15 s is asked again a minute later, the card keeping its place, instead of being taken for absent until the page is reloaded ([ReCasaOS/CasaOS-UI#234](https://github.com/ReCasaOS/CasaOS-UI/pull/234)).
+
+### Proof
+
+CI passed on ReCasaOS-VulnScan#4, with a new test of the scope's command line, and on CasaOS-UI#234, with new tests of the probe (true, false on 404, null with no answer, a bounded wait) and of the card asked for again at its saved place. The freeze was seen on a real box (memory pressure at 85 % full, the status route pending); after a restart of the module the card came back. On that box `systemd-run --scope` gave a command its own cgroup and kept the service's nice 19 and idle I/O class. A full scan under the new scope has not been watched on a real box yet. The release runs of both components passed on their tags.
+
 ## [0.5.189] - 2026-11-24
 
 Components: CasaOS `v0.4.124`, CasaOS-UI `v0.4.224`. Unchanged from v0.5.188: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
