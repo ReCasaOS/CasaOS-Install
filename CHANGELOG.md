@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.185] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.221`. Unchanged from v0.5.184: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The app sort menu looks like the filters beside it.** It was the browser's own list box; it is now a round chip with a sort icon and the order chosen, opening the dashboard's menu with a check on that order ([ReCasaOS/CasaOS#183](https://github.com/ReCasaOS/CasaOS/issues/183), [ReCasaOS/CasaOS-UI#228](https://github.com/ReCasaOS/CasaOS-UI/pull/228)).
+
+### Proof
+
+CI passed on CasaOS-UI#228; only the menu's template and style changed, the orders and their tests are the same. Not looked at in a browser, nor tried on a real box.
+
 ## [0.5.184] - 2026-11-24
 
 Components: CasaOS-UI `v0.4.220`. Unchanged from v0.5.183: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
