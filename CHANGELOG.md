@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.182] - 2026-11-24
+
+Components: CasaOS `v0.4.122`. Unchanged from v0.5.181: CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.218`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The footer shows ReCasaOS's releases until you choose otherwise.** A box whose owner never saved Settings > *Footer news* shows the headlines of https://github.com/ReCasaOS/CasaOS-Install/releases.atom, read every 30 minutes. Turning it off, or changing the feeds, is kept as chosen ([ReCasaOS/CasaOS#180](https://github.com/ReCasaOS/CasaOS/issues/180), [ReCasaOS/CasaOS#182](https://github.com/ReCasaOS/CasaOS/pull/182)).
+
+### Proof
+
+CI passed on CasaOS#182, with a new test: a box with no settings reads the releases feed, a saved "off" is kept over it, and a settings file that cannot be read stays off. Not tried on a real box.
+
 ## [0.5.181] - 2026-11-24
 
 Components: CasaOS `v0.4.121`, CasaOS-UI `v0.4.218`. Unchanged from v0.5.180: CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
