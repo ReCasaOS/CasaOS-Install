@@ -2,6 +2,25 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.191] - 2026-11-24
+
+Components: CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-UI `v0.4.226`, new module `mcp` `v0.1.0`. Unchanged from v0.5.190: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+This release is published as a pre-release: the module has run on a stack in a container, not yet on a real box.
+
+### Added
+
+- **An AI assistant can read and manage the box, as an optional module.** The module `mcp` (Modules page, or `casaos module install mcp`, community tier) serves an MCP endpoint behind the Gateway. An assistant running on a computer of the same network connects to it with a token the owner creates, and gets five tools: it searches the box's actions, reads how one is called, then runs it through `read`, `change` or `destroy`, so that an assistant can ask before the last. Every call is made as the owner's account, through the Gateway. Each action of the box's API carries a class in the module (`read`, `secret`, `change`, `danger`, `never`), and an action without a class is not offered: 186 actions are classed today, those of the apps, the backups, the virtual machines and part of the storage; the older routes of the system, the drives, the shares, the accounts and Files are not offered yet. Passwords, two-factor settings and the creation or deletion of accounts are never offered. One line per call is kept in `/var/log/casaos/mcp-calls.log`, without any value ([ReCasaOS/ReCasaOS-MCP#1](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/1)).
+- **Two levels of token.** *Read only* runs the actions that read and answer with no secret. *Everything* also reads what can carry a secret, changes and deletes: such a token has the owner's full power over the box, and the window says so when it is chosen.
+- **An *AI access* card for the owner**, shown when the module is installed: the tokens with their level and last use, a token revoked after a confirmation, a new token shown once with the command to give the assistant. The address in that command is the box's own on the local network ([ReCasaOS/CasaOS-UI#235](https://github.com/ReCasaOS/CasaOS-UI/pull/235)).
+- The Gateway lets the module's endpoint through, which checks its own token ([ReCasaOS/CasaOS-Gateway#16](https://github.com/ReCasaOS/CasaOS-Gateway/pull/16)), and the accounts service hands the box's own services a five-minute access token for an account ([ReCasaOS/CasaOS-UserService#16](https://github.com/ReCasaOS/CasaOS-UserService/pull/16)).
+
+Limits: the assistant must run on a computer of the same network as the box; a Gateway whose main port serves HTTPS only, or that is bound to one address, is not supported by the module yet; uploads, downloads, streams and consoles are not offered.
+
+### Proof
+
+CI passed on the four pull requests; the module's, the accounts service's and the Gateway's tests also pass on Linux with the race detector. On a stack in a container (the real Gateway, accounts service, message bus and core, the module built from its branch) the owner created and revoked tokens, a real MCP client connected over the local network with a read token and with a full one, saw only the three reading tools with the first, ran a read and a change, and a revoked token was refused at once; the journal held one line per call and no token, value or secret. The card was seen in a browser on the mock. Not seen yet: the module installed by `casaos module install` on a real box, an app installed and removed through an assistant, whether an assistant asks before `destroy`, and the actions of app management, storage and virtual machines, which were not in that stack. The release runs of the four components passed on their tags.
+
 ## [0.5.190] - 2026-11-24
 
 Components: CasaOS-UI `v0.4.225`, module `vuln-scan` `v0.1.3`. Unchanged from v0.5.189: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
