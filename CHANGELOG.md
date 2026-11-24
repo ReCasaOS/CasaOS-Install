@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.179] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.216`, module `vuln-scan` `v0.1.2`. Unchanged from v0.5.178: CasaOS `v0.4.120`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The vulnerability scan follows the apps.** The module scanned at night, after its install and on demand: an app that was just updated kept the results of the image it no longer ran until 05:30, an app just installed had none, and a removed one stayed in the list. The module now scans when the images the apps run are no longer those of its last scan. A restart of an app, or a container made by hand, starts nothing ([ReCasaOS/ReCasaOS-VulnScan#3](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/3)).
+- **The Security card and the red badge follow too.** After an app is installed, updated, changed or removed, the dashboard reads the scans at once, and again when the scan that follows has ended; it read them once in five minutes at most ([ReCasaOS/CasaOS-UI#223](https://github.com/ReCasaOS/CasaOS-UI/pull/223)).
+
+### Proof
+
+CI passed on the two pull requests, and the release runs of both tags. Not seen on a real machine or in a browser: both changes are covered by their tests only.
+
 ## [0.5.178] - 2026-11-24
 
 Components: CasaOS-UI `v0.4.215`, module `vuln-scan` `v0.1.1`. Unchanged from v0.5.177: CasaOS `v0.4.120`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
