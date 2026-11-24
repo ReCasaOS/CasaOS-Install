@@ -12,7 +12,7 @@ Components: CasaOS-AppManagement `v0.4.123`. Unchanged from v0.5.185: CasaOS `v0
 
 ### Proof
 
-CI passed on CasaOS-AppManagement#85, with a new test that failed before the fix: an old version a container uses is neither counted nor asked to be removed, one whose containers the daemon did not count is still removed. Not reproduced on a real box (one at hand had 61 old versions, none held by a container); the reporter was asked which container holds his.
+CI passed on CasaOS-AppManagement#85, with a new test that failed before the fix: an old version a container uses is neither counted nor asked to be removed, one whose containers the daemon did not count is still removed. Not reproduced on a real box (one at hand had 61 old versions, none held by a container); the reporter showed his: a Redis container of another app still running the image its tag had moved from. The release run of CasaOS-AppManagement passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45426266575), and the promote job made it Latest.
 
 ## [0.5.185] - 2026-11-24
 
