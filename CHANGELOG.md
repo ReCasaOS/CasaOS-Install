@@ -12,7 +12,7 @@ Components: CasaOS-AppManagement `v0.4.122`, CasaOS-UI `v0.4.217`. Unchanged fro
 
 ### Proof
 
-CI passed on CasaOS-AppManagement#84, with a new test of the version and the link (label over tag, `latest`, digests, a registry with a port, and sources that must give no link: http, another host, a lookalike host, `javascript:`), and on CasaOS-UI#224, with new card tests. The card and its menu were checked in a browser on a mock dashboard; the new dashboard's card by its unit test only. Not tried on a real box.
+CI passed on CasaOS-AppManagement#84, with a new test of the version and the link (label over tag, `latest`, digests, a registry with a port, and sources that must give no link: http, another host, a lookalike host, `javascript:`), and on CasaOS-UI#224, with new card tests. The card and its menu were checked in a browser on a mock dashboard; the new dashboard's card by its unit test only. Not tried on a real box. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45388491978), and the promote job made it Latest.
 
 ## [0.5.179] - 2026-11-24
 
