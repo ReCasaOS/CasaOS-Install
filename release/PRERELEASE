@@ -1,0 +1,4 @@
+This release is published as a pre-release until the MCP module is tried on a real box
+(an app installed and removed through an assistant, and the search for planted secrets in what a read token is given).
+Promote it with: gh release edit v0.5.191 -R ReCasaOS/CasaOS-Install --prerelease=false --latest
+then delete this file in the next commit.
