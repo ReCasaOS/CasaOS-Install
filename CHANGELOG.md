@@ -12,7 +12,7 @@ Components: CasaOS `v0.4.122`. Unchanged from v0.5.181: CasaOS-AppManagement `v0
 
 ### Proof
 
-CI passed on CasaOS#182, with a new test: a box with no settings reads the releases feed, a saved "off" is kept over it, and a settings file that cannot be read stays off. Not tried on a real box.
+CI passed on CasaOS#182, with a new test: a box with no settings reads the releases feed, a saved "off" is kept over it, and a settings file that cannot be read stays off. Not tried on a real box. The release run of CasaOS passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45411010566), and the promote job made it Latest.
 
 ## [0.5.181] - 2026-11-24
 
