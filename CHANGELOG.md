@@ -2,6 +2,26 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.178] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.215`, module `vuln-scan` `v0.1.1`. Unchanged from v0.5.177: CasaOS `v0.4.120`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A Security card for the vulnerability scan.** Where the module `vuln-scan` is installed, the dashboard has a Security card, for the administrator. Its window says where the scan stands, can start one, and lists each app with what was found, the apps an update would fix first; a line opens the vulnerabilities of that app. The card comes as soon as the module is installed, without a reload ([ReCasaOS/CasaOS-UI#222](https://github.com/ReCasaOS/CasaOS-UI/pull/222)).
+
+### Changed
+
+- **The vulnerability scan module is in the `core` tier.** It is maintained by ReCasaOS and was proven on a real machine (v0.5.177); the Modules page said `community`.
+
+### Fixed
+
+- **The module scans right after its install.** A box that had just installed it had nothing to show until 05:30, and no way to the Scan now button, which sat in a window that only opens once a scan has run ([ReCasaOS/ReCasaOS-VulnScan#2](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/2)).
+
+### Proof
+
+CI passed on the two pull requests, and the release runs of both tags. The card, its window and the vulnerabilities of an app opened from it were checked in a browser on a mock dashboard. Not seen: the window while a first scan runs and the card coming right after an install (tests only), and the module v0.1.1 on a real machine.
+
 ## [0.5.177] - 2026-11-24
 
 Components: CasaOS `v0.4.120`, CasaOS-UI `v0.4.214`, new module `vuln-scan` `v0.1.0`. Unchanged from v0.5.176: CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
