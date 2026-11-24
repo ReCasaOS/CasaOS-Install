@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.192] - 2026-11-24
+
+Components: unchanged from v0.5.191: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.226`, module `mcp` `v0.1.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The `mcp` module is in the core tier.** It is maintained here like `virt` and `vuln-scan`, and the Modules page no longer presents it as a community module. v0.5.191 listed it in the community tier and stayed a pre-release; this release is the one boxes are offered.
+
+### Proof
+
+The module was tried on a real box by its maintainer before this release. The catalogue was built from the published archives of the three modules, with `mcp` at `v0.1.0` in the core tier.
+
 ## [0.5.191] - 2026-11-24
 
 Components: CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-UI `v0.4.226`, new module `mcp` `v0.1.0`. Unchanged from v0.5.190: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
