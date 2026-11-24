@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.177] - 2026-11-24
+
+Components: CasaOS `v0.4.120`, CasaOS-UI `v0.4.214`, new module `vuln-scan` `v0.1.0`. Unchanged from v0.5.176: CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A vulnerability scan of the installed apps, as an optional module.** The module `vuln-scan` (Modules page, or `casaos module install vuln-scan`) checks the images of the installed apps every night against a vulnerability database, with a copy of Trivy that ships inside the module and is pinned by its SHA-256. An app's card shows a red badge only when the scan found a critical vulnerability that an update of the app fixes; the Security entry of the app's menu lists every critical and high vulnerability that has a fix, with the version that fixes it, and can start a scan. A new category of Settings › Alerts, on by default, sends the same news once. Only the administrator sees any of it. The module is in the `community` tier: it needs about 2 GB beside Docker's data for its database, and skips an image it has no room to read ([ReCasaOS/ReCasaOS-VulnScan#1](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/1), [ReCasaOS/CasaOS#178](https://github.com/ReCasaOS/CasaOS/pull/178), [ReCasaOS/CasaOS-UI#221](https://github.com/ReCasaOS/CasaOS-UI/pull/221)).
+
+### Proof
+
+CI passed on the three pull requests. On a real machine (Ubuntu 22.04, amd64, ten apps, twenty images) running v0.5.176, `casaos module install vuln-scan` installed the published v0.1.0 from a catalogue built from its archives: the service started, its routes answered 401 without a token, and a scan of every image took seven minutes, skipped none, left 1.7 GB of database and an empty temporary folder, and named the one app that had both a critical vulnerability and an update offered. The alert and the badge need this release's core and dashboard and were not seen on that machine; the badge and the Security window were checked in a browser on a mock dashboard. Not tried: the nightly run, a Raspberry Pi, a remove.
+
 ## [0.5.176] - 2026-11-23
 
 Components: CasaOS-UI `v0.4.213`. Unchanged from v0.5.175: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
