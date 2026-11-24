@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.187] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.222`. Unchanged from v0.5.186: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The new dashboard shows the version an app runs on a desktop too.** It came after "Running" and the memory, and the tiles are narrow enough on a desktop that it was always cut off. It now has its own line under them, smaller; a long one is cut there and shown whole on hover ([ReCasaOS/CasaOS#179](https://github.com/ReCasaOS/CasaOS/issues/179), [ReCasaOS/CasaOS-UI#229](https://github.com/ReCasaOS/CasaOS-UI/pull/229)).
+
+### Proof
+
+CI passed on CasaOS-UI#229, with the card's test now checking the version is on its own line and whole on hover. Not looked at in a browser, nor tried on a real box.
+
 ## [0.5.186] - 2026-11-24
 
 Components: CasaOS-AppManagement `v0.4.123`. Unchanged from v0.5.185: CasaOS `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.221`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
