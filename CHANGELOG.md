@@ -24,7 +24,7 @@ Components: CasaOS-UI `v0.4.219`. Unchanged from v0.5.182: CasaOS `v0.4.122`, Ca
 
 ### Proof
 
-CI passed on CasaOS-UI#226, with new tests of each order, ties kept in the custom order, the remembered choice (and a browser refusing its storage), a sorted grid combined with a filter, and a drag of a sorted grid saving nothing. Not looked at in a browser, nor tried on a real box.
+CI passed on CasaOS-UI#226, with new tests of each order, ties kept in the custom order, the remembered choice (and a browser refusing its storage), a sorted grid combined with a filter, and a drag of a sorted grid saving nothing. Not looked at in a browser, nor tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45414689501), and the promote job made it Latest.
 
 ## [0.5.182] - 2026-11-24
 
