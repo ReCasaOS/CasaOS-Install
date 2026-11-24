@@ -12,7 +12,7 @@ Components: CasaOS `v0.4.121`, CasaOS-UI `v0.4.218`. Unchanged from v0.5.180: Ca
 
 ### Proof
 
-CI passed on CasaOS#181, with new tests of the feeds (RSS 2.0, RSS 1.0 and Atom, a Latin-1 feed, relative links, links that must be dropped, the addresses refused, a redirect toward a refused address, nothing read while off, the cache and a failed refresh keeping its headlines, refused settings writing nothing), and on CasaOS-UI#225, with new tests of the footer and the settings. The footer and the settings were checked in a browser on the classic mock dashboard; the new dashboard's footer is the same bar, not looked at there. Not tried on a real box.
+CI passed on CasaOS#181, with new tests of the feeds (RSS 2.0, RSS 1.0 and Atom, a Latin-1 feed, relative links, links that must be dropped, the addresses refused, a redirect toward a refused address, nothing read while off, the cache and a failed refresh keeping its headlines, refused settings writing nothing), and on CasaOS-UI#225, with new tests of the footer and the settings. The footer and the settings were checked in a browser on the classic mock dashboard; the new dashboard's footer is the same bar, not looked at there. Not tried on a real box. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45404860910), and the promote job made it Latest.
 
 ## [0.5.180] - 2026-11-24
 
