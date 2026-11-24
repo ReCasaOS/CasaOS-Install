@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.180] - 2026-11-24
+
+Components: CasaOS-AppManagement `v0.4.122`, CasaOS-UI `v0.4.217`. Unchanged from v0.5.179: CasaOS `v0.4.120`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Each app card says the version the app runs, and links its release notes.** The version is read from the image (its `org.opencontainers.image.version` label, else its tag unless that is `latest`): under the name on the classic card, after Running on the new dashboard. When the image names a GitHub repository as its source, the card's menu has *Release notes*, which opens that repository's releases page. Apps installed from a compose file only; nothing changes for loose containers ([ReCasaOS/CasaOS#179](https://github.com/ReCasaOS/CasaOS/issues/179), [ReCasaOS/CasaOS-AppManagement#84](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/84), [ReCasaOS/CasaOS-UI#224](https://github.com/ReCasaOS/CasaOS-UI/pull/224)).
+
+### Proof
+
+CI passed on CasaOS-AppManagement#84, with a new test of the version and the link (label over tag, `latest`, digests, a registry with a port, and sources that must give no link: http, another host, a lookalike host, `javascript:`), and on CasaOS-UI#224, with new card tests. The card and its menu were checked in a browser on a mock dashboard; the new dashboard's card by its unit test only. Not tried on a real box.
+
 ## [0.5.179] - 2026-11-24
 
 Components: CasaOS-UI `v0.4.216`, module `vuln-scan` `v0.1.2`. Unchanged from v0.5.178: CasaOS `v0.4.120`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
