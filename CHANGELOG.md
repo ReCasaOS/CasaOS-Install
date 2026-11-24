@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.186] - 2026-11-24
+
+Components: CasaOS-AppManagement `v0.4.123`. Unchanged from v0.5.185: CasaOS `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.221`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **Docker cleanup counts only the old app versions it can free.** An old version a container still uses (an app whose container was not recreated after its update, or a leftover stopped container) cannot be removed, and *Free up* left it while the count kept saying it was there. It is no longer counted, and a removal Docker refuses is written in the log with its reason ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#85](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/85)).
+
+### Proof
+
+CI passed on CasaOS-AppManagement#85, with a new test that failed before the fix: an old version a container uses is neither counted nor asked to be removed, one whose containers the daemon did not count is still removed. Not reproduced on a real box (one at hand had 61 old versions, none held by a container); the reporter was asked which container holds his.
+
 ## [0.5.185] - 2026-11-24
 
 Components: CasaOS-UI `v0.4.221`. Unchanged from v0.5.184: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
