@@ -12,7 +12,7 @@ Components: CasaOS `v0.4.120`, CasaOS-UI `v0.4.214`, new module `vuln-scan` `v0.
 
 ### Proof
 
-CI passed on the three pull requests. The module's scan was measured with the same Trivy on a real machine with twenty images before it was written; the module itself was not installed on a box. The badge and the Security window were checked in a browser on a mock dashboard. The catalogue builder accepts the published archives of both modules.
+CI passed on the three pull requests. On a real machine (Ubuntu 22.04, amd64, ten apps, twenty images) running v0.5.176, `casaos module install vuln-scan` installed the published v0.1.0 from a catalogue built from its archives: the service started, its routes answered 401 without a token, and a scan of every image took seven minutes, skipped none, left 1.7 GB of database and an empty temporary folder, and named the one app that had both a critical vulnerability and an update offered. The alert and the badge need this release's core and dashboard and were not seen on that machine; the badge and the Security window were checked in a browser on a mock dashboard. Not tried: the nightly run, a Raspberry Pi, a remove.
 
 ## [0.5.176] - 2026-11-23
 
