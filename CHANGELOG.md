@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.188] - 2026-11-24
+
+Components: CasaOS `v0.4.123`, CasaOS-UI `v0.4.223`. Unchanged from v0.5.187: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+All for the owner's account, in Files ([ReCasaOS/CasaOS#184](https://github.com/ReCasaOS/CasaOS/issues/184)):
+
+- **Search by name.** A search field in Files' header (Ctrl+K goes to it): Enter searches the folder shown and below, *Search everywhere* every folder Files can show. Names only, links not followed, at most 200 results; network shares, cloud drives and the system's own folders are not walked into from outside ([ReCasaOS/CasaOS#185](https://github.com/ReCasaOS/CasaOS/pull/185), [ReCasaOS/CasaOS-UI#231](https://github.com/ReCasaOS/CasaOS-UI/pull/231)).
+- **A path typed or copied.** A pencil beside the path turns it into a field to type or paste a path (Enter opens it), and a button copies the folder shown ([ReCasaOS/CasaOS-UI#230](https://github.com/ReCasaOS/CasaOS-UI/pull/230)).
+- **The room left.** The free and total space of the drive the folder is on, beside the item count, and the size of the Trash beside its entry (#230).
+- **Type badges.** The extension (PDF, ZIP, MD…) on a file's icon, except over an image's thumbnail (#230).
+- **Drives with their room, external sources apart.** A bar under each internal and USB drive in the sidebar, and an *External* heading before USB devices, network shares and cloud accounts ([ReCasaOS/CasaOS-UI#232](https://github.com/ReCasaOS/CasaOS-UI/pull/232)).
+
+### Proof
+
+CI passed on CasaOS#185, with new tests of the search (names, case, a link not walked through, each limit, network mounts and overlays read from the mount table, a search held to the roots as the listing is, from `/` and from inside a root, paths outside refused), and on CasaOS-UI#230, #231 and #232, with new tests of the path typed, the copy, the room left, the trash size, the badges, the search and the drives' bars. An independent review of the search route found nothing that reveals names past what Files may list; its two points before a release (a network mount that stops answering, container layers filling the budget) were fixed before the merge. Not looked at in a browser, nor tried on a real box.
+
 ## [0.5.187] - 2026-11-24
 
 Components: CasaOS-UI `v0.4.222`. Unchanged from v0.5.186: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
