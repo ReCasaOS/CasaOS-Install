@@ -3,21 +3,25 @@
 
     build-modules-catalogue.py list     MODULES_ENV
     build-modules-catalogue.py archives CHECKSUMS TAG
-    build-modules-catalogue.py build    --git-base URL --out FILE [--schema 2 --serial N --generated DATE] MODULES_ENV STAGE
+    build-modules-catalogue.py digest   MODULES_ENV NAME ARCH
+    build-modules-catalogue.py build    --git-base URL --out FILE [--schema 2 --serial N --generated DATE] [--owners-git-base URL] MODULES_ENV STAGE
     build-modules-catalogue.py proof    MODULES_ENV OUTPUT
 
 The network is not used here, except by `git fetch` of the tag of a module. scripts/build-release-bundle.sh fetches, exactly as it fetches the checksums of
 the components, <stage>/<name>/checksums.txt and the two archives that checksums.txt names; this script judges them.
 
 `list` prints one line per module of modules.env: name, component, tag, commit, tier, owner, and nothing when the file holds none (this script is the one reader of that
-file, so that no other tool can read it otherwise). `archives` prints the two archive names that a module's checksums.txt lists for a tag. `build` writes the
+file, so that no other tool can read it otherwise). `archives` prints the two archive names that a module's checksums.txt lists for a tag, amd64 first then arm64. `digest` prints the SHA-256 that modules.env pins for the archive of a module
+for an architecture (amd64 or arm64), and nothing for a module of ReCasaOS, which pins none. `build` writes the
 catalogue, and writes nothing unless every module passes: a module whose files are not all there, whose archive is not the one checksums.txt names, whose tag is
 not at the pinned commit, whose module.json is not, byte for byte, the module.json that the repository has at that commit, whose two archives do not carry the
 same module.json or hold a path that a box would not unpack, or whose manifest and entry would not be accepted by the reader of the box (pkg/osmodule of the
 core: ParseCatalogue and Parse), is an error and there is no catalogue at all; so is a module that shares its unit, its route or its component with another.
 Without options `build` writes what a release ships (schema 1). With --schema 2 --serial N --generated DATE, the three together and in that order, it writes
 the same modules in the online format, for the repository that publishes the catalogue outside the releases: {"schema": 2, "serial": N, "generated": DATE,
-"modules": [...]}, N an integer from 1 with no sign and no leading zero, DATE a UTC time YYYY-MM-DDTHH:MM:SSZ; any other form is a usage error. `proof` judges
+"modules": [...]}, N an integer from 1 with no sign and no leading zero, DATE a UTC time YYYY-MM-DDTHH:MM:SSZ; any other form is a usage error. The tag of a module of
+ReCasaOS is read in <--git-base>/<component>, that of a module of another owner in <--owners-git-base>/<owner>/<component> (https://github.com by default), and each
+archive of the latter must also have the SHA-256 that modules.env pins. `proof` judges
 what the core's own `casaos module list` printed when it was run on the catalogue that was built. Exit status: 0 done, 1 refused (the reason on the standard
 error), 2 usage.
 
@@ -79,6 +83,7 @@ ENV_KEY_RE = re.compile(r"MODULE_([A-Z][A-Z0-9_]*)_(TAG|COMMIT|COMPONENT|TIER|OW
 # a GitHub account or organisation: letters, digits and inner hyphens, 39 at most; nothing that a URL or a path would read otherwise
 OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
 OWNER = "ReCasaOS"
+OWNERS_GIT_BASE = "https://github.com"
 TIERS = ("core", "community")
 RESERVED_ROUTES = (
     "sys", "users", "usb", "disks", "storage", "cloud", "recover", "other", "zt", "samba", "file", "folder", "image", "notify", "gateway", "casaos",
@@ -628,6 +633,7 @@ def fetch_tag(git_base, component, tag):
 
 
 def entry_of(module, stage, git_base):
+    """The entry of the module, whose repository is <git_base>/<component>."""
     name, component, tag = module["name"], module["component"], module["tag"]
     folder = os.path.join(stage, name)
     try:
@@ -644,8 +650,12 @@ def entry_of(module, stage, git_base):
         path = os.path.join(folder, archive)
         if not os.path.isfile(path):
             raise Refused("%s was not fetched" % archive)
-        if sha256_of(path) != digest:
+        got = sha256_of(path)
+        if got != digest:
             raise Refused("%s is not the archive that checksums.txt names (its sha256 is not %s)" % (archive, digest))
+        # the archives that were reviewed are the ones the pull request pinned: a release replaced since then has another digest, in checksums.txt too
+        if module["sha256"] is not None and got != module["sha256"][arch]:
+            raise Refused("the %s archive %s is not the one modules.env pins (MODULE_%s_SHA256_%s)" % (arch, archive, name.upper().replace("-", "_"), arch.upper()))
         try:
             manifests[arch], members[arch] = read_archive(path)
         except Refused as err:
@@ -687,14 +697,16 @@ def check_distinct(entries):
                 raise Refused("modules %s and %s share the %s %s" % (first, e["name"], what, get(e)))
 
 
-def build(env_path, stage, out, git_base, header=None):
+def build(env_path, stage, out, git_base, header=None, owners_git_base=OWNERS_GIT_BASE):
     modules = read_modules_env(env_path)
     if not modules:
         raise Refused("%s has no module: there is no catalogue to build" % env_path)
     entries = []
     for module in modules:
         try:
-            entries.append(entry_of(module, stage, git_base))
+            # (the owner passed OWNER_RE in read_modules_env: it is one element of a URL, nothing more)
+            base = git_base if module["owner"] == OWNER else "%s/%s" % (owners_git_base.rstrip("/"), module["owner"])
+            entries.append(entry_of(module, stage, base))
         except Refused as err:
             raise Refused("module %s: %s" % (module["name"], err))
     check_distinct(entries)
@@ -746,8 +758,18 @@ def proof(env_path, output_path):
     check_list_output(raw, modules)
 
 
-USAGE = ("usage: build-modules-catalogue.py list MODULES_ENV | archives CHECKSUMS TAG | build --git-base URL --out FILE [--schema 2 --serial N --generated DATE] MODULES_ENV STAGE"
-         " | proof MODULES_ENV OUTPUT")
+USAGE = ("usage: build-modules-catalogue.py list MODULES_ENV | archives CHECKSUMS TAG | digest MODULES_ENV NAME ARCH"
+         " | build --git-base URL --out FILE [--schema 2 --serial N --generated DATE] [--owners-git-base URL] MODULES_ENV STAGE | proof MODULES_ENV OUTPUT")
+
+
+def pinned_digest(env_path, name, arch):
+    """The SHA-256 that modules.env pins for the archive of the module name for arch, or "" for a module of ReCasaOS."""
+    module = next((m for m in read_modules_env(env_path) if m["name"] == name), None)
+    if module is None:
+        raise Refused("modules.env has no module of that name")
+    if arch not in ARCHES:
+        raise Refused("the architecture is neither amd64 nor arm64")
+    return "" if module["sha256"] is None else module["sha256"][arch]
 
 
 def online_header(schema, serial, generated):
@@ -765,6 +787,10 @@ def online_header(schema, serial, generated):
 def main(argv):
     # a line ends with a new line and nothing else, also on Windows: bash reads these lines
     sys.stdout.reconfigure(newline="\n")
+    owners_git_base = OWNERS_GIT_BASE
+    if argv[:1] == ["build"] and len(argv) >= 4 and argv[-4] == "--owners-git-base":
+        # the one option that may follow the others, just before MODULES_ENV STAGE; what is left is one of the forms below or a usage error
+        owners_git_base, argv = argv[-3], argv[:-4] + argv[-2:]
     try:
         if len(argv) == 2 and argv[0] == "list":
             for m in read_modules_env(argv[1]):
@@ -777,11 +803,15 @@ def main(argv):
                 raise Refused("%s cannot be read" % argv[1])
             for archive, _ in find_archives(text, argv[2]).values():
                 print(archive)
+        elif len(argv) == 4 and argv[0] == "digest":
+            digest = pinned_digest(argv[1], argv[2], argv[3])
+            if digest:
+                print(digest)
         elif len(argv) == 7 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out":
-            build(argv[5], argv[6], argv[4], argv[2])
+            build(argv[5], argv[6], argv[4], argv[2], owners_git_base=owners_git_base)
         elif (len(argv) == 13 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out" and argv[5] == "--schema" and argv[7] == "--serial"
               and argv[9] == "--generated" and (header := online_header(argv[6], argv[8], argv[10])) is not None):
-            build(argv[11], argv[12], argv[4], argv[2], header)
+            build(argv[11], argv[12], argv[4], argv[2], header, owners_git_base)
         elif len(argv) == 3 and argv[0] == "proof":
             proof(argv[1], argv[2])
         else:

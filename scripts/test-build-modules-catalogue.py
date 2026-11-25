@@ -405,6 +405,24 @@ class Base(unittest.TestCase):
         with open(self.out, "rb") as f:
             return f.read()
 
+    def foreign(self):
+        """A release of virt in the repository of the owner inkly (under <tmp>/owners), staged, and pinned with the digests of its archives."""
+        r = Release(os.path.join(self.tmp, "owners", "inkly")).publish()
+        r.stage(self.stage_dir)
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r.dir, r.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read())
+        self.pin_foreign(r.commit, digests)
+        return r, digests
+
+    def pin_foreign(self, commit, digests):
+        self.write_env(env_text(commit=commit) + "MODULE_VIRT_OWNER=inkly\nMODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % (digests["amd64"], digests["arm64"]))
+
+    def build_foreign(self):
+        # the base of ReCasaOS's modules holds no repository at all: the tag can only be read in the owner's
+        builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "nowhere")), owners_git_base=file_url(os.path.join(self.tmp, "owners")))
+
 
 class ModulesEnv(Base):
     def test_comments_only_is_no_module(self):
@@ -427,7 +445,8 @@ class ModulesEnv(Base):
     def test_refused(self):
         good = env_text(commit="a" * 40)
         cases = {
-            "a key that is none of the four": good + "MODULE_VIRT_OWNER=x\n",
+            "an owner with no digests": good + "MODULE_VIRT_OWNER=x\n",
+            "a key that is none of the seven": good + "MODULE_VIRT_BRANCH=main\n",
             "a line that is not an assignment": good + "MODULE_VIRT\n",
             "a stray word": good + "hello\n",
             "a key twice": good + "MODULE_VIRT_TAG=v0.1.2\n",
@@ -610,6 +629,51 @@ class Build(Base):
             self.assertEqual(entry["assets"][arch], {"url": "https://github.com/ReCasaOS/%s/releases/download/v0.1.1/%s" % (COMPONENT, r.archive_name(arch)), "sha256": digest})
         self.assertEqual(list(entry), ["name", "component", "tier", "tag", "commit", "assets", "manifest"])
         self.assertFalse(os.path.exists(self.out + ".tmp"))
+
+    # ---- a module of another owner: its tag read in its own repository, its archives held to the digests modules.env pins ----
+
+    def test_a_module_of_another_owner_is_read_from_its_own_repository(self):
+        r, digests = self.foreign()
+        self.build_foreign()
+        (entry,) = builder.parse_catalogue(self.catalogue())["modules"]
+        self.assertEqual((entry["tag"], entry["commit"], entry["manifest"]), ("v0.1.1", r.commit, GOOD_MANIFEST))
+        self.assertEqual({arch: entry["assets"][arch]["sha256"] for arch in ("amd64", "arm64")}, digests)
+
+    def test_a_module_of_another_owner_is_not_read_from_the_base_of_recasaos(self):
+        r, _ = self.foreign()
+        with self.assertRaises(builder.Refused) as raised:
+            builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "owners", "inkly")), owners_git_base=file_url(os.path.join(self.tmp, "nowhere")))
+        self.assertIn("nowhere/inkly/%s" % COMPONENT, str(raised.exception))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_an_archive_that_is_not_the_one_modules_env_pins(self):
+        r, digests = self.foreign()
+        for arch in ("amd64", "arm64"):
+            with self.subTest(arch):
+                self.pin_foreign(r.commit, dict(digests, **{arch: "e" * 64}))
+                with self.assertRaises(builder.Refused) as raised:
+                    self.build_foreign()
+                self.assertIn("module virt: the %s archive %s is not the one modules.env pins (MODULE_VIRT_SHA256_%s)" % (arch, r.archive_name(arch), arch.upper()),
+                              str(raised.exception))
+                self.assertFalse(os.path.exists(self.out))
+
+    def test_a_module_of_another_owner_is_held_to_its_tag_and_its_manifest(self):
+        r, digests = self.foreign()
+        self.pin_foreign(r.later, digests)
+        with self.assertRaises(builder.Refused) as raised:
+            self.build_foreign()
+        self.assertIn("not at the pinned", str(raised.exception))
+        r.clear().publish(repo=jbytes(dict(GOOD_MANIFEST, title="Other")))
+        shutil.rmtree(self.stage_dir)
+        r.stage(self.stage_dir)
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r.dir, r.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read())
+        self.pin_foreign(r.commit, digests)
+        with self.assertRaises(builder.Refused) as raised:
+            self.build_foreign()
+        self.assertIn("not, byte for byte, the module.json", str(raised.exception))
 
     def test_the_same_inputs_give_the_same_bytes(self):
         self.good()
@@ -1323,9 +1387,49 @@ class CommandLine(Base):
         self.assertFalse(os.path.exists(self.out))
 
     def test_usage(self):
-        for args in ([], ["build"], ["list"], ["list", "a", "b"], ["archives", "a"], ["frobnicate"], ["build", "--out", "x", "--git-base", "y", "a", "b"]):
+        for args in ([], ["build"], ["list"], ["list", "a", "b"], ["archives", "a"], ["frobnicate"], ["build", "--out", "x", "--git-base", "y", "a", "b"],
+                     ["digest", "a", "b"], ["digest", "a", "b", "c", "d"]):
             with self.subTest(args):
                 self.assertEqual(self.run_builder(*args)[0], 2)
+
+    def test_digest(self):
+        _, digests = self.foreign()
+        for arch in ("amd64", "arm64"):
+            self.assertEqual(self.run_builder("digest", self.env, "virt", arch), (0, digests[arch] + "\n", ""))
+        self.write_env(env_text(commit="a" * 40))
+        self.assertEqual(self.run_builder("digest", self.env, "virt", "amd64"), (0, "", ""))
+        for what, args in (("an unknown module", ("other", "amd64")), ("an unknown architecture", ("virt", "x86")), ("an architecture in upper case", ("virt", "AMD64"))):
+            with self.subTest(what):
+                code, out, err = self.run_builder("digest", self.env, *args)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("error: ") and err.count("\n") == 1, err)
+        self.write_env("MODULE_VIRT_TAG=v1\n")
+        self.assertEqual(self.run_builder("digest", self.env, "virt", "amd64")[:2], (1, ""))
+
+    def test_build_with_the_base_of_the_owners(self):
+        self.foreign()
+        nowhere, owners = file_url(os.path.join(self.tmp, "nowhere")), file_url(os.path.join(self.tmp, "owners"))
+        for options in ((), ("--schema", "2", "--serial", "41", "--generated", "2026-11-25T12:00:00Z")):
+            with self.subTest(options):
+                code, out, err = self.run_builder("build", "--git-base", nowhere, "--out", self.out, *options, "--owners-git-base", owners, self.env, self.stage_dir)
+                self.assertEqual((code, out, err), (0, "", ""))
+                os.remove(self.out)
+        # without it, the owner's repository is looked for on GitHub (no network here: git may only read files), never in the base of ReCasaOS
+        with mock.patch.dict(os.environ, {"GIT_ALLOW_PROTOCOL": "file"}):
+            code, out, err = self.run_builder("build", "--git-base", owners + "/inkly", "--out", self.out, self.env, self.stage_dir)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("https://github.com/inkly/%s" % COMPONENT, err)
+
+    def test_the_base_of_the_owners_in_another_place_is_a_usage_error(self):
+        self.good()
+        base = file_url(self.net)
+        for args in (("--owners-git-base", base, "--git-base", base, "--out", self.out), ("--git-base", base, "--owners-git-base", base, "--out", self.out),
+                     ("--git-base", base, "--out", self.out, "--owners-git-base"), ("--git-base", base, "--out", self.out, "--owners-git-base", base, "--owners-git-base", base),
+                     ("--git-base", base, "--out", self.out, "--owners-git-base", base, "--schema", "2", "--serial", "41", "--generated", "2026-11-25T12:00:00Z")):
+            with self.subTest(args):
+                code, out, err = self.run_builder("build", *args, self.env, self.stage_dir)
+                self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+                self.assertFalse(os.path.exists(self.out))
 
     # ---- the online format (schema 2): the same modules under a header that says which catalogue it is ----
 
