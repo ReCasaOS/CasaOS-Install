@@ -37,7 +37,7 @@ stage="$2"
 
 list="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" list "${modules_env}")" || fail "${modules_env} is not valid, or cannot be read, or ${PYTHON} could not run."
 
-while read -r name component tag commit tier; do
+while read -r name component tag commit tier owner; do
     [[ -n "${name}" ]] || continue
     mkdir -p "${stage}/${name}"
     curl -fsSL --retry 5 --retry-delay 10 -o "${stage}/${name}/checksums.txt" "${CHECKSUMS_BASE_URL}/${component}/releases/download/${tag}/checksums.txt" ||

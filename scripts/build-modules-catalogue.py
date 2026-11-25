@@ -9,7 +9,7 @@
 The network is not used here, except by `git fetch` of the tag of a module. scripts/build-release-bundle.sh fetches, exactly as it fetches the checksums of
 the components, <stage>/<name>/checksums.txt and the two archives that checksums.txt names; this script judges them.
 
-`list` prints one line per module of modules.env: name, component, tag, commit, tier, and nothing when the file holds none (this script is the one reader of that
+`list` prints one line per module of modules.env: name, component, tag, commit, tier, owner, and nothing when the file holds none (this script is the one reader of that
 file, so that no other tool can read it otherwise). `archives` prints the two archive names that a module's checksums.txt lists for a tag. `build` writes the
 catalogue, and writes nothing unless every module passes: a module whose files are not all there, whose archive is not the one checksums.txt names, whose tag is
 not at the pinned commit, whose module.json is not, byte for byte, the module.json that the repository has at that commit, whose two archives do not carry the
@@ -25,7 +25,8 @@ The rules of the reader of a box are copied here, to fail early with a sentence 
 catalogue that is shipped. scripts/test-build-modules-catalogue.py holds this copy to the Go source of the core. Run this with Python 3.12: its Unicode tables
 (15.0) are those of the Go that builds the core, and the tables of 3.10 (13.0) refuse characters that the core takes.
 
-release/modules.env: MODULE_<NAME>_TAG, MODULE_<NAME>_COMMIT, MODULE_<NAME>_COMPONENT and MODULE_<NAME>_TIER for each module. <NAME> is upper case letters, digits and
+release/modules.env: MODULE_<NAME>_TAG, MODULE_<NAME>_COMMIT, MODULE_<NAME>_COMPONENT and MODULE_<NAME>_TIER for each module, and for a module kept in another owner's
+repository MODULE_<NAME>_OWNER, MODULE_<NAME>_SHA256_AMD64 and MODULE_<NAME>_SHA256_ARM64 (the owner is ReCasaOS when the file names none). <NAME> is upper case letters, digits and
 underscores, starts with a letter, and gives the module's name in lower case with each underscore a hyphen (VIRT is virt, VIRT_MANAGEMENT is virt-management). The file
 holds printable ASCII, tabs and line ends and nothing else: another character could end a line for one reader and not for another.
 """
@@ -74,7 +75,10 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 SERIAL_RE = re.compile(r"[1-9][0-9]{0,18}")
 ARCHIVE_RE = re.compile(r"linux-(amd64|arm64)-casaos-[a-z-]+-(v[0-9.]+)\.tar\.gz")
-ENV_KEY_RE = re.compile(r"MODULE_([A-Z][A-Z0-9_]*)_(TAG|COMMIT|COMPONENT|TIER)")
+ENV_KEY_RE = re.compile(r"MODULE_([A-Z][A-Z0-9_]*)_(TAG|COMMIT|COMPONENT|TIER|OWNER|SHA256_AMD64|SHA256_ARM64)")
+# a GitHub account or organisation: letters, digits and inner hyphens, 39 at most; nothing that a URL or a path would read otherwise
+OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
+OWNER = "ReCasaOS"
 TIERS = ("core", "community")
 RESERVED_ROUTES = (
     "sys", "users", "usb", "disks", "storage", "cloud", "recover", "other", "zt", "samba", "file", "folder", "image", "notify", "gateway", "casaos",
@@ -339,7 +343,9 @@ def env_lines(raw):
 
 
 def read_modules_env(path):
-    """The modules of release/modules.env, sorted by name: [{name, component, tag, commit, tier}]. No entry is a catalogue of nothing, which the caller does not build."""
+    """The modules of release/modules.env, sorted by name: [{name, component, tag, commit, tier, owner, sha256}], owner "ReCasaOS" when the file names none and
+    sha256 {arch: digest} for a module of another owner, None for one of ReCasaOS (its digests are those of its checksums.txt). No entry is a catalogue of nothing,
+    which the caller does not build."""
     try:
         with open(path, "rb") as f:
             raw = f.read()
@@ -353,7 +359,7 @@ def read_modules_env(path):
         key, eq, value = line.partition("=")
         m = ENV_KEY_RE.fullmatch(key)
         if not eq or not m:
-            raise Refused("modules.env line %d: %r is not a MODULE_<NAME>_(TAG|COMMIT|COMPONENT|TIER) assignment" % (n, line[:60]))
+            raise Refused("modules.env line %d: %r is not a MODULE_<NAME>_(TAG|COMMIT|COMPONENT|TIER|OWNER|SHA256_AMD64|SHA256_ARM64) assignment" % (n, line[:60]))
         module, field = m.group(1), m.group(2).lower()
         if field in found.setdefault(module, {}):
             raise Refused("modules.env line %d: %s is set twice" % (n, key))
@@ -374,7 +380,27 @@ def read_modules_env(path):
         ):
             if not ok:
                 raise Refused("modules.env: the %s of module %s is not valid" % (field, module))
-        modules.append(dict(e, name=name))
+        # stricter than the core's pattern: the core compares the tags of withdrawn versions character for character, where v0.02.0 is not v0.2.0
+        if any(len(number) > 1 and number.startswith("0") for number in e["tag"][1:].split(".")):
+            raise Refused("modules.env: MODULE_%s_TAG has a number with a leading zero" % module)
+        owner = e.get("owner", OWNER)
+        if OWNER_RE.fullmatch(owner) is None or owner.lower() == OWNER.lower() and owner != OWNER:
+            raise Refused("modules.env: MODULE_%s_OWNER is not a GitHub owner (letters, digits and inner hyphens, 39 at most; ReCasaOS spelled so)" % module)
+        for arch in ARCHES:
+            key = "MODULE_%s_SHA256_%s" % (module, arch.upper())
+            digest = e.get("sha256_" + arch)
+            if owner == OWNER and digest is not None:
+                raise Refused("modules.env: %s is set, and the digests of a module of ReCasaOS are those of its checksums.txt" % key)
+            if owner != OWNER and digest is None:
+                raise Refused("modules.env: %s is missing: a module of another owner than ReCasaOS names the digests of both its archives" % key)
+            if digest is not None and SHA256_RE.fullmatch(digest) is None:
+                raise Refused("modules.env: %s is not 64 lower case hexadecimal digits" % key)
+        if owner != OWNER and e["tier"] != "community":
+            raise Refused("modules.env: MODULE_%s_TIER is not community, and a module of another owner than ReCasaOS is" % module)
+        modules.append({
+            "name": name, "component": e["component"], "tag": e["tag"], "commit": e["commit"], "tier": e["tier"], "owner": owner,
+            "sha256": None if owner == OWNER else {arch: e["sha256_" + arch] for arch in ARCHES},
+        })
     return modules
 
 
@@ -742,7 +768,7 @@ def main(argv):
     try:
         if len(argv) == 2 and argv[0] == "list":
             for m in read_modules_env(argv[1]):
-                print(m["name"], m["component"], m["tag"], m["commit"], m["tier"])
+                print(m["name"], m["component"], m["tag"], m["commit"], m["tier"], m["owner"])
         elif len(argv) == 3 and argv[0] == "archives":
             try:
                 with open(argv[1], encoding="utf-8") as f:

@@ -496,6 +496,68 @@ class ModulesEnv(Base):
                     builder.read_modules_env(path)
                 self.assertIn("cannot be read", str(raised.exception))
 
+    DIGESTS = "MODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % ("c" * 64, "d" * 64)
+
+    def owned(self, owner, digests=DIGESTS, tier="community", tag="v0.1.1"):
+        return env_text(commit="a" * 40, tier=tier, tag=tag) + "MODULE_VIRT_OWNER=%s\n" % owner + digests
+
+    def test_the_owner_and_the_digests(self):
+        cases = {
+            "no owner is ReCasaOS, with no digests": (env_text(commit="a" * 40, tier="core"), "ReCasaOS", None),
+            "ReCasaOS written out": (self.owned("ReCasaOS", "", tier="core"), "ReCasaOS", None),
+            "another owner, community, with both digests": (self.owned("inkly"), "inkly", {"amd64": "c" * 64, "arm64": "d" * 64}),
+            "an owner of 39 characters": (self.owned("a" + "-" * 37 + "b"), "a" + "-" * 37 + "b", {"amd64": "c" * 64, "arm64": "d" * 64}),
+        }
+        for what, (text, owner, digests) in cases.items():
+            with self.subTest(what):
+                self.write_env(text)
+                (m,) = builder.read_modules_env(self.env)
+                self.assertEqual((m["owner"], m["sha256"]), (owner, digests))
+
+    def test_the_owner_and_the_digests_refused(self):
+        """Each refusal names the key at fault, before anything from the file reaches a URL or a path."""
+        cases = {
+            "an owner with two dots": (self.owned("a..b"), "MODULE_VIRT_OWNER"),
+            "an owner that starts with a hyphen": (self.owned("-a"), "MODULE_VIRT_OWNER"),
+            "an owner that ends with a hyphen": (self.owned("a-"), "MODULE_VIRT_OWNER"),
+            "an owner of 40 characters": (self.owned("a" * 40), "MODULE_VIRT_OWNER"),
+            "an owner with a slash": (self.owned("a/b"), "MODULE_VIRT_OWNER"),
+            "an owner with a space": (self.owned("a b"), "MODULE_VIRT_OWNER"),
+            "an owner with a percent sign": (self.owned("a%b"), "MODULE_VIRT_OWNER"),
+            "an empty owner": (self.owned(""), "MODULE_VIRT_OWNER"),
+            "recasaos in lower case": (self.owned("recasaos"), "MODULE_VIRT_OWNER"),
+            "RECASAOS in upper case": (self.owned("RECASAOS", "", tier="core"), "MODULE_VIRT_OWNER"),
+            "another owner in the core tier": (self.owned("inkly", tier="core"), "MODULE_VIRT_TIER"),
+            "another owner with no digest": (self.owned("inkly", ""), "MODULE_VIRT_SHA256_AMD64"),
+            "another owner with the amd64 digest only": (self.owned("inkly", "MODULE_VIRT_SHA256_AMD64=%s\n" % ("c" * 64)), "MODULE_VIRT_SHA256_ARM64"),
+            "another owner with the arm64 digest only": (self.owned("inkly", "MODULE_VIRT_SHA256_ARM64=%s\n" % ("d" * 64)), "MODULE_VIRT_SHA256_AMD64"),
+            "a digest in upper case": (self.owned("inkly", self.DIGESTS.replace("c" * 64, "C" * 64)), "MODULE_VIRT_SHA256_AMD64"),
+            "a digest too short": (self.owned("inkly", self.DIGESTS.replace("d" * 64, "d" * 63)), "MODULE_VIRT_SHA256_ARM64"),
+            "digests for a module of ReCasaOS": (env_text(commit="a" * 40, tier="core") + self.DIGESTS, "MODULE_VIRT_SHA256_AMD64"),
+            "a digest for ReCasaOS written out": (self.owned("ReCasaOS", "MODULE_VIRT_SHA256_ARM64=%s\n" % ("d" * 64), tier="core"), "MODULE_VIRT_SHA256_ARM64"),
+            "an unknown key": (self.owned("inkly") + "MODULE_X_SHA256_ARM=%s\n" % ("d" * 64), "MODULE_X_SHA256_ARM"),
+            "an owner twice": (self.owned("inkly") + "MODULE_VIRT_OWNER=inkly\n", "MODULE_VIRT_OWNER"),
+        }
+        for what, (text, key) in cases.items():
+            with self.subTest(what):
+                self.write_env(text)
+                with self.assertRaises(builder.Refused) as raised:
+                    builder.read_modules_env(self.env)
+                self.assertIn(key, str(raised.exception))
+
+    def test_a_tag_with_a_leading_zero_is_refused(self):
+        for tag in ("v0.02.0", "v01.2.3", "v1.2.03", "v00.1.1"):
+            for what, text in (("a module of ReCasaOS", env_text(commit="a" * 40, tier="core", tag=tag)), ("a module of another owner", self.owned("inkly", tag=tag))):
+                with self.subTest(tag=tag, module=what):
+                    self.write_env(text)
+                    with self.assertRaises(builder.Refused) as raised:
+                        builder.read_modules_env(self.env)
+                    self.assertIn("MODULE_VIRT_TAG", str(raised.exception))
+        for tag in ("v0.0.0", "v10.20.300", "v0.10.0"):
+            with self.subTest(tag=tag):
+                self.write_env(env_text(commit="a" * 40, tag=tag))
+                self.assertEqual(builder.read_modules_env(self.env)[0]["tag"], tag)
+
 
 class Checksums(unittest.TestCase):
     def lines(self, *names, digest="a" * 64):
@@ -1228,7 +1290,9 @@ class CommandLine(Base):
 
     def test_list(self):
         self.write_env(env_text(commit="a" * 40))
-        self.assertEqual(self.run_builder("list", self.env), (0, "virt %s v0.1.1 %s community\n" % (COMPONENT, "a" * 40), ""))
+        self.assertEqual(self.run_builder("list", self.env), (0, "virt %s v0.1.1 %s community ReCasaOS\n" % (COMPONENT, "a" * 40), ""))
+        self.write_env(env_text(commit="a" * 40) + "MODULE_VIRT_OWNER=inkly\nMODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % ("c" * 64, "d" * 64))
+        self.assertEqual(self.run_builder("list", self.env), (0, "virt %s v0.1.1 %s community inkly\n" % (COMPONENT, "a" * 40), ""))
         self.write_env("# none\n")
         self.assertEqual(self.run_builder("list", self.env), (0, "", ""))
 
