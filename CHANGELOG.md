@@ -16,7 +16,7 @@ Components: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-UI `v0.4.
 
 ### Proof
 
-install check: result added after the check
+The install check of this release passed on all 12 legs on the first try (run 45719359058), and the promote job made it Latest. Not proven on a real box yet: an update actually blocked, the window on the dashboard, the night's alert, and how long a first scan of a new image takes on a small box.
 
 ## [0.5.198] - 2026-11-25
 
