@@ -1770,9 +1770,9 @@ Install_Module_Catalogue() {
     Show 0 "Module catalogue installed."
 }
 
-# `casaos module <install|update> <name> --yes`, and whatever follows the name ($3...: the
-# update's --shipped), with the core's assistant: its lines as
-# they come (the steps and the sentences), then what its result line says
+# `casaos module <install|update> <name> --yes`, then what follows the name ($3...: the
+# update's --shipped), with the core's assistant: its lines as they come (the steps and the
+# sentences), then what its result line says
 # (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed> <step> <code> <undo> <time>) in
 # MODULE_KIND, MODULE_STEP, MODULE_CODE and MODULE_UNDO, and its exit status in
 # MODULE_STATUS. Status 1, and nothing run, when no temporary directory could be made.
