@@ -1606,6 +1606,161 @@ class CommandLine(Base):
         self.assertEqual([m["name"] for m in three["modules"]], ["other", "virt"])
         self.assertEqual([m["name"] for m in two["modules"]], ["virt"])
 
+    # ---- a version that is published is carried over (--carry), not fetched again from its author ----
+
+    def carry_from(self, mutate=None):
+        """Builds the catalogue of the modules.env as it is, and keeps it as the file to carry from (mutate edits its parsed form first); returns (the path, the bytes built)."""
+        self.assertEqual(self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("")), (0, "", ""))
+        first = self.catalogue()
+        os.remove(self.out)
+        parsed = json.loads(first)
+        if mutate:
+            mutate(parsed)
+        path = os.path.join(self.tmp, "carry.json")
+        with open(path, "wb") as f:
+            f.write(json.dumps(parsed, indent=2, ensure_ascii=False).encode("utf-8") + b"\n")
+        return path, first
+
+    def build_carry(self, path, withdrawn=""):
+        return self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn(withdrawn), "--carry", path)
+
+    def entry_of_other(self, parsed):
+        return next(e for e in parsed["modules"] if e["name"] == "other")
+
+    def older(self, parsed):
+        """The file offers an older version of the module than the one that is pinned."""
+        e = self.entry_of_other(parsed)
+        e["tag"] = "v0.0.9"
+        for a in e["assets"].values():
+            a["url"] = a["url"].replace("v0.1.1", "v0.0.9")
+
+    def test_a_version_of_another_owner_that_is_published_is_carried_not_fetched_again(self):
+        self.mixed()
+        path, first = self.carry_from()
+        # the author's repository is gone and the stage holds no archive of the module: only the file to carry from has it
+        shutil.rmtree(os.path.join(self.tmp, "owners"))
+        shutil.rmtree(os.path.join(self.stage_dir, "other"))
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+        builder.parse_catalogue(self.catalogue(), 3)
+
+    def test_a_module_of_recasaos_is_never_carried(self):
+        self.mixed()
+
+        def edit(parsed):
+            virt = next(e for e in parsed["modules"] if e["name"] == "virt")
+            virt["commit"] = "c" * 40
+            virt["manifest"]["title"] = "Not what the repository says"
+        path, first = self.carry_from(edit)
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+
+    def test_a_carried_version_that_is_not_the_pinned_one_is_refused_and_named(self):
+        self.mixed()
+
+        def commit(parsed):
+            self.entry_of_other(parsed)["commit"] = "c" * 40
+
+        def repository(parsed):
+            self.entry_of_other(parsed)["repository"] = "someone/CasaOS-Other"
+
+        def amd64(parsed):
+            self.entry_of_other(parsed)["assets"]["amd64"]["sha256"] = "e" * 64
+
+        def arm64(parsed):
+            self.entry_of_other(parsed)["assets"]["arm64"]["sha256"] = "e" * 64
+        for what, edit, reason in (("commit", commit, "commit"), ("repository", repository, "repository"), ("amd64 digest", amd64, "amd64"), ("arm64 digest", arm64, "arm64")):
+            with self.subTest(what):
+                path, _ = self.carry_from(edit)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("module other", err)
+                self.assertIn(reason, err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_another_tag_is_built_as_usual(self):
+        self.mixed()
+
+        path, first = self.carry_from(self.older)
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+        os.remove(self.out)
+        shutil.rmtree(os.path.join(self.stage_dir, "other"))
+        code, out, err = self.build_carry(path)  # (it is fetched, so it wants its archives in the stage)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("module other", err)
+
+    def test_a_file_to_carry_from_that_does_not_hold_is_refused(self):
+        self.mixed()
+        self.assertEqual(self.build_all(*self.HEAD2), (0, "", ""))
+        schema2 = self.catalogue()
+        os.remove(self.out)
+        path, first = self.carry_from()
+        duplicate = first.replace(b'"schema": 3,', b'"schema": 3, "schema": 3,', 1)
+        for what, raw in (("schema 2", schema2), ("not JSON", b'{"schema": 3,'), ("a key twice", duplicate), ("empty", b""), ("too large", b" " * (builder.MAX_CATALOGUE_BYTES + 1)),
+                          ("an entry that does not hold", first.replace(b'"tier": "community"', b'"tier": "core"', 1))):
+            with self.subTest(what):
+                with open(path, "wb") as f:
+                    f.write(raw)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("error: ") and err.count("\n") == 1, err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+        code, out, err = self.build_carry(os.path.join(self.tmp, "nothing.json"))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("cannot be read", err)
+
+    def test_carry_is_for_schema_3_only(self):
+        self.mixed()
+        path, _ = self.carry_from()
+        for options in (("--carry", path), self.HEAD2 + ("--carry", path), self.HEAD3 + ("--carry", path), self.HEAD2 + ("--withdrawn", self.withdrawn(""), "--carry", path),
+                        self.HEAD3 + ("--carry", path, "--withdrawn", self.withdrawn("")), self.HEAD3 + ("--withdrawn", self.withdrawn(""), "--carry"),
+                        self.HEAD3 + ("--withdrawn", self.withdrawn(""), "--carry", path, "--carry", path)):
+            with self.subTest(options):
+                code, out, err = self.build_all(*options)
+                self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+                self.assertFalse(os.path.exists(self.out))
+        self.assertIn("--carry FILE", builder.USAGE)
+
+    def test_a_carried_version_may_not_be_withdrawn_in_the_same_catalogue(self):
+        self.mixed()
+        path, _ = self.carry_from()
+        code, out, err = self.build_carry(path, "other v0.1.1 It does not hold.\n")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("module other v0.1.1 is withdrawn", err)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_a_carried_module_is_held_to_the_rules_between_modules(self):
+        self.mixed()
+
+        def same_unit(parsed):
+            self.entry_of_other(parsed)["manifest"]["unit"] = "casaos-virt-management.service"
+        path, _ = self.carry_from(same_unit)
+        code, out, err = self.build_carry(path)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("share the unit casaos-virt-management.service", err)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_list_leaves_out_what_is_carried(self):
+        self.mixed()
+        path, _ = self.carry_from()
+        both = self.run_builder("list", self.env)
+        self.assertEqual(both[0], 0)
+        self.assertEqual([line.split()[0] for line in both[1].splitlines()], ["other", "virt"])
+        self.assertEqual(self.run_builder("list", self.env, "--carry", path), (0, "".join(l + "\n" for l in both[1].splitlines() if l.startswith("virt ")), ""))
+
+        path, _ = self.carry_from(self.older)
+        self.assertEqual(self.run_builder("list", self.env, "--carry", path), both)
+        with open(path, "wb") as f:
+            f.write(b"{}")
+        code, out, err = self.run_builder("list", self.env, "--carry", path)
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.startswith("error: "), err)
+        self.assertEqual(self.run_builder("list", self.env, "--carry", os.path.join(self.tmp, "nothing.json"))[:2], (1, ""))
+        for args in (("--carry",), ("--carry", path, "x"), (path, "--carry"), ("--carry", path, "--carry", path)):
+            with self.subTest(args):
+                self.assertEqual(self.run_builder("list", self.env, *args), (2, "", builder.USAGE + "\n"))
+
     def test_the_withdrawn_versions(self):
         reasons = {"é" * 200: "accents", "a" * 200: "200 characters", "A reason, with spaces: and (symbols) 100%": "punctuation"}
         text = "# a comment\n\n   \nvirt v0.1.0 The upgrade failed.\nother v0.0.9 " + "é" * 200 + "\n  # another comment\nvirt v0.1.1 Two  spaces stay.\n"

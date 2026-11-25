@@ -20,6 +20,10 @@
 #   OWNERS_BASE_URL      where to fetch <owner>/<repo>/releases/download/<tag>/
 #                        from, for a module of another owner (default:
 #                        https://github.com)
+#   CARRY_CATALOGUE      a catalogue of schema 3 that was published before (a
+#                        file): a module of another owner that it already offers
+#                        at the pinned tag is carried over by the builder, and is
+#                        not fetched here (default: none)
 #   PYTHON               the interpreter of build-modules-catalogue.py (python3)
 
 set -euo pipefail
@@ -27,6 +31,7 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CHECKSUMS_BASE_URL="${CHECKSUMS_BASE_URL:-https://github.com/ReCasaOS}"
 readonly OWNERS_BASE_URL="${OWNERS_BASE_URL:-https://github.com}"
+readonly CARRY_CATALOGUE="${CARRY_CATALOGUE:-}"
 readonly PYTHON="${PYTHON:-python3}"
 
 fail() {
@@ -41,7 +46,10 @@ source "${SCRIPT_DIR}/lib-fetch.sh"
 modules_env="$1"
 stage="$2"
 
-list="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" list "${modules_env}")" || fail "${modules_env} is not valid, or cannot be read, or ${PYTHON} could not run."
+carry=()
+[[ -z "${CARRY_CATALOGUE}" ]] || carry=(--carry "${CARRY_CATALOGUE}")
+list="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" list "${modules_env}" ${carry[@]+"${carry[@]}"})" ||
+    fail "${modules_env} is not valid, or cannot be read, or CARRY_CATALOGUE is not a readable catalogue of schema 3, or ${PYTHON} could not run."
 
 # (owner and component passed the builder's patterns before `list` printed them)
 while read -r name component tag commit tier owner; do

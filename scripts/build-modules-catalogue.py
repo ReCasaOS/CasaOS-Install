@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Builds the catalogue of the modules of a release (modules-catalogue-<tag>.json) from release/modules.env and from what each module's own release published.
 
-    build-modules-catalogue.py list     MODULES_ENV
+    build-modules-catalogue.py list     MODULES_ENV [--carry FILE]
     build-modules-catalogue.py archives CHECKSUMS TAG
     build-modules-catalogue.py digest   MODULES_ENV NAME ARCH
-    build-modules-catalogue.py build    --git-base URL --out FILE [--schema 2 --serial N --generated DATE | --schema 3 --serial N --generated DATE --withdrawn FILE]
+    build-modules-catalogue.py build    --git-base URL --out FILE [--schema 2 --serial N --generated DATE | --schema 3 --serial N --generated DATE --withdrawn FILE [--carry FILE]]
                                         [--owners-git-base URL] MODULES_ENV STAGE
     build-modules-catalogue.py proof    MODULES_ENV OUTPUT [--schema 2|3]
 
@@ -27,7 +27,11 @@ owners: {"schema": 3, "serial": N, "generated": DATE, "withdrawn": [...], "modul
 "component" and its archives at the mirror of ReCasaOS, https://github.com/ReCasaOS/modules/releases/download/m-<name>-<tag>/<archive>. FILE holds one withdrawn version per
 line, <name> <tag> <reason> (the reason is the rest of the line, 1 to 200 characters, none of them a tab, a line end, "@" or "<!"), 64 at most, a name and a tag once; empty
 lines and lines that start with # are skipped. The tag of a module of ReCasaOS is read in <--git-base>/<component>, that of a module of another owner in
-<--owners-git-base>/<owner>/<component> (https://github.com by default), and each archive of the latter must also have the SHA-256 that modules.env pins. `proof` judges
+<--owners-git-base>/<owner>/<component> (https://github.com by default), and each archive of the latter must also have the SHA-256 that modules.env pins. With --carry FILE, the last option of schema 3, FILE is a catalogue
+of schema 3 that was published before, read as strictly as a box reads one: a module of another owner whose name and tag it offers is carried over, with its commit, its
+archives (their mirror URLs and digests) and its manifest from FILE, its tier from modules.env, and neither its tag is read at its author's nor its archives are asked of STAGE;
+FILE must name the repository, the commit and the two digests that modules.env pins, or the build is refused, the module named. A module of ReCasaOS is never carried. `list`
+with --carry leaves out the modules that would be carried. `proof` judges
 what the core's own `casaos module list` printed when it was run on the catalogue that was built: every module of modules.env must be listed, except with --schema 2,
 which expects those of ReCasaOS only. Exit status: 0 done, 1 refused (the reason on the standard error), 2 usage.
 
@@ -348,6 +352,42 @@ def read_withdrawn(path):
     if found:
         raise Refused("withdrawn versions, line %d: %s" % (lines[found[0]], found[1]))
     return items
+
+
+def read_carried(path):
+    """The entries of the catalogue of schema 3 in the file path, {name: entry}: the file is read as a box reads one (parse_catalogue: its size, a key twice, the shape,
+    the withdrawn versions and every rule of an entry), since it is data that came from the web."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(MAX_CATALOGUE_BYTES + 1)
+    except OSError as err:
+        raise Refused("the catalogue to carry over cannot be read (%s)" % (err.strerror or type(err).__name__))
+    try:
+        return {e["name"]: e for e in parse_catalogue(raw, COMMUNITY_SCHEMA)["modules"]}
+    except Refused as err:
+        raise Refused("the catalogue to carry over is not a catalogue of schema 3: %s" % err)
+
+
+def is_carried(module, carried):
+    """Whether the module is carried over: one of another owner, whose name and tag the file offers."""
+    return module["owner"] != OWNER and module["name"] in carried and carried[module["name"]]["tag"] == module["tag"]
+
+
+def carried_entry(module, carried):
+    """The entry of a carried module, in the form entry_of gives (schema 1), which community_entry turns into the very entry that the file holds."""
+    e, name = carried[module["name"]], module["name"].upper().replace("-", "_")
+    if e["repository"] != "%s/%s" % (module["owner"], module["component"]):
+        raise Refused("the repository in the catalogue to carry over is %s, not the pinned %s/%s" % (e["repository"], module["owner"], module["component"]))
+    if e["commit"] != module["commit"]:
+        raise Refused("the catalogue to carry over has it at commit %s, not at the pinned %s" % (e["commit"], module["commit"]))
+    for arch in ARCHES:
+        if e["assets"].get(arch, {}).get("sha256") != module["sha256"][arch]:
+            raise Refused("the %s archive in the catalogue to carry over is not the one modules.env pins (MODULE_%s_SHA256_%s)" % (arch, name, arch.upper()))
+    return {
+        "name": e["name"], "component": e["component"], "tier": module["tier"], "tag": e["tag"], "commit": e["commit"],
+        "assets": {arch: {"url": asset_url(e["component"], e["tag"], a["url"].rsplit("/", 1)[1]), "sha256": a["sha256"]} for arch, a in e["assets"].items()},
+        "manifest": e["manifest"],
+    }
 
 
 def community_entry(e, owner):
@@ -796,8 +836,10 @@ def check_distinct(entries):
                 raise Refused("modules %s and %s share the %s %s" % (first, e["name"], what, get(e)))
 
 
-def build(env_path, stage, out, git_base, header=None, owners_git_base=OWNERS_GIT_BASE):
-    """With no header the catalogue is the one a release ships (schema 1), which holds the modules of ReCasaOS only."""
+def build(env_path, stage, out, git_base, header=None, owners_git_base=OWNERS_GIT_BASE, carried=None):
+    """With no header the catalogue is the one a release ships (schema 1), which holds the modules of ReCasaOS only. carried ({name: entry} of a catalogue of schema 3
+    that was published before, which only schema 3 takes) holds the versions of other owners that are taken from it and not fetched again."""
+    carried = carried or {}
     modules = read_modules_env(env_path)
     if not modules:
         raise Refused("%s has no module: there is no catalogue to build" % env_path)
@@ -817,6 +859,9 @@ def build(env_path, stage, out, git_base, header=None, owners_git_base=OWNERS_GI
     entries = []
     for module in modules:
         try:
+            if is_carried(module, carried):
+                entries.append(carried_entry(module, carried))
+                continue
             # (the owner passed OWNER_RE in read_modules_env: it is one element of a URL, nothing more)
             base = git_base if module["owner"] == OWNER else "%s/%s" % (owners_git_base.rstrip("/"), module["owner"])
             entries.append(entry_of(module, stage, base))
@@ -876,8 +921,8 @@ def proof(env_path, output_path, schema=COMMUNITY_SCHEMA):
     check_list_output(raw, modules)
 
 
-USAGE = ("usage: build-modules-catalogue.py list MODULES_ENV | archives CHECKSUMS TAG | digest MODULES_ENV NAME ARCH"
-         " | build --git-base URL --out FILE [--schema 2 --serial N --generated DATE | --schema 3 --serial N --generated DATE --withdrawn FILE]"
+USAGE = ("usage: build-modules-catalogue.py list MODULES_ENV [--carry FILE] | archives CHECKSUMS TAG | digest MODULES_ENV NAME ARCH"
+         " | build --git-base URL --out FILE [--schema 2 --serial N --generated DATE | --schema 3 --serial N --generated DATE --withdrawn FILE [--carry FILE]]"
          " [--owners-git-base URL] MODULES_ENV STAGE | proof MODULES_ENV OUTPUT [--schema 2|3]")
 
 
@@ -911,9 +956,16 @@ def main(argv):
     if argv[:1] == ["build"] and len(argv) >= 4 and argv[-4] == "--owners-git-base":
         # the one option that may follow the others, just before MODULES_ENV STAGE; what is left is one of the forms below or a usage error
         owners_git_base, argv = argv[-3], argv[:-4] + argv[-2:]
+    carry = None
+    if argv[:1] == ["build"] and len(argv) == 17 and argv[11] == "--withdrawn" and argv[13] == "--carry":
+        # (only after --withdrawn, which is schema 3's own: what is left must then be the schema 3 form)
+        carry, argv = argv[14], argv[:13] + argv[15:]
     try:
-        if len(argv) == 2 and argv[0] == "list":
+        if len(argv) in (2, 4) and argv[0] == "list" and (len(argv) == 2 or argv[2] == "--carry"):
+            carried = read_carried(argv[3]) if len(argv) == 4 else {}
             for m in read_modules_env(argv[1]):
+                if is_carried(m, carried):
+                    continue
                 print(m["name"], m["component"], m["tag"], m["commit"], m["tier"], m["owner"])
         elif len(argv) == 3 and argv[0] == "archives":
             try:
@@ -935,7 +987,7 @@ def main(argv):
         elif (len(argv) == 15 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out" and argv[5] == "--schema" and argv[7] == "--serial"
               and argv[9] == "--generated" and argv[11] == "--withdrawn" and (header := online_header(argv[6], argv[8], argv[10], True)) is not None):
             header["withdrawn"] = read_withdrawn(argv[12])
-            build(argv[13], argv[14], argv[4], argv[2], header, owners_git_base)
+            build(argv[13], argv[14], argv[4], argv[2], header, owners_git_base, read_carried(carry) if carry else None)
         elif len(argv) == 3 and argv[0] == "proof":
             proof(argv[1], argv[2])
         elif len(argv) == 5 and argv[0] == "proof" and argv[3] == "--schema" and argv[4] in ("2", "3"):

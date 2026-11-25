@@ -154,3 +154,31 @@ rm -rf "${WORK}/owners"
 ! stage "${WORK}/both.env" "${WORK}/stage" || fail "a module of another owner was fetched from the base of ReCasaOS"
 grep -q "Failed to download the checksums of module acme" "${WORK}/err" || fail "a module of another owner missing from its repository is not said: $(cat "${WORK}/err")"
 pass "a module of another owner is fetched only from OWNERS_BASE_URL/<owner>/<component>"
+
+# ---- CARRY_CATALOGUE: a version of another owner that a published catalogue already offers is not fetched again ----
+
+# (the owner's repository is gone, as in the case above: only the file to carry from holds the module)
+cat >"${WORK}/carry.json" <<EOF
+{"schema": 3, "serial": 7, "generated": "2026-11-25T12:00:00Z", "withdrawn": [], "modules": [{
+  "name": "acme", "component": "Acme-Module", "repository": "inkly/Acme-Module", "tier": "community", "tag": "${TAG}", "commit": "$(printf 'b%.0s' $(seq 40))",
+  "assets": {
+    "amd64": {"url": "https://github.com/ReCasaOS/modules/releases/download/m-acme-${TAG}/linux-amd64-casaos-acme-${TAG}.tar.gz", "sha256": "$(printf 'c%.0s' $(seq 64))"},
+    "arm64": {"url": "https://github.com/ReCasaOS/modules/releases/download/m-acme-${TAG}/linux-arm64-casaos-acme-${TAG}.tar.gz", "sha256": "$(printf 'd%.0s' $(seq 64))"}},
+  "manifest": {"schema": 1, "name": "acme", "title": "Acme", "description": "A module.", "component": "Acme-Module", "unit": "casaos-acme.service",
+    "gateway_route": "/v1/acme_thing", "min_recasaos": "0.5.23", "os": ["debian:12"]}}]}
+EOF
+publish
+CARRY_CATALOGUE="${WORK}/carry.json" stage "${WORK}/both.env" "${WORK}/stage" || fail "a carried module stopped the run: $(cat "${WORK}/err")"
+[ "$(ls "${WORK}/stage")" = virt ] || fail "a carried module was staged, or a module that is not carried was not: $(ls "${WORK}/stage")"
+pass "a module that CARRY_CATALOGUE offers at the pinned tag is not fetched, and the others are"
+
+CARRY_CATALOGUE="" stage "${WORK}/both.env" "${WORK}/stage" && fail "an empty CARRY_CATALOGUE changed what is fetched"
+grep -q "Failed to download the checksums of module acme" "${WORK}/err" || fail "an empty CARRY_CATALOGUE is not the same as none: $(cat "${WORK}/err")"
+pass "an empty CARRY_CATALOGUE is none"
+
+echo "{}" >"${WORK}/not-a-catalogue.json"
+for carry_file in "${WORK}/not-a-catalogue.json" "${WORK}/nothing.json"; do
+    CARRY_CATALOGUE="${carry_file}" stage "${WORK}/both.env" "${WORK}/stage" && fail "${carry_file} was taken for a catalogue to carry from"
+    [ "$(wc -l <"${WORK}/err")" -ge 1 ] && grep -q "CARRY_CATALOGUE is not a readable catalogue of schema 3" "${WORK}/err" || fail "a CARRY_CATALOGUE that does not hold is not said: $(cat "${WORK}/err")"
+done
+pass "a CARRY_CATALOGUE that is not a readable catalogue of schema 3 fails"
