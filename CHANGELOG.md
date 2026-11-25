@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.194] - 2026-11-25
+
+Components: CasaOS `v0.4.125`, CasaOS-UI `v0.4.227`. Unchanged from v0.5.193: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The weather on the new dashboard.** Settings → *Weather*: the owner searches a town by name, picks the units (°C and km/h, or °F and mph) and turns it on. The new dashboard then shows the icon, the temperature and the place next to its bell; its menu, in the dashboard's glass, gives the humidity, the wind and five days with their chance of rain. It is off by default, the owner's only, and the classic dashboard does not show it. The box, not the browser, asks [Open-Meteo](https://open-meteo.com/) (no key): every 30 minutes with the coordinates of the chosen place, and with the name typed when a place is searched. When Open-Meteo does not answer, the last forecast stays with the time it was read ([ReCasaOS/CasaOS#188](https://github.com/ReCasaOS/CasaOS/issues/188), [ReCasaOS/CasaOS#190](https://github.com/ReCasaOS/CasaOS/pull/190), [ReCasaOS/CasaOS-UI#236](https://github.com/ReCasaOS/CasaOS-UI/pull/236), [ReCasaOS/CasaOS-UI#237](https://github.com/ReCasaOS/CasaOS-UI/pull/237)).
+
+### Proof
+
+The core's weather passed its tests (settings, cache, a failed read, the place search) and the answers of the live Open-Meteo API were checked by hand against what the core reads. The interface passed its full suite and was seen on the mock: the widget and its menu on the new dashboard, none on the classic one, the place search, the units and the save. Not seen yet on a real box. install check: result added after the check.
+
 ## [0.5.193] - 2026-11-25
 
 Components: module `mcp` `v0.2.0`. Unchanged from v0.5.192: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.226`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
