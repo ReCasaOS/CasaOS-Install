@@ -12,7 +12,7 @@ Components: CasaOS-UI `v0.4.228`. Unchanged from v0.5.194: CasaOS `v0.4.125`, Ca
 
 ### Proof
 
-Seen on a real box with v0.5.194, then checked on the mock with the fix: nothing covers the open menu. install check: result added after the check.
+Seen on a real box with v0.5.194, then checked on the mock with the fix: nothing covers the open menu. The install check passed on all 12 legs on the first try (run 45625892140), and the promote job made it Latest.
 
 ## [0.5.194] - 2026-11-25
 
