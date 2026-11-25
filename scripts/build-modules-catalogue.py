@@ -365,7 +365,9 @@ def read_carried(path):
     try:
         return {e["name"]: e for e in parse_catalogue(raw, COMMUNITY_SCHEMA)["modules"]}
     except Refused as err:
-        raise Refused("the catalogue to carry over is not a catalogue of schema 3: %s" % err)
+        at = re.match(r"modules\.([0-9]+)\.", str(err))
+        who = " (module %s)" % json.loads(raw)["modules"][int(at.group(1))]["name"] if at else ""
+        raise Refused("the catalogue to carry over is not a catalogue of schema 3%s: %s" % (who, err))
 
 
 def is_carried(module, carried):
@@ -383,9 +385,20 @@ def carried_entry(module, carried):
     for arch in ARCHES:
         if e["assets"].get(arch, {}).get("sha256") != module["sha256"][arch]:
             raise Refused("the %s archive in the catalogue to carry over is not the one modules.env pins (MODULE_%s_SHA256_%s)" % (arch, name, arch.upper()))
+    # the archives as a fresh build names them: this architecture, this tag, and one stem for both (what the author's checksums.txt gave)
+    names, stems = {}, set()
+    for arch in ARCHES:
+        names[arch] = e["assets"][arch]["url"].rsplit("/", 1)[1]
+        m = re.fullmatch(r"linux-%s-casaos-([a-z-]+)-%s\.tar\.gz" % (arch, re.escape(e["tag"])), names[arch])
+        if m is None:
+            raise Refused("the %s archive %s in the catalogue to carry over is not named for this architecture and tag" % (arch, names[arch]))
+        stems.add(m.group(1))
+    if len(stems) != 1:
+        raise Refused("the two archives in the catalogue to carry over are not of the same name (%s, %s)" % (names["amd64"], names["arm64"]))
+    # (the manifest is kept as the file has it, which is as module.json has it: a fresh build keeps the key order of module.json)
     return {
         "name": e["name"], "component": e["component"], "tier": module["tier"], "tag": e["tag"], "commit": e["commit"],
-        "assets": {arch: {"url": asset_url(e["component"], e["tag"], a["url"].rsplit("/", 1)[1]), "sha256": a["sha256"]} for arch, a in e["assets"].items()},
+        "assets": {arch: {"url": asset_url(e["component"], e["tag"], names[arch]), "sha256": e["assets"][arch]["sha256"]} for arch in ARCHES},
         "manifest": e["manifest"],
     }
 
@@ -957,11 +970,11 @@ def main(argv):
         # the one option that may follow the others, just before MODULES_ENV STAGE; what is left is one of the forms below or a usage error
         owners_git_base, argv = argv[-3], argv[:-4] + argv[-2:]
     carry = None
-    if argv[:1] == ["build"] and len(argv) == 17 and argv[11] == "--withdrawn" and argv[13] == "--carry":
+    if argv[:1] == ["build"] and len(argv) == 17 and argv[11] == "--withdrawn" and argv[13] == "--carry" and argv[14]:
         # (only after --withdrawn, which is schema 3's own: what is left must then be the schema 3 form)
         carry, argv = argv[14], argv[:13] + argv[15:]
     try:
-        if len(argv) in (2, 4) and argv[0] == "list" and (len(argv) == 2 or argv[2] == "--carry"):
+        if len(argv) in (2, 4) and argv[0] == "list" and (len(argv) == 2 or argv[2] == "--carry" and argv[3]):
             carried = read_carried(argv[3]) if len(argv) == 4 else {}
             for m in read_modules_env(argv[1]):
                 if is_carried(m, carried):

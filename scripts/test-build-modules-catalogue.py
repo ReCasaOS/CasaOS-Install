@@ -1710,6 +1710,48 @@ class CommandLine(Base):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("cannot be read", err)
 
+    def test_a_carried_entry_is_written_whatever_the_order_of_the_file(self):
+        self.mixed()
+
+        def reverse(parsed):
+            e = self.entry_of_other(parsed)
+            e["assets"] = dict(reversed(list(e["assets"].items())))
+        path, first = self.carry_from(reverse)
+        self.assertEqual(list(json.load(open(path))["modules"][0]["assets"]), ["arm64", "amd64"])
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+
+    def test_the_archive_names_of_a_carried_module_are_its_own(self):
+        self.mixed()
+
+        def url(parsed, arch, name):
+            a = self.entry_of_other(parsed)["assets"][arch]
+            a["url"] = a["url"].rsplit("/", 1)[0] + "/" + name
+
+        def swapped(parsed):
+            url(parsed, "amd64", "linux-arm64-casaos-other-v0.1.1.tar.gz")
+            url(parsed, "arm64", "linux-amd64-casaos-other-v0.1.1.tar.gz")
+
+        def other_tag(parsed):
+            url(parsed, "amd64", "linux-amd64-casaos-other-v0.1.0.tar.gz")
+
+        def other_stem(parsed):
+            url(parsed, "amd64", "linux-amd64-casaos-virt-management-v0.1.1.tar.gz")
+        for what, edit in (("another arch", swapped), ("another tag", other_tag), ("another module's stem", other_stem)):
+            with self.subTest(what):
+                path, _ = self.carry_from(edit)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("module other", err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_an_empty_carry_is_a_usage_error(self):
+        self.mixed()
+        code, out, err = self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn(""), "--carry", "")
+        self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+        self.assertFalse(os.path.exists(self.out))
+        self.assertEqual(self.run_builder("list", self.env, "--carry", ""), (2, "", builder.USAGE + "\n"))
+
     def test_carry_is_for_schema_3_only(self):
         self.mixed()
         path, _ = self.carry_from()
