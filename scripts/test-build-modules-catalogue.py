@@ -438,7 +438,9 @@ class Base(unittest.TestCase):
 
     def build_foreign(self):
         # the base of ReCasaOS's modules holds no repository at all: the tag can only be read in the owner's
-        builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "nowhere")), owners_git_base=file_url(os.path.join(self.tmp, "owners")))
+        # (schema 3: the only catalogue that holds a module of another owner)
+        header = {"schema": 3, "serial": 41, "generated": "2026-11-25T12:00:00Z", "withdrawn": []}
+        builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "nowhere")), header, owners_git_base=file_url(os.path.join(self.tmp, "owners")))
 
 
 class ModulesEnv(Base):
@@ -652,14 +654,23 @@ class Build(Base):
     def test_a_module_of_another_owner_is_read_from_its_own_repository(self):
         r, digests = self.foreign()
         self.build_foreign()
-        (entry,) = builder.parse_catalogue(self.catalogue())["modules"]
+        (entry,) = builder.parse_catalogue(self.catalogue(), 3)["modules"]
         self.assertEqual((entry["tag"], entry["commit"], entry["manifest"]), ("v0.1.1", r.commit, GOOD_MANIFEST))
         self.assertEqual({arch: entry["assets"][arch]["sha256"] for arch in ("amd64", "arm64")}, digests)
 
+    def test_a_catalogue_with_no_header_never_takes_a_module_of_another_owner(self):
+        self.foreign()
+        with self.assertRaises(builder.Refused) as raised:
+            builder.build(self.env, self.stage_dir, self.out, file_url(self.net), owners_git_base=file_url(os.path.join(self.tmp, "owners")))
+        self.assertIn("module virt", str(raised.exception))
+        self.assertIn("inkly", str(raised.exception))
+        self.assertFalse(os.path.exists(self.out))
+
     def test_a_module_of_another_owner_is_not_read_from_the_base_of_recasaos(self):
         r, _ = self.foreign()
+        header = {"schema": 3, "serial": 41, "generated": "2026-11-25T12:00:00Z", "withdrawn": []}
         with self.assertRaises(builder.Refused) as raised:
-            builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "owners", "inkly")), owners_git_base=file_url(os.path.join(self.tmp, "nowhere")))
+            builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "owners", "inkly")), header, owners_git_base=file_url(os.path.join(self.tmp, "nowhere")))
         self.assertIn("nowhere/inkly/%s" % COMPONENT, str(raised.exception))
         self.assertFalse(os.path.exists(self.out))
 
@@ -1618,6 +1629,8 @@ class CommandLine(Base):
             "a name of 33 characters": "v" * 33 + " v0.1.0 a\n",
             "a tag with no v": "virt 0.1.0 a\n",
             "a tag of two numbers": "virt v0.1 a\n",
+            "a tag with a leading zero": "virt v0.02.0 old\n",
+            "a tag with a leading zero in the first number": "virt v01.2.3 old\n",
             "no tag": "virt\n",
             "no reason": "virt v0.1.0\n",
             "an empty reason": "virt v0.1.0 \n",
@@ -1643,6 +1656,23 @@ class CommandLine(Base):
                 self.assertIn("withdrawn", str(raised.exception))
         with self.assertRaises(builder.Refused):
             builder.read_withdrawn(os.path.join(self.tmp, "nothing"))
+
+    def test_a_withdrawn_file_saved_with_windows_line_ends_says_what_to_do(self):
+        with self.assertRaises(builder.Refused) as raised:
+            builder.read_withdrawn(self.withdrawn("# a comment\r\n\r\nvirt v0.1.0 old\r\n"))
+        for word in ("line 3", "carriage return", "Unix line endings"):
+            self.assertIn(word, str(raised.exception))
+
+    def test_a_catalogue_does_not_withdraw_what_it_offers(self):
+        self.mixed()
+        code, out, err = self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("other v0.1.0 old\nother v0.1.1 gone\n"))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("other", err)
+        self.assertIn("v0.1.1", err)
+        self.assertIn("withdrawn", err)
+        self.assertFalse(os.path.exists(self.out))
+        # another version of that module, or the same version of another module, may be withdrawn
+        self.assertEqual(self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("other v0.1.0 old\nvirt v0.0.9 old\n")), (0, "", ""))
 
     def test_a_refused_withdrawn_file_is_no_catalogue(self):
         self.good()
@@ -2021,6 +2051,16 @@ done
         code, out, err = self.run_functions("build_modules_catalogue", core=CORES_FROM_THE_MINIMUM[0])
         self.assertEqual(code, 0, err)
         self.assertEqual(self.made(), ["modules-catalogue-v9.9.9.json"])
+
+    def test_a_release_never_ships_a_module_of_another_owner_and_fetches_nothing_for_it(self):
+        self.write_env(env_text(commit="a" * 40) + "MODULE_VIRT_OWNER=inkly\nMODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % ("c" * 64, "d" * 64))
+        code, out, err = self.run_functions("build_modules_catalogue", core=CORES_FROM_THE_MINIMUM[0], base="file:///nonexistent")
+        self.assertNotEqual(code, 0, "the build went on")
+        for word in ("virt", "inkly", "only holds", "ReCasaOS"):
+            self.assertIn(word, err)
+        self.assertNotIn("Failed to download", err, "something was fetched before the owner was looked at")
+        self.assertEqual(self.made(), [], "a catalogue was written")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "staging", "modules")), "something was staged")
 
     def test_a_release_with_no_module_asks_nothing_of_its_core(self):
         self.write_env("# nothing\n\n")

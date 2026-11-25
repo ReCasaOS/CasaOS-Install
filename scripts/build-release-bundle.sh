@@ -344,7 +344,7 @@ prove_modules_core() {
 # to say that it holds no module: grep and python do not end a line in the same places, and
 # a file that cannot be read is not a file with no module in it.
 build_modules_catalogue() {
-    local list stage
+    local list stage name owner
     local file="${OUTPUT_DIR}/modules-catalogue-${RELEASE_TAG}.json"
 
     MODULES_CATALOGUE_FILE=""
@@ -354,6 +354,11 @@ build_modules_catalogue() {
 
     # no module: this release offers none
     [[ -n "${list}" ]] || return 0
+
+    # the catalogue of a release holds the modules of ReCasaOS only: said before anything is fetched
+    while read -r name _ _ _ _ owner; do
+        [[ "${owner}" == ReCasaOS ]] || fail "Module ${name} is of ${owner}: the catalogue of a release only holds the modules of ReCasaOS."
+    done <<<"${list}"
 
     # before anything is fetched: no catalogue for a core that cannot run its assistant
     check_core_for_modules

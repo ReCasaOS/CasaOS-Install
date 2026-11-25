@@ -294,6 +294,12 @@ def mirror_url(name, tag, archive):
     return "%sm-%s-%s/%s" % (MIRROR_URL, name, tag, archive)
 
 
+def leading_zero(tag):
+    """Whether a tag has a number with a leading zero. Stricter than the core's pattern: the core compares the tags of withdrawn versions character for character, where
+    v0.02.0 is not v0.2.0."""
+    return any(len(number) > 1 and number.startswith("0") for number in tag[1:].split("."))
+
+
 def withdrawn_problem(items):
     """(the index of the item, what is wrong with it) or None: the rules of the core's readWithdrawn, and the builder's own on a reason (no "@", no "<!", which could mention
     people where the reason is shown)."""
@@ -304,7 +310,7 @@ def withdrawn_problem(items):
             return i, "more than %d versions are withdrawn" % MAX_WITHDRAWN
         if NAME_RE.fullmatch(name) is None:
             return i, "the name is not the name of a module"
-        if TAG_RE.fullmatch(tag) is None:
+        if TAG_RE.fullmatch(tag) is None or leading_zero(tag):
             return i, "the tag is not the tag of a module"
         if not 1 <= len(reason) <= MAX_REASON:
             return i, "the reason is not 1 to %d characters" % MAX_REASON
@@ -334,6 +340,8 @@ def read_withdrawn(path):
             continue
         name, _, rest = line.partition(" ")
         tag, _, reason = rest.partition(" ")
+        if "\r" in line:
+            raise Refused("withdrawn versions, line %d: the line holds a carriage return; save the file with Unix line endings" % n)
         items.append({"name": name, "tag": tag, "reason": reason})
         lines.append(n)
     found = withdrawn_problem(items)
@@ -477,8 +485,7 @@ def read_modules_env(path):
         ):
             if not ok:
                 raise Refused("modules.env: the %s of module %s is not valid" % (field, module))
-        # stricter than the core's pattern: the core compares the tags of withdrawn versions character for character, where v0.02.0 is not v0.2.0
-        if any(len(number) > 1 and number.startswith("0") for number in e["tag"][1:].split(".")):
+        if leading_zero(e["tag"]):
             raise Refused("modules.env: MODULE_%s_TAG has a number with a leading zero" % module)
         owner = e.get("owner", OWNER)
         if OWNER_RE.fullmatch(owner) is None or owner.lower() == OWNER.lower() and owner != OWNER:
@@ -789,19 +796,24 @@ def check_distinct(entries):
                 raise Refused("modules %s and %s share the %s %s" % (first, e["name"], what, get(e)))
 
 
-def build(env_path, stage, out, git_base, header=None, owners_git_base=OWNERS_GIT_BASE, shipped=False):
-    """shipped: the catalogue of a release, which holds no module of another owner than ReCasaOS."""
+def build(env_path, stage, out, git_base, header=None, owners_git_base=OWNERS_GIT_BASE):
+    """With no header the catalogue is the one a release ships (schema 1), which holds the modules of ReCasaOS only."""
     modules = read_modules_env(env_path)
     if not modules:
         raise Refused("%s has no module: there is no catalogue to build" % env_path)
     for module in modules:
-        if shipped and module["owner"] != OWNER:
+        if header is None and module["owner"] != OWNER:
             raise Refused("module %s is of %s: the catalogue of a release holds the modules of %s only" % (module["name"], module["owner"], OWNER))
     if header is not None and header["schema"] == 2:
         # schema 2 knows no other owner: those modules are left out, and so are their archives
         modules = [m for m in modules if m["owner"] == OWNER]
         if not modules:
             raise Refused("%s has no module of %s: there is no catalogue of schema 2 to build" % (env_path, OWNER))
+    if header is not None and header["schema"] == COMMUNITY_SCHEMA:
+        offered = {(m["name"], m["tag"]) for m in modules}
+        for w in header["withdrawn"]:
+            if (w["name"], w["tag"]) in offered:
+                raise Refused("module %s %s is withdrawn and is also a module of the catalogue: a catalogue does not offer what it withdraws" % (w["name"], w["tag"]))
     entries = []
     for module in modules:
         try:
@@ -916,7 +928,7 @@ def main(argv):
             if digest:
                 print(digest)
         elif len(argv) == 7 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out":
-            build(argv[5], argv[6], argv[4], argv[2], owners_git_base=owners_git_base, shipped=True)
+            build(argv[5], argv[6], argv[4], argv[2], owners_git_base=owners_git_base)
         elif (len(argv) == 13 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out" and argv[5] == "--schema" and argv[7] == "--serial"
               and argv[9] == "--generated" and (header := online_header(argv[6], argv[8], argv[10], False)) is not None):
             build(argv[11], argv[12], argv[4], argv[2], header, owners_git_base)
