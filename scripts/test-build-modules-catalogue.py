@@ -1257,6 +1257,64 @@ class CommandLine(Base):
             with self.subTest(args):
                 self.assertEqual(self.run_builder(*args)[0], 2)
 
+    # ---- the online format (schema 2): the same modules under a header that says which catalogue it is ----
+
+    def build_with(self, *options):
+        return self.run_builder("build", "--git-base", file_url(self.net), "--out", self.out, *options, self.env, self.stage_dir)
+
+    def test_build_without_options_is_byte_identical(self):
+        # the catalogue of a release, as the builder wrote it before it knew schema 2; only what changes from run to run is filled in
+        r = self.good()
+        self.assertEqual(self.build_with(), (0, "", ""))
+        with open(os.path.join(HERE, "fixtures", "modules-catalogue", "schema-1.json"), "rb") as f:
+            want = f.read()
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r.dir, r.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read()).encode()
+        want = want.replace(b"@@COMMIT@@", r.commit.encode()).replace(b"@@SHA256_AMD64@@", digests["amd64"]).replace(b"@@SHA256_ARM64@@", digests["arm64"])
+        self.assertEqual(self.catalogue(), want)
+
+    def test_build_schema_2_has_serial_and_generated(self):
+        self.good()
+        self.assertEqual(self.build_with(), (0, "", ""))
+        one = json.loads(self.catalogue())
+        os.remove(self.out)
+        self.assertEqual(self.build_with("--schema", "2", "--serial", "41", "--generated", "2026-11-25T12:00:00Z"), (0, "", ""))
+        raw = self.catalogue()
+        two = json.loads(raw)
+        self.assertEqual(list(two), ["schema", "serial", "generated", "modules"])
+        self.assertEqual((two["schema"], two["serial"], two["generated"]), (2, 41, "2026-11-25T12:00:00Z"))
+        self.assertIs(type(two["serial"]), int)
+        self.assertEqual(two["modules"], one["modules"])
+        self.assertEqual(raw, (json.dumps(two, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+
+    def refused_with_usage(self, *options):
+        code, out, err = self.build_with(*options)
+        self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+        self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_schema_2_options_go_together(self):
+        self.good()
+        schema, serial, generated = ("--schema", "2"), ("--serial", "41"), ("--generated", "2026-11-25T12:00:00Z")
+        for options in (schema, serial, generated, schema + serial, schema + generated, serial + generated, serial + schema + generated,
+                        schema + generated + serial, schema + serial + generated + serial, ("--schema", "1") + serial + generated):
+            with self.subTest(options):
+                self.refused_with_usage(*options)
+
+    def test_serial_must_be_a_positive_integer(self):
+        self.good()
+        for serial in ("0", "-1", "01", "1.0", "abc", "", "+1", " 1", "1 ", "١", "9223372036854775808"):
+            with self.subTest(serial):
+                self.refused_with_usage("--schema", "2", "--serial", serial, "--generated", "2026-11-25T12:00:00Z")
+
+    def test_generated_must_be_utc(self):
+        self.good()
+        for generated in ("2026-11-25T12:00:00+01:00", "2026-11-25", "", "2026-11-25T12:00:00z", "2026-11-25 12:00:00Z", "2026-11-25T12:00:00.5Z",
+                          "2026-13-25T12:00:00Z", "2026-02-30T12:00:00Z", "2026-11-25T24:00:00Z", "2026-11-25T12:00:00Z\n"):
+            with self.subTest(generated):
+                self.refused_with_usage("--schema", "2", "--serial", "41", "--generated", generated)
+
 
 # ---- the script that fetches (scripts/build-release-bundle.sh) ---------------------------------------------------------------------------------------------
 
@@ -1561,7 +1619,7 @@ done
         self.assertEqual(text.count('\n    check_core_for_modules\n'), 1, "build_modules_catalogue does not look at the core")
         body = text[text.index("\nbuild_modules_catalogue() {"):]
         self.assertLess(body.index('build-modules-catalogue.py" list'), body.index("check_core_for_modules"), "the core is looked at for a release that lists no module")
-        self.assertLess(body.index("check_core_for_modules"), body.index("curl"), "the core is looked at after something is fetched")
+        self.assertLess(body.index("check_core_for_modules"), body.index("stage-modules.sh"), "the core is looked at after something is fetched")
         self.assertNotIn("grep", body[:body.index("check_core_for_modules")], "modules.env is read by something other than the python script")
 
     def test_the_pins_of_this_tree_hold(self):
@@ -1809,8 +1867,11 @@ class Workflow(unittest.TestCase):
 
     def test_every_download_of_the_bundle_retries_a_5xx(self):
         # one 504 from GitHub failed v0.5.101 and v0.5.102 three times in a row (2026-11-08)
-        with open(BUILD_SCRIPT, encoding="utf-8") as f:
-            calls = [line for line in f if re.match(r"\s*(\S+=\"\$\()?curl ", line)]
+        # (the download code is in the bundle script and in the two scripts it shares with the repository of the online catalogue)
+        calls = []
+        for path in (BUILD_SCRIPT, os.path.join(HERE, "lib-fetch.sh"), os.path.join(HERE, "stage-modules.sh")):
+            with open(path, encoding="utf-8") as f:
+                calls += [line for line in f if re.match(r"\s*(\S+=\"\$\()?curl ", line)]
         self.assertEqual(len(calls), 3, calls)
         for line in calls:
             self.assertIn("--retry 5", line)
