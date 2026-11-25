@@ -884,13 +884,19 @@ class Units(Base):
 
     def test_a_unit_that_is_one_of_the_box(self):
         bare = without_upgrade(GOOD_MANIFEST)
-        self.assertEqual(len(builder.RESERVED_UNITS), 15)
-        for unit in builder.RESERVED_UNITS + ("casaos-module-virt.service", "casaos-module-.service", "usb-mount@sdb1.service", "usb-mount@.service"):
+        self.assertEqual(len(builder.RESERVED_UNITS), 16)
+        for unit in builder.RESERVED_UNITS + (
+            "casaos-update-modules.service", "casaos-module-virt.service", "casaos-module-.service", "casaos-update-modules-virt-1764000000.service",
+            "casaos-update-modules-.service", "usb-mount@sdb1.service", "usb-mount@.service",
+        ):
             with self.subTest(unit):
                 self.assertFalse(builder.valid_unit(unit))
                 with self.assertRaises(builder.Refused):
                     builder.parse_manifest(jbytes(dict(bare, unit=unit)), "virt")
-        for unit in ("casaos-virt-management.service", "casaos-modules.service", "usb-mount.service", "casaos-gateway-x.service", "my-casaos.service", "Casaos.service"):
+        for unit in (
+            "casaos-virt-management.service", "casaos-modules.service", "usb-mount.service", "casaos-gateway-x.service", "my-casaos.service", "Casaos.service",
+            "casaos-update-module.service", "casaos-update-modulesx.service",
+        ):
             with self.subTest(unit):
                 self.assertTrue(builder.valid_unit(unit))
                 builder.parse_manifest(jbytes(dict(bare, unit=unit)), "virt")

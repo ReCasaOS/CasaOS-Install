@@ -82,14 +82,15 @@ RESERVED_ROUTES = (
 )
 BLANKS = "\u2800\u115f\u1160\u3164\uffa0"
 
-# the units of the box that a module's unit cannot be, and the two prefixes of those that cannot either (pkg/osmodule reservedUnits and reservedUnitPrefixes)
+# the units of the box that a module's unit cannot be, and the prefixes of those that cannot either (pkg/osmodule reservedUnits and reservedUnitPrefixes)
 RESERVED_UNITS = (
     "casaos-update.service", "casaos-package-update.service", "casaos-docker-update.service", "casaos-os-upgrade.service", "casaos-os-upgrade-measure.service",
+    "casaos-update-modules.service",
     "casaos.service", "casaos-gateway.service", "casaos-user-service.service", "casaos-message-bus.service", "casaos-local-storage.service", "casaos-app-management.service",
     "rclone.service", "casaos-wsdd.service",
     "apt-daily.service", "apt-daily-upgrade.service",
 )
-RESERVED_UNIT_PREFIXES = ("casaos-module-", "usb-mount@")
+RESERVED_UNIT_PREFIXES = ("casaos-module-", "casaos-update-modules-", "usb-mount@")
 # what an archive may put on a box (pkg/osmodule files.go and unpack.go): the directories, directly in which the files go, the programs that usr/bin may not hold,
 # and the bounds of an archive; the largest archive is what a box downloads
 ALLOWED_DIRS = ("usr/bin", "usr/lib/systemd/system", "lib/systemd/system", "etc/casaos")
