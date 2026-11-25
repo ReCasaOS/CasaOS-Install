@@ -2,6 +2,24 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.197] - 2026-11-25
+
+Components: CasaOS `v0.4.126`. Unchanged from v0.5.196: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.229`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+This release is published as a pre-release until the online catalogue has been tried on a real box.
+
+### Added
+
+- **A module can get a new version without a new release of ReCasaOS.** Until now a box learned the version of a module only from the catalogue that came with its release. It now also reads a catalogue published by [ReCasaOS/modules](https://github.com/ReCasaOS/modules), where each version of a module is proposed as a pull request, checked (the archives against their published sums, the tag against its commit, the list read by the real core) and published when it is merged. The box fetches it shortly after it starts, every 6 hours, and when the Modules window asks; it keeps a fetched catalogue only when it is valid as a whole and not older than the one it has. For each module it takes the highest version its system accepts, from either catalogue, so a box too old for the newest version of a module keeps the one of its release. A box that cannot reach the catalogue goes on with the versions that came with ReCasaOS ([ReCasaOS/CasaOS#189](https://github.com/ReCasaOS/CasaOS/pull/189)).
+- **The night updates the installed modules**, with the switch and the hours of the automatic updates of ReCasaOS: a version is installed 24 hours after the box first saw it, one module after the other, never a module that is not installed and never backwards. A version that failed is put back and not tried again; one alert tells what the night did.
+- **The Modules window says where its versions come from**, with the date of the catalogue, and has a *Look for newer versions* button. The window itself came with the interface of v0.5.196; the line and the button show with this release's core ([ReCasaOS/CasaOS-UI#239](https://github.com/ReCasaOS/CasaOS-UI/pull/239)).
+- **`[modules] OnlineCatalogue = false`** in `/etc/casaos/casaos.conf` turns the online catalogue off: the box then offers only the versions that came with its release.
+
+### Changed
+
+- **An update of ReCasaOS brings the modules to the versions of that release, not further.** The update of the installed modules at the end of an install now works from the release's own catalogue (`casaos module list --shipped`, `casaos module update --shipped`), so that a release installed at night does not also install a module version the box has seen for less than a day. A module that is already ahead of the release is left as it is.
+- The catalogue builder can write the online format, and its download loop is a script of its own that the catalogue's repository calls ([#343](https://github.com/ReCasaOS/CasaOS-Install/pull/343)). A module may not take the name of the units of the installer's update of the modules.
+
 ## [0.5.196] - 2026-11-25
 
 Components: CasaOS-UI `v0.4.229`. Unchanged from v0.5.195: CasaOS `v0.4.125`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.

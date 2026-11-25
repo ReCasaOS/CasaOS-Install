@@ -239,7 +239,7 @@ What a remove never takes stays: the packages the module needed, and its data (f
 
 ## What is built and what is not
 
-Built, each in its own repository, and not in a release of the distribution yet: `casaos module` and its API (the core), the Modules page (the dashboard), the catalogue builder with the checks above and the proof of the pinned core, `--module`, the placement of the catalogue and the removal of modules by the uninstaller (this repository). Their tests run without a machine: stand-in commands for the installer and the uninstaller, fixtures and stand-in cores for the builder, the unpack on a fake file system.
+Built, each in its own repository, and shipped in the releases of the distribution: `casaos module` and its API (the core), the Modules page (the dashboard), the catalogue builder with the checks above and the proof of the pinned core, `--module`, the placement of the catalogue and the removal of modules by the uninstaller (this repository). Their tests run without a machine: stand-in commands for the installer and the uninstaller, fixtures and stand-in cores for the builder, the unpack on a fake file system.
 
 The release that first carries a catalogue also has to pin the core that has `casaos module`: `MODULES_MIN_CORE_TAG` is `v0.4.75` before that core is tagged, and the day it is tagged with another number, that number is the one to write there. A wrong number cannot ship a catalogue by itself, since the proof builds and runs the pinned core.
 

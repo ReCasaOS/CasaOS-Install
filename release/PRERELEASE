@@ -1,0 +1,4 @@
+This release is published as a pre-release until the online catalogue of the modules is tried on a real box
+(the box fetches the catalogue, the Modules window says so, and a module version published in ReCasaOS/modules is offered and installed).
+Promote it with: gh release edit v0.5.197 -R ReCasaOS/CasaOS-Install --prerelease=false --latest
+then delete this file in the next commit.
