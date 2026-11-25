@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.199] - 2026-11-26
+
+Components: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-UI `v0.4.231`, module `vuln-scan` `v0.2.0`. Unchanged from v0.5.198: CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An app update that makes things worse is not applied.** When the `vuln-scan` module is installed, an app update looks at the new image before the app is recreated. If the new image carries more critical vulnerabilities with a known fix than the one the app runs, the update is undone: the app keeps its containers, its tags and its files, and the image that was pulled is removed. Fewer or as many vulnerabilities, a scan that cannot conclude, a module that is absent or does not answer, or more than 10 minutes for the app: the update goes through. This holds for the update button, *Update every app* and the night ([ReCasaOS/ReCasaOS-VulnScan#5](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/5), [ReCasaOS/CasaOS-AppManagement#86](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/86)).
+- **The dashboard says so.** The update card says *Checking the new version for vulnerabilities* while the new image is scanned. A blocked update opens a window on the app that was updated: how many more critical vulnerabilities the new version has, the ones it adds and the version that fixes each, *Keep the installed version*, and for the owner *Update anyway*. *Update every app* and the list of the last nights show an update blocked with its reason ([ReCasaOS/CasaOS-UI#242](https://github.com/ReCasaOS/CasaOS-UI/pull/242)).
+- **The night tells it once.** A night that blocks an app's update says so in its alert, and does not try that app again until the registry publishes another image or the app's next version changes ([ReCasaOS/CasaOS#193](https://github.com/ReCasaOS/CasaOS/pull/193)).
+- **A switch turns the check off**: *Check the new version before an update*, in *Automatic app updates*, shown when the module is installed and on by default.
+- **Modules written outside ReCasaOS can enter the catalogue.** The core reads a third format of the online catalogue, where each module says the repository it comes from; a module that ReCasaOS did not write is said so before it is installed, and the night updates it only if its owner said yes for it ([ReCasaOS/CasaOS#192](https://github.com/ReCasaOS/CasaOS/pull/192)). The catalogue builder writes that format ([#354](https://github.com/ReCasaOS/CasaOS-Install/pull/354)); the catalogue shipped with this release is unchanged.
+
+### Proof
+
+install check: result added after the check
+
 ## [0.5.198] - 2026-11-25
 
 Components: CasaOS-UI `v0.4.230`. Unchanged from v0.5.197: CasaOS `v0.4.126`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
