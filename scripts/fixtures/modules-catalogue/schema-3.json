@@ -1,0 +1,78 @@
+{
+  "schema": 3,
+  "serial": 41,
+  "generated": "2026-11-25T12:00:00Z",
+  "withdrawn": [
+    {
+      "name": "virt",
+      "tag": "v0.1.0",
+      "reason": "The upgrade of the box failed."
+    },
+    {
+      "name": "other",
+      "tag": "v0.0.9",
+      "reason": "Replaced by a build that is safer."
+    }
+  ],
+  "modules": [
+    {
+      "name": "virt",
+      "component": "CasaOS-VirtManagement",
+      "repository": "ReCasaOS/CasaOS-VirtManagement",
+      "tier": "community",
+      "tag": "v0.1.1",
+      "commit": "@@COMMIT@@",
+      "assets": {
+        "amd64": {
+          "url": "https://github.com/ReCasaOS/modules/releases/download/m-virt-v0.1.1/linux-amd64-casaos-virt-management-v0.1.1.tar.gz",
+          "sha256": "@@SHA256_AMD64@@"
+        },
+        "arm64": {
+          "url": "https://github.com/ReCasaOS/modules/releases/download/m-virt-v0.1.1/linux-arm64-casaos-virt-management-v0.1.1.tar.gz",
+          "sha256": "@@SHA256_ARM64@@"
+        }
+      },
+      "manifest": {
+        "schema": 1,
+        "name": "virt",
+        "title": "Virtual machines",
+        "description": "Create and run virtual machines with libvirt and QEMU.",
+        "component": "CasaOS-VirtManagement",
+        "unit": "casaos-virt-management.service",
+        "gateway_route": "/v2/virt_management",
+        "packages": {
+          "common": [
+            "qemu-utils",
+            "libvirt-daemon-system"
+          ],
+          "amd64": [
+            "qemu-system-x86",
+            "ovmf"
+          ],
+          "arm64": [
+            "qemu-system-arm",
+            "qemu-efi-aarch64"
+          ]
+        },
+        "min_recasaos": "0.5.23",
+        "os": [
+          "debian:12",
+          "debian:13",
+          "ubuntu:24.04",
+          "ubuntu:26.04"
+        ],
+        "os_upgrade": {
+          "stop_units": [
+            "casaos-virt-management.service"
+          ],
+          "stop_timeout_seconds": 300,
+          "maintenance": {
+            "prepare": "/v2/virt_management/maintenance/prepare",
+            "status": "/v2/virt_management/maintenance/status",
+            "resume": "/v2/virt_management/maintenance/resume"
+          }
+        }
+      }
+    }
+  ]
+}
