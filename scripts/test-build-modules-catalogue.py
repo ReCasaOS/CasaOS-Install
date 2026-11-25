@@ -405,6 +405,43 @@ class Base(unittest.TestCase):
         with open(self.out, "rb") as f:
             return f.read()
 
+    def foreign(self):
+        """A release of virt in the repository of the owner inkly (under <tmp>/owners), staged, and pinned with the digests of its archives."""
+        r = Release(os.path.join(self.tmp, "owners", "inkly")).publish()
+        r.stage(self.stage_dir)
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r.dir, r.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read())
+        self.pin_foreign(r.commit, digests)
+        return r, digests
+
+    def pin_foreign(self, commit, digests):
+        self.write_env(env_text(commit=commit) + "MODULE_VIRT_OWNER=inkly\nMODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % (digests["amd64"], digests["arm64"]))
+
+    def mixed(self):
+        """virt of ReCasaOS and other of the owner inkly, staged and pinned; returns their releases and the digests of the second."""
+        r1 = self.virt.publish()
+        r1.stage(self.stage_dir)
+        second = dict(GOOD_MANIFEST, name="other", component="CasaOS-Other", unit="casaos-other.service", gateway_route="/v1/other_thing")
+        second.pop("os_upgrade")
+        r2 = Release(os.path.join(self.tmp, "owners", "inkly"), component="CasaOS-Other", stem="other").publish(manifest=second)
+        r2.stage(self.stage_dir, "other")
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r2.dir, r2.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read())
+        self.ours = env_text(commit=r1.commit)
+        self.write_env(self.ours + env_text(name="OTHER", commit=r2.commit, component="CasaOS-Other")
+                       + "MODULE_OTHER_OWNER=inkly\nMODULE_OTHER_SHA256_AMD64=%s\nMODULE_OTHER_SHA256_ARM64=%s\n" % (digests["amd64"], digests["arm64"]))
+        return r1, r2, digests
+
+    def build_foreign(self):
+        # the base of ReCasaOS's modules holds no repository at all: the tag can only be read in the owner's
+        # (schema 3: the only catalogue that holds a module of another owner)
+        header = {"schema": 3, "serial": 41, "generated": "2026-11-25T12:00:00Z", "withdrawn": []}
+        builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "nowhere")), header, owners_git_base=file_url(os.path.join(self.tmp, "owners")))
+
 
 class ModulesEnv(Base):
     def test_comments_only_is_no_module(self):
@@ -427,7 +464,8 @@ class ModulesEnv(Base):
     def test_refused(self):
         good = env_text(commit="a" * 40)
         cases = {
-            "a key that is none of the four": good + "MODULE_VIRT_OWNER=x\n",
+            "an owner with no digests": good + "MODULE_VIRT_OWNER=x\n",
+            "a key that is none of the seven": good + "MODULE_VIRT_BRANCH=main\n",
             "a line that is not an assignment": good + "MODULE_VIRT\n",
             "a stray word": good + "hello\n",
             "a key twice": good + "MODULE_VIRT_TAG=v0.1.2\n",
@@ -496,6 +534,68 @@ class ModulesEnv(Base):
                     builder.read_modules_env(path)
                 self.assertIn("cannot be read", str(raised.exception))
 
+    DIGESTS = "MODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % ("c" * 64, "d" * 64)
+
+    def owned(self, owner, digests=DIGESTS, tier="community", tag="v0.1.1"):
+        return env_text(commit="a" * 40, tier=tier, tag=tag) + "MODULE_VIRT_OWNER=%s\n" % owner + digests
+
+    def test_the_owner_and_the_digests(self):
+        cases = {
+            "no owner is ReCasaOS, with no digests": (env_text(commit="a" * 40, tier="core"), "ReCasaOS", None),
+            "ReCasaOS written out": (self.owned("ReCasaOS", "", tier="core"), "ReCasaOS", None),
+            "another owner, community, with both digests": (self.owned("inkly"), "inkly", {"amd64": "c" * 64, "arm64": "d" * 64}),
+            "an owner of 39 characters": (self.owned("a" + "-" * 37 + "b"), "a" + "-" * 37 + "b", {"amd64": "c" * 64, "arm64": "d" * 64}),
+        }
+        for what, (text, owner, digests) in cases.items():
+            with self.subTest(what):
+                self.write_env(text)
+                (m,) = builder.read_modules_env(self.env)
+                self.assertEqual((m["owner"], m["sha256"]), (owner, digests))
+
+    def test_the_owner_and_the_digests_refused(self):
+        """Each refusal names the key at fault, before anything from the file reaches a URL or a path."""
+        cases = {
+            "an owner with two dots": (self.owned("a..b"), "MODULE_VIRT_OWNER"),
+            "an owner that starts with a hyphen": (self.owned("-a"), "MODULE_VIRT_OWNER"),
+            "an owner that ends with a hyphen": (self.owned("a-"), "MODULE_VIRT_OWNER"),
+            "an owner of 40 characters": (self.owned("a" * 40), "MODULE_VIRT_OWNER"),
+            "an owner with a slash": (self.owned("a/b"), "MODULE_VIRT_OWNER"),
+            "an owner with a space": (self.owned("a b"), "MODULE_VIRT_OWNER"),
+            "an owner with a percent sign": (self.owned("a%b"), "MODULE_VIRT_OWNER"),
+            "an empty owner": (self.owned(""), "MODULE_VIRT_OWNER"),
+            "recasaos in lower case": (self.owned("recasaos"), "MODULE_VIRT_OWNER"),
+            "RECASAOS in upper case": (self.owned("RECASAOS", "", tier="core"), "MODULE_VIRT_OWNER"),
+            "another owner in the core tier": (self.owned("inkly", tier="core"), "MODULE_VIRT_TIER"),
+            "another owner with no digest": (self.owned("inkly", ""), "MODULE_VIRT_SHA256_AMD64"),
+            "another owner with the amd64 digest only": (self.owned("inkly", "MODULE_VIRT_SHA256_AMD64=%s\n" % ("c" * 64)), "MODULE_VIRT_SHA256_ARM64"),
+            "another owner with the arm64 digest only": (self.owned("inkly", "MODULE_VIRT_SHA256_ARM64=%s\n" % ("d" * 64)), "MODULE_VIRT_SHA256_AMD64"),
+            "a digest in upper case": (self.owned("inkly", self.DIGESTS.replace("c" * 64, "C" * 64)), "MODULE_VIRT_SHA256_AMD64"),
+            "a digest too short": (self.owned("inkly", self.DIGESTS.replace("d" * 64, "d" * 63)), "MODULE_VIRT_SHA256_ARM64"),
+            "digests for a module of ReCasaOS": (env_text(commit="a" * 40, tier="core") + self.DIGESTS, "MODULE_VIRT_SHA256_AMD64"),
+            "a digest for ReCasaOS written out": (self.owned("ReCasaOS", "MODULE_VIRT_SHA256_ARM64=%s\n" % ("d" * 64), tier="core"), "MODULE_VIRT_SHA256_ARM64"),
+            "an unknown key": (self.owned("inkly") + "MODULE_X_SHA256_ARM=%s\n" % ("d" * 64), "MODULE_X_SHA256_ARM"),
+            "an owner twice": (self.owned("inkly") + "MODULE_VIRT_OWNER=inkly\n", "MODULE_VIRT_OWNER"),
+        }
+        for what, (text, key) in cases.items():
+            with self.subTest(what):
+                self.write_env(text)
+                with self.assertRaises(builder.Refused) as raised:
+                    builder.read_modules_env(self.env)
+                self.assertIn(key, str(raised.exception))
+
+    def test_a_tag_with_a_leading_zero_is_refused(self):
+        for tag in ("v0.02.0", "v01.2.3", "v1.2.03", "v00.1.1"):
+            for what, text in (("a module of ReCasaOS", env_text(commit="a" * 40, tier="core", tag=tag)), ("a module of another owner", self.owned("inkly", tag=tag))):
+                with self.subTest(tag=tag, module=what):
+                    self.write_env(text)
+                    with self.assertRaises(builder.Refused) as raised:
+                        builder.read_modules_env(self.env)
+                    self.assertIn("MODULE_VIRT_TAG", str(raised.exception))
+        for tag in ("v0.0.0", "v10.20.300", "v0.10.0"):
+            with self.subTest(tag=tag):
+                self.write_env(env_text(commit="a" * 40, tag=tag))
+                self.assertEqual(builder.read_modules_env(self.env)[0]["tag"], tag)
+
 
 class Checksums(unittest.TestCase):
     def lines(self, *names, digest="a" * 64):
@@ -548,6 +648,60 @@ class Build(Base):
             self.assertEqual(entry["assets"][arch], {"url": "https://github.com/ReCasaOS/%s/releases/download/v0.1.1/%s" % (COMPONENT, r.archive_name(arch)), "sha256": digest})
         self.assertEqual(list(entry), ["name", "component", "tier", "tag", "commit", "assets", "manifest"])
         self.assertFalse(os.path.exists(self.out + ".tmp"))
+
+    # ---- a module of another owner: its tag read in its own repository, its archives held to the digests modules.env pins ----
+
+    def test_a_module_of_another_owner_is_read_from_its_own_repository(self):
+        r, digests = self.foreign()
+        self.build_foreign()
+        (entry,) = builder.parse_catalogue(self.catalogue(), 3)["modules"]
+        self.assertEqual((entry["tag"], entry["commit"], entry["manifest"]), ("v0.1.1", r.commit, GOOD_MANIFEST))
+        self.assertEqual({arch: entry["assets"][arch]["sha256"] for arch in ("amd64", "arm64")}, digests)
+
+    def test_a_catalogue_with_no_header_never_takes_a_module_of_another_owner(self):
+        self.foreign()
+        with self.assertRaises(builder.Refused) as raised:
+            builder.build(self.env, self.stage_dir, self.out, file_url(self.net), owners_git_base=file_url(os.path.join(self.tmp, "owners")))
+        self.assertIn("module virt", str(raised.exception))
+        self.assertIn("inkly", str(raised.exception))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_a_module_of_another_owner_is_not_read_from_the_base_of_recasaos(self):
+        r, _ = self.foreign()
+        header = {"schema": 3, "serial": 41, "generated": "2026-11-25T12:00:00Z", "withdrawn": []}
+        with self.assertRaises(builder.Refused) as raised:
+            builder.build(self.env, self.stage_dir, self.out, file_url(os.path.join(self.tmp, "owners", "inkly")), header, owners_git_base=file_url(os.path.join(self.tmp, "nowhere")))
+        self.assertIn("nowhere/inkly/%s" % COMPONENT, str(raised.exception))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_an_archive_that_is_not_the_one_modules_env_pins(self):
+        r, digests = self.foreign()
+        for arch in ("amd64", "arm64"):
+            with self.subTest(arch):
+                self.pin_foreign(r.commit, dict(digests, **{arch: "e" * 64}))
+                with self.assertRaises(builder.Refused) as raised:
+                    self.build_foreign()
+                self.assertIn("module virt: the %s archive %s is not the one modules.env pins (MODULE_VIRT_SHA256_%s)" % (arch, r.archive_name(arch), arch.upper()),
+                              str(raised.exception))
+                self.assertFalse(os.path.exists(self.out))
+
+    def test_a_module_of_another_owner_is_held_to_its_tag_and_its_manifest(self):
+        r, digests = self.foreign()
+        self.pin_foreign(r.later, digests)
+        with self.assertRaises(builder.Refused) as raised:
+            self.build_foreign()
+        self.assertIn("not at the pinned", str(raised.exception))
+        r.clear().publish(repo=jbytes(dict(GOOD_MANIFEST, title="Other")))
+        shutil.rmtree(self.stage_dir)
+        r.stage(self.stage_dir)
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r.dir, r.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read())
+        self.pin_foreign(r.commit, digests)
+        with self.assertRaises(builder.Refused) as raised:
+            self.build_foreign()
+        self.assertIn("not, byte for byte, the module.json", str(raised.exception))
 
     def test_the_same_inputs_give_the_same_bytes(self):
         self.good()
@@ -1228,7 +1382,9 @@ class CommandLine(Base):
 
     def test_list(self):
         self.write_env(env_text(commit="a" * 40))
-        self.assertEqual(self.run_builder("list", self.env), (0, "virt %s v0.1.1 %s community\n" % (COMPONENT, "a" * 40), ""))
+        self.assertEqual(self.run_builder("list", self.env), (0, "virt %s v0.1.1 %s community ReCasaOS\n" % (COMPONENT, "a" * 40), ""))
+        self.write_env(env_text(commit="a" * 40) + "MODULE_VIRT_OWNER=inkly\nMODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % ("c" * 64, "d" * 64))
+        self.assertEqual(self.run_builder("list", self.env), (0, "virt %s v0.1.1 %s community inkly\n" % (COMPONENT, "a" * 40), ""))
         self.write_env("# none\n")
         self.assertEqual(self.run_builder("list", self.env), (0, "", ""))
 
@@ -1259,9 +1415,52 @@ class CommandLine(Base):
         self.assertFalse(os.path.exists(self.out))
 
     def test_usage(self):
-        for args in ([], ["build"], ["list"], ["list", "a", "b"], ["archives", "a"], ["frobnicate"], ["build", "--out", "x", "--git-base", "y", "a", "b"]):
+        for args in ([], ["build"], ["list"], ["list", "a", "b"], ["archives", "a"], ["frobnicate"], ["build", "--out", "x", "--git-base", "y", "a", "b"],
+                     ["digest", "a", "b"], ["digest", "a", "b", "c", "d"]):
             with self.subTest(args):
                 self.assertEqual(self.run_builder(*args)[0], 2)
+
+    def test_digest(self):
+        _, digests = self.foreign()
+        for arch in ("amd64", "arm64"):
+            self.assertEqual(self.run_builder("digest", self.env, "virt", arch), (0, digests[arch] + "\n", ""))
+        self.write_env(env_text(commit="a" * 40))
+        self.assertEqual(self.run_builder("digest", self.env, "virt", "amd64"), (0, "", ""))
+        for what, args in (("an unknown module", ("other", "amd64")), ("an unknown architecture", ("virt", "x86")), ("an architecture in upper case", ("virt", "AMD64"))):
+            with self.subTest(what):
+                code, out, err = self.run_builder("digest", self.env, *args)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("error: ") and err.count("\n") == 1, err)
+        self.write_env("MODULE_VIRT_TAG=v1\n")
+        self.assertEqual(self.run_builder("digest", self.env, "virt", "amd64")[:2], (1, ""))
+
+    def test_build_with_the_base_of_the_owners(self):
+        self.foreign()
+        nowhere, owners = file_url(os.path.join(self.tmp, "nowhere")), file_url(os.path.join(self.tmp, "owners"))
+        withdrawn = os.path.join(self.tmp, "withdrawn.txt")
+        with open(withdrawn, "w") as f:
+            f.write("")
+        # (a module of another owner is in no shipped catalogue: it is in the one of schema 3)
+        options = ("--schema", "3", "--serial", "41", "--generated", "2026-11-25T12:00:00Z", "--withdrawn", withdrawn)
+        code, out, err = self.run_builder("build", "--git-base", nowhere, "--out", self.out, *options, "--owners-git-base", owners, self.env, self.stage_dir)
+        self.assertEqual((code, out, err), (0, "", ""))
+        os.remove(self.out)
+        # without it, the owner's repository is looked for on GitHub (no network here: git may only read files), never in the base of ReCasaOS
+        with mock.patch.dict(os.environ, {"GIT_ALLOW_PROTOCOL": "file"}):
+            code, out, err = self.run_builder("build", "--git-base", owners + "/inkly", "--out", self.out, *options, self.env, self.stage_dir)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("https://github.com/inkly/%s" % COMPONENT, err)
+
+    def test_the_base_of_the_owners_in_another_place_is_a_usage_error(self):
+        self.good()
+        base = file_url(self.net)
+        for args in (("--owners-git-base", base, "--git-base", base, "--out", self.out), ("--git-base", base, "--owners-git-base", base, "--out", self.out),
+                     ("--git-base", base, "--out", self.out, "--owners-git-base"), ("--git-base", base, "--out", self.out, "--owners-git-base", base, "--owners-git-base", base),
+                     ("--git-base", base, "--out", self.out, "--owners-git-base", base, "--schema", "2", "--serial", "41", "--generated", "2026-11-25T12:00:00Z")):
+            with self.subTest(args):
+                code, out, err = self.run_builder("build", *args, self.env, self.stage_dir)
+                self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+                self.assertFalse(os.path.exists(self.out))
 
     # ---- the online format (schema 2): the same modules under a header that says which catalogue it is ----
 
@@ -1320,6 +1519,483 @@ class CommandLine(Base):
                           "2026-13-25T12:00:00Z", "2026-02-30T12:00:00Z", "2026-11-25T24:00:00Z", "2026-11-25T12:00:00Z\n"):
             with self.subTest(generated):
                 self.refused_with_usage("--schema", "2", "--serial", "41", "--generated", generated)
+
+    # ---- the three schemas, for a modules.env that holds a module of another owner ----
+
+    HEAD2 = ("--schema", "2", "--serial", "41", "--generated", "2026-11-25T12:00:00Z")
+    HEAD3 = ("--schema", "3", "--serial", "41", "--generated", "2026-11-25T12:00:00Z")
+
+    def withdrawn(self, text):
+        path = os.path.join(self.tmp, "withdrawn.txt")
+        with open(path, "wb") as f:
+            f.write(text.encode("utf-8") if isinstance(text, str) else text)
+        return path
+
+    def build_all(self, *options):
+        return self.run_builder("build", "--git-base", file_url(self.net), "--out", self.out, *options, "--owners-git-base", file_url(os.path.join(self.tmp, "owners")), self.env, self.stage_dir)
+
+    def test_schema_1_refuses_a_module_of_another_owner_and_names_it(self):
+        self.mixed()
+        code, out, err = self.build_all()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("module other", err)
+        self.assertIn("inkly", err)
+        self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_schema_2_leaves_a_module_of_another_owner_out(self):
+        self.mixed()
+        shutil.rmtree(os.path.join(self.stage_dir, "other"))  # (what is left out needs no archive)
+        self.assertEqual(self.build_all(*self.HEAD2), (0, "", ""))
+        mixed = self.catalogue()
+        os.remove(self.out)
+        self.write_env(self.ours)
+        self.assertEqual(self.build_all(*self.HEAD2), (0, "", ""))
+        self.assertEqual(mixed, self.catalogue(), "the module of another owner changes what schema 2 holds")
+        self.assertNotIn(b"repository", mixed)
+        self.assertNotIn(b"withdrawn", mixed)
+        self.assertNotIn(b"inkly", mixed)
+        self.assertEqual([m["name"] for m in json.loads(mixed)["modules"]], ["virt"])
+
+    def test_schema_2_of_nothing_but_another_owner_is_no_catalogue(self):
+        _, r2, digests = self.mixed()
+        self.write_env(env_text(name="OTHER", commit=r2.commit, component="CasaOS-Other")
+                       + "MODULE_OTHER_OWNER=inkly\nMODULE_OTHER_SHA256_AMD64=%s\nMODULE_OTHER_SHA256_ARM64=%s\n" % (digests["amd64"], digests["arm64"]))
+        code, out, err = self.build_all(*self.HEAD2)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("error: ", err)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_schema_3_is_the_reference_file(self):
+        r = self.good()
+        path = self.withdrawn("# gone\n\nvirt v0.1.0 The upgrade of the box failed.\nother v0.0.9 Replaced by a build that is safer.\n")
+        self.assertEqual(self.build_with(*self.HEAD3, "--withdrawn", path), (0, "", ""))
+        with open(os.path.join(HERE, "fixtures", "modules-catalogue", "schema-3.json"), "rb") as f:
+            want = f.read()
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r.dir, r.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read()).encode()
+        want = want.replace(b"@@COMMIT@@", r.commit.encode()).replace(b"@@SHA256_AMD64@@", digests["amd64"]).replace(b"@@SHA256_ARM64@@", digests["arm64"])
+        self.assertEqual(self.catalogue(), want)
+
+    def test_schema_3_holds_every_module_with_its_repository_and_its_mirror(self):
+        r1, r2, digests = self.mixed()
+        self.assertEqual(self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("# nothing is withdrawn\n")), (0, "", ""))
+        raw = self.catalogue()
+        three = json.loads(raw)
+        self.assertEqual(list(three), ["schema", "serial", "generated", "withdrawn", "modules"])
+        self.assertEqual((three["schema"], three["serial"], three["generated"], three["withdrawn"]), (3, 41, "2026-11-25T12:00:00Z", []))
+        other, virt = three["modules"]
+        for entry, repository, commit, release in ((other, "inkly/CasaOS-Other", r2.commit, r2), (virt, "ReCasaOS/CasaOS-VirtManagement", r1.commit, r1)):
+            self.assertEqual(list(entry), ["name", "component", "repository", "tier", "tag", "commit", "assets", "manifest"])
+            self.assertEqual((entry["repository"], entry["commit"], entry["tag"]), (repository, commit, "v0.1.1"))
+            for arch in ("amd64", "arm64"):
+                self.assertEqual(entry["assets"][arch]["url"], "https://github.com/ReCasaOS/modules/releases/download/m-%s-v0.1.1/%s" % (entry["name"], release.archive_name(arch)))
+        self.assertEqual({arch: other["assets"][arch]["sha256"] for arch in ("amd64", "arm64")}, digests)
+        self.assertEqual(raw, (json.dumps(three, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+        builder.parse_catalogue(raw, 3)
+
+    def test_schema_3_has_the_series_of_schema_2_and_the_modules_of_the_other_owners_too(self):
+        self.mixed()
+        self.assertEqual(self.build_all(*self.HEAD2), (0, "", ""))
+        two = json.loads(self.catalogue())
+        os.remove(self.out)
+        self.assertEqual(self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("")), (0, "", ""))
+        three = json.loads(self.catalogue())
+        self.assertEqual((three["serial"], three["generated"]), (two["serial"], two["generated"]))
+        self.assertEqual([m["name"] for m in three["modules"]], ["other", "virt"])
+        self.assertEqual([m["name"] for m in two["modules"]], ["virt"])
+
+    # ---- a version that is published is carried over (--carry), not fetched again from its author ----
+
+    def carry_from(self, mutate=None):
+        """Builds the catalogue of the modules.env as it is, and keeps it as the file to carry from (mutate edits its parsed form first); returns (the path, the bytes built)."""
+        self.assertEqual(self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("")), (0, "", ""))
+        first = self.catalogue()
+        os.remove(self.out)
+        parsed = json.loads(first)
+        if mutate:
+            mutate(parsed)
+        path = os.path.join(self.tmp, "carry.json")
+        with open(path, "wb") as f:
+            f.write(json.dumps(parsed, indent=2, ensure_ascii=False).encode("utf-8") + b"\n")
+        return path, first
+
+    def build_carry(self, path, withdrawn=""):
+        return self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn(withdrawn), "--carry", path)
+
+    def entry_of_other(self, parsed):
+        return next(e for e in parsed["modules"] if e["name"] == "other")
+
+    def older(self, parsed):
+        """The file offers an older version of the module than the one that is pinned."""
+        e = self.entry_of_other(parsed)
+        e["tag"] = "v0.0.9"
+        for a in e["assets"].values():
+            a["url"] = a["url"].replace("v0.1.1", "v0.0.9")
+
+    def test_a_version_of_another_owner_that_is_published_is_carried_not_fetched_again(self):
+        self.mixed()
+        path, first = self.carry_from()
+        # the author's repository is gone and the stage holds no archive of the module: only the file to carry from has it
+        shutil.rmtree(os.path.join(self.tmp, "owners"))
+        shutil.rmtree(os.path.join(self.stage_dir, "other"))
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+        builder.parse_catalogue(self.catalogue(), 3)
+
+    def test_a_module_of_recasaos_is_never_carried(self):
+        self.mixed()
+
+        def edit(parsed):
+            virt = next(e for e in parsed["modules"] if e["name"] == "virt")
+            virt["commit"] = "c" * 40
+            virt["manifest"]["title"] = "Not what the repository says"
+        path, first = self.carry_from(edit)
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+
+    def test_a_carried_version_that_is_not_the_pinned_one_is_refused_and_named(self):
+        self.mixed()
+
+        def commit(parsed):
+            self.entry_of_other(parsed)["commit"] = "c" * 40
+
+        def repository(parsed):
+            self.entry_of_other(parsed)["repository"] = "someone/CasaOS-Other"
+
+        def amd64(parsed):
+            self.entry_of_other(parsed)["assets"]["amd64"]["sha256"] = "e" * 64
+
+        def arm64(parsed):
+            self.entry_of_other(parsed)["assets"]["arm64"]["sha256"] = "e" * 64
+        for what, edit, reason in (("commit", commit, "commit"), ("repository", repository, "repository"), ("amd64 digest", amd64, "amd64"), ("arm64 digest", arm64, "arm64")):
+            with self.subTest(what):
+                path, _ = self.carry_from(edit)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("module other", err)
+                self.assertIn(reason, err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_another_tag_is_built_as_usual(self):
+        self.mixed()
+
+        path, first = self.carry_from(self.older)
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+        os.remove(self.out)
+        shutil.rmtree(os.path.join(self.stage_dir, "other"))
+        code, out, err = self.build_carry(path)  # (it is fetched, so it wants its archives in the stage)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("module other", err)
+
+    def test_a_file_to_carry_from_that_does_not_hold_is_refused(self):
+        self.mixed()
+        self.assertEqual(self.build_all(*self.HEAD2), (0, "", ""))
+        schema2 = self.catalogue()
+        os.remove(self.out)
+        path, first = self.carry_from()
+        duplicate = first.replace(b'"schema": 3,', b'"schema": 3, "schema": 3,', 1)
+        for what, raw in (("schema 2", schema2), ("not JSON", b'{"schema": 3,'), ("a key twice", duplicate), ("empty", b""), ("too large", b" " * (builder.MAX_CATALOGUE_BYTES + 1)),
+                          ("an entry that does not hold", first.replace(b'"tier": "community"', b'"tier": "core"', 1))):
+            with self.subTest(what):
+                with open(path, "wb") as f:
+                    f.write(raw)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("error: ") and err.count("\n") == 1, err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+        code, out, err = self.build_carry(os.path.join(self.tmp, "nothing.json"))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("cannot be read", err)
+
+    def test_a_carried_entry_is_written_whatever_the_order_of_the_file(self):
+        self.mixed()
+
+        def reverse(parsed):
+            e = self.entry_of_other(parsed)
+            e["assets"] = dict(reversed(list(e["assets"].items())))
+        path, first = self.carry_from(reverse)
+        self.assertEqual(list(json.load(open(path))["modules"][0]["assets"]), ["arm64", "amd64"])
+        self.assertEqual(self.build_carry(path), (0, "", ""))
+        self.assertEqual(self.catalogue(), first)
+
+    def test_the_archive_names_of_a_carried_module_are_its_own(self):
+        self.mixed()
+
+        def url(parsed, arch, name):
+            a = self.entry_of_other(parsed)["assets"][arch]
+            a["url"] = a["url"].rsplit("/", 1)[0] + "/" + name
+
+        def swapped(parsed):
+            url(parsed, "amd64", "linux-arm64-casaos-other-v0.1.1.tar.gz")
+            url(parsed, "arm64", "linux-amd64-casaos-other-v0.1.1.tar.gz")
+
+        def other_tag(parsed):
+            url(parsed, "amd64", "linux-amd64-casaos-other-v0.1.0.tar.gz")
+
+        def other_stem(parsed):
+            url(parsed, "amd64", "linux-amd64-casaos-virt-management-v0.1.1.tar.gz")
+        for what, edit in (("another arch", swapped), ("another tag", other_tag), ("another module's stem", other_stem)):
+            with self.subTest(what):
+                path, _ = self.carry_from(edit)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("module other", err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_an_empty_carry_is_a_usage_error(self):
+        self.mixed()
+        code, out, err = self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn(""), "--carry", "")
+        self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+        self.assertFalse(os.path.exists(self.out))
+        self.assertEqual(self.run_builder("list", self.env, "--carry", ""), (2, "", builder.USAGE + "\n"))
+
+    def test_a_file_to_carry_from_with_a_bad_name_is_refused_in_one_sentence(self):
+        self.mixed()
+
+        def nameless(parsed):
+            del self.entry_of_other(parsed)["name"]
+
+        def newline(parsed):
+            self.entry_of_other(parsed)["name"] = "bad\nname"
+
+        def number(parsed):
+            self.entry_of_other(parsed)["name"] = 7
+
+        def long(parsed):
+            self.entry_of_other(parsed)["name"] = "x" * 40
+        for what, edit in (("no name", nameless), ("a name with a new line", newline), ("a number", number), ("a name that is too long", long)):
+            with self.subTest(what):
+                path, _ = self.carry_from(edit)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("error: ") and err.count("\n") == 1, err)
+                self.assertNotIn("Traceback", err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_carry_is_for_schema_3_only(self):
+        self.mixed()
+        path, _ = self.carry_from()
+        for options in (("--carry", path), self.HEAD2 + ("--carry", path), self.HEAD3 + ("--carry", path), self.HEAD2 + ("--withdrawn", self.withdrawn(""), "--carry", path),
+                        self.HEAD3 + ("--carry", path, "--withdrawn", self.withdrawn("")), self.HEAD3 + ("--withdrawn", self.withdrawn(""), "--carry"),
+                        self.HEAD3 + ("--withdrawn", self.withdrawn(""), "--carry", path, "--carry", path)):
+            with self.subTest(options):
+                code, out, err = self.build_all(*options)
+                self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+                self.assertFalse(os.path.exists(self.out))
+        self.assertIn("--carry FILE", builder.USAGE)
+
+    def test_a_carried_version_may_not_be_withdrawn_in_the_same_catalogue(self):
+        self.mixed()
+        path, _ = self.carry_from()
+        code, out, err = self.build_carry(path, "other v0.1.1 It does not hold.\n")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("module other v0.1.1 is withdrawn", err)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_a_carried_module_is_held_to_the_rules_between_modules(self):
+        self.mixed()
+
+        def same_unit(parsed):
+            self.entry_of_other(parsed)["manifest"]["unit"] = "casaos-virt-management.service"
+        path, _ = self.carry_from(same_unit)
+        code, out, err = self.build_carry(path)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("share the unit casaos-virt-management.service", err)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_list_leaves_out_what_is_carried(self):
+        self.mixed()
+        path, _ = self.carry_from()
+        both = self.run_builder("list", self.env)
+        self.assertEqual(both[0], 0)
+        self.assertEqual([line.split()[0] for line in both[1].splitlines()], ["other", "virt"])
+        self.assertEqual(self.run_builder("list", self.env, "--carry", path), (0, "".join(l + "\n" for l in both[1].splitlines() if l.startswith("virt ")), ""))
+
+        path, _ = self.carry_from(self.older)
+        self.assertEqual(self.run_builder("list", self.env, "--carry", path), both)
+        with open(path, "wb") as f:
+            f.write(b"{}")
+        code, out, err = self.run_builder("list", self.env, "--carry", path)
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.startswith("error: "), err)
+        self.assertEqual(self.run_builder("list", self.env, "--carry", os.path.join(self.tmp, "nothing.json"))[:2], (1, ""))
+        for args in (("--carry",), ("--carry", path, "x"), (path, "--carry"), ("--carry", path, "--carry", path)):
+            with self.subTest(args):
+                self.assertEqual(self.run_builder("list", self.env, *args), (2, "", builder.USAGE + "\n"))
+
+    def test_the_withdrawn_versions(self):
+        reasons = {"é" * 200: "accents", "a" * 200: "200 characters", "A reason, with spaces: and (symbols) 100%": "punctuation"}
+        text = "# a comment\n\n   \nvirt v0.1.0 The upgrade failed.\nother v0.0.9 " + "é" * 200 + "\n  # another comment\nvirt v0.1.1 Two  spaces stay.\n"
+        got = builder.read_withdrawn(self.withdrawn(text))
+        self.assertEqual(got, [{"name": "virt", "tag": "v0.1.0", "reason": "The upgrade failed."}, {"name": "other", "tag": "v0.0.9", "reason": "é" * 200},
+                               {"name": "virt", "tag": "v0.1.1", "reason": "Two  spaces stay."}])
+        self.assertEqual([list(item) for item in got], [["name", "tag", "reason"]] * 3)
+        self.assertEqual(builder.read_withdrawn(self.withdrawn("")), [])
+        self.assertEqual(builder.read_withdrawn(self.withdrawn("# nothing\n\n")), [])
+        self.assertEqual(len(builder.read_withdrawn(self.withdrawn("".join("virt v0.%d.0 r\n" % i for i in range(64))))), 64)
+        for reason in reasons:
+            with self.subTest(reasons[reason]):
+                self.assertEqual(builder.read_withdrawn(self.withdrawn("virt v0.1.0 %s\n" % reason))[0]["reason"], reason)
+
+    def test_the_withdrawn_versions_that_are_refused(self):
+        cases = {
+            "65 lines": "".join("virt v0.%d.0 r\n" % i for i in range(65)),
+            "a pair twice": "virt v0.1.0 a\nother v0.1.0 b\nvirt v0.1.0 c\n",
+            "a name in upper case": "Virt v0.1.0 a\n",
+            "a name that starts with a digit": "1virt v0.1.0 a\n",
+            "a name of 33 characters": "v" * 33 + " v0.1.0 a\n",
+            "a tag with no v": "virt 0.1.0 a\n",
+            "a tag of two numbers": "virt v0.1 a\n",
+            "a tag with a leading zero": "virt v0.02.0 old\n",
+            "a tag with a leading zero in the first number": "virt v01.2.3 old\n",
+            "no tag": "virt\n",
+            "no reason": "virt v0.1.0\n",
+            "an empty reason": "virt v0.1.0 \n",
+            "a reason of spaces": "virt v0.1.0     \n",
+            "a reason of 201 characters": "virt v0.1.0 " + "a" * 201 + "\n",
+            "a reason of 201 accents": "virt v0.1.0 " + "é" * 201 + "\n",
+            "a tab": "virt v0.1.0 a\tb\n",
+            "a tab for the separator": "virt\tv0.1.0\ta\n",
+            "a carriage return at the end": "virt v0.1.0 a\r\n",
+            "a carriage return inside": "virt v0.1.0 a\rb\n",
+            "an everyone": "virt v0.1.0 look @everyone\n",
+            "a mention": "virt v0.1.0 thanks @someone\n",
+            "a channel": "virt v0.1.0 <!channel> now\n",
+            "a reason that shows nothing": "virt v0.1.0 ⠀ㅤ\n",
+            "a control character": "virt v0.1.0 a\x07b\n",
+            "a line separator": "virt v0.1.0 a b\n",
+            "bytes that are not UTF-8": b"virt v0.1.0 caf\xe9\n",
+        }
+        for what, text in cases.items():
+            with self.subTest(what):
+                with self.assertRaises(builder.Refused) as raised:
+                    builder.read_withdrawn(self.withdrawn(text))
+                self.assertIn("withdrawn", str(raised.exception))
+        with self.assertRaises(builder.Refused):
+            builder.read_withdrawn(os.path.join(self.tmp, "nothing"))
+
+    def test_a_withdrawn_file_saved_with_windows_line_ends_says_what_to_do(self):
+        with self.assertRaises(builder.Refused) as raised:
+            builder.read_withdrawn(self.withdrawn("# a comment\r\n\r\nvirt v0.1.0 old\r\n"))
+        for word in ("line 3", "carriage return", "Unix line endings"):
+            self.assertIn(word, str(raised.exception))
+
+    def test_a_catalogue_does_not_withdraw_what_it_offers(self):
+        self.mixed()
+        code, out, err = self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("other v0.1.0 old\nother v0.1.1 gone\n"))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("other", err)
+        self.assertIn("v0.1.1", err)
+        self.assertIn("withdrawn", err)
+        self.assertFalse(os.path.exists(self.out))
+        # another version of that module, or the same version of another module, may be withdrawn
+        self.assertEqual(self.build_all(*self.HEAD3, "--withdrawn", self.withdrawn("other v0.1.0 old\nvirt v0.0.9 old\n")), (0, "", ""))
+
+    def test_a_refused_withdrawn_file_is_no_catalogue(self):
+        self.good()
+        code, out, err = self.build_with(*self.HEAD3, "--withdrawn", self.withdrawn("virt v0.1.0 @everyone\n"))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("line 1", err)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_schema_3_asks_for_its_withdrawn_file_and_schema_2_has_none(self):
+        self.good()
+        path = self.withdrawn("")
+        self.refused_with_usage(*self.HEAD3)
+        self.refused_with_usage(*self.HEAD2, "--withdrawn", path)
+        self.refused_with_usage(*self.HEAD3, "--withdrawn")
+        self.refused_with_usage("--withdrawn", path, *self.HEAD3)
+        self.refused_with_usage("--schema", "4", "--serial", "41", "--generated", "2026-11-25T12:00:00Z", "--withdrawn", path)
+        self.refused_with_usage(*self.HEAD3, "--withdrawn", path, "--withdrawn", path)
+        self.refused_with_usage("--withdrawn", path)
+
+    def test_the_proof_of_each_schema(self):
+        _, r2, _ = self.mixed()
+        listing = {"catalogue": {"ok": True}, "modules": [{"name": "virt", "tag": "v0.1.1", "tier": "community"}]}
+        out = os.path.join(self.tmp, "out.json")
+        with open(out, "w") as f:
+            json.dump(listing, f)
+        for options, code in (((), 1), (("--schema", "3"), 1), (("--schema", "2"), 0)):
+            with self.subTest(options):
+                self.assertEqual(self.run_builder("proof", self.env, out, *options)[0], code)
+        listing["modules"].append({"name": "other", "tag": "v0.1.1", "tier": "community"})
+        with open(out, "w") as f:
+            json.dump(listing, f)
+        for options in ((), ("--schema", "3"), ("--schema", "2")):
+            with self.subTest(options):
+                self.assertEqual(self.run_builder("proof", self.env, out, *options), (0, "", ""))
+        for args in (("--schema",), ("--schema", "1"), ("--schema", "4"), ("--schema", "3", "--schema", "3"), ("3",), ("--schema=3",)):
+            with self.subTest(args):
+                self.assertEqual(self.run_builder("proof", self.env, out, *args), (2, "", builder.USAGE + "\n"))
+        self.write_env(self.ours)  # (nothing of another owner: both schemas ask the same)
+        self.assertEqual(self.run_builder("proof", self.env, out, "--schema", "2")[0], 0)
+
+
+class Schema3AgainstTheCore(Base):
+    """The rules of schema 3 that the builder copies, held to the Go source of the core that has them (CORE_SOURCE): skipped, as it must be, for a core that has none."""
+
+    def setUp(self):
+        super().setUp()
+        path = os.path.join(os.environ.get("CORE_SOURCE") or os.path.join(HERE, "..", "..", "CasaOS"), "pkg", "osmodule", "catalogue.go")
+        try:
+            with open(path, encoding="utf-8") as f, open(os.path.join(os.path.dirname(path), "manifest.go"), encoding="utf-8") as g:
+                self.go = f.read() + g.read()  # (the patterns of a name and of a tag are in the one or the other)
+        except OSError:
+            self.skipTest("no source of the core at %s (CORE_SOURCE names one)" % path)
+        if "CommunityCatalogueSchema" not in self.go:
+            self.skipTest("the core at %s has no schema 3" % path)
+
+    def regex(self, var):
+        found = re.search(r"\b%s\s*=\s*regexp\.MustCompile\(`\^(.*)\$`\)" % var, self.go)
+        self.assertIsNotNone(found, "%s is not in the source" % var)
+        return found.group(1)
+
+    def number(self, var):
+        found = re.search(r"\b%s\b(?:\s+int64)?\s*=\s*(\d+)" % var, self.go)
+        self.assertIsNotNone(found, "%s is not in the source" % var)
+        return int(found.group(1))
+
+    def test_the_owner_the_bounds_and_the_mirror(self):
+        self.assertEqual(self.regex("ownerRe"), builder.OWNER_RE.pattern)
+        self.assertEqual(self.number("CommunityCatalogueSchema"), builder.COMMUNITY_SCHEMA)
+        self.assertEqual(self.number("MaxWithdrawn"), builder.MAX_WITHDRAWN)
+        self.assertEqual(self.number("maxReasonRunes"), builder.MAX_REASON)
+        self.assertIn('recasaosOwner = "%s"' % builder.OWNER, self.go)
+        self.assertIn('"%sm-" + e.Name + "-" + e.Tag + "/"' % builder.MIRROR_URL, self.go)
+        self.assertEqual(builder.mirror_url("virt", "v0.1.1", "a.tar.gz"), builder.MIRROR_URL + "m-virt-v0.1.1/a.tar.gz")
+
+    def test_what_the_builder_writes_is_what_those_rules_take(self):
+        self.mixed_catalogue()
+        three = json.loads(self.catalogue())
+        owner_re, name_re, tag_re, archive_re = (re.compile(self.regex(v)) for v in ("ownerRe", "nameRe", "tagRe", "archiveRe"))
+        self.assertLessEqual(len(three["withdrawn"]), self.number("MaxWithdrawn"))
+        pairs = set()
+        for w in three["withdrawn"]:
+            self.assertTrue(name_re.fullmatch(w["name"]) and tag_re.fullmatch(w["tag"]) and 1 <= len(w["reason"]) <= self.number("maxReasonRunes"))
+            self.assertNotIn((w["name"], w["tag"]), pairs)
+            pairs.add((w["name"], w["tag"]))
+        self.assertEqual(len(pairs), 1)
+        for e in three["modules"]:
+            owner, _, repo = e["repository"].partition("/")
+            self.assertTrue(owner_re.fullmatch(owner) and repo == e["component"])
+            self.assertTrue(owner == "ReCasaOS" or e["tier"] == "community")
+            for arch, asset in e["assets"].items():
+                prefix = "https://github.com/ReCasaOS/modules/releases/download/m-%s-%s/" % (e["name"], e["tag"])
+                self.assertTrue(asset["url"].startswith(prefix) and len(asset["url"]) <= 512)
+                found = archive_re.fullmatch(asset["url"][len(prefix):])
+                self.assertTrue(found and found.group(1) == arch and found.group(2) == e["tag"])
+        self.assertEqual({e["repository"].partition("/")[0] for e in three["modules"]}, {"ReCasaOS", "inkly"})
+
+    def mixed_catalogue(self):
+        self.mixed()
+        withdrawn = os.path.join(self.tmp, "withdrawn.txt")
+        with open(withdrawn, "w") as f:
+            f.write("virt v0.1.0 The upgrade failed.\n")
+        header = {"schema": 3, "serial": 41, "generated": "2026-11-25T12:00:00Z", "withdrawn": builder.read_withdrawn(withdrawn)}
+        builder.build(self.env, self.stage_dir, self.out, file_url(self.net), header, file_url(os.path.join(self.tmp, "owners")))
 
 
 # ---- the script that fetches (scripts/build-release-bundle.sh) ---------------------------------------------------------------------------------------------
@@ -1595,6 +2271,16 @@ done
         code, out, err = self.run_functions("build_modules_catalogue", core=CORES_FROM_THE_MINIMUM[0])
         self.assertEqual(code, 0, err)
         self.assertEqual(self.made(), ["modules-catalogue-v9.9.9.json"])
+
+    def test_a_release_never_ships_a_module_of_another_owner_and_fetches_nothing_for_it(self):
+        self.write_env(env_text(commit="a" * 40) + "MODULE_VIRT_OWNER=inkly\nMODULE_VIRT_SHA256_AMD64=%s\nMODULE_VIRT_SHA256_ARM64=%s\n" % ("c" * 64, "d" * 64))
+        code, out, err = self.run_functions("build_modules_catalogue", core=CORES_FROM_THE_MINIMUM[0], base="file:///nonexistent")
+        self.assertNotEqual(code, 0, "the build went on")
+        for word in ("virt", "inkly", "only holds", "ReCasaOS"):
+            self.assertIn(word, err)
+        self.assertNotIn("Failed to download", err, "something was fetched before the owner was looked at")
+        self.assertEqual(self.made(), [], "a catalogue was written")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "staging", "modules")), "something was staged")
 
     def test_a_release_with_no_module_asks_nothing_of_its_core(self):
         self.write_env("# nothing\n\n")
@@ -1965,7 +2651,7 @@ class Workflow(unittest.TestCase):
 def main():
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
-    for case in (ModulesEnv, Checksums, Build, Units, Archives, Proof, AgainstTheCore, CommandLine, BuildScript, Workflow):
+    for case in (ModulesEnv, Checksums, Build, Units, Archives, Proof, AgainstTheCore, Schema3AgainstTheCore, CommandLine, BuildScript, Workflow):
         for name in loader.getTestCaseNames(case):
             if not ONLY or re.search(ONLY, "%s.%s" % (case.__name__, name)):
                 suite.addTest(case(name))
