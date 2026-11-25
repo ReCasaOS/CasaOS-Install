@@ -12,7 +12,7 @@ Components: CasaOS `v0.4.125`, CasaOS-UI `v0.4.227`. Unchanged from v0.5.193: Ca
 
 ### Proof
 
-The core's weather passed its tests (settings, cache, a failed read, the place search) and the answers of the live Open-Meteo API were checked by hand against what the core reads. The interface passed its full suite and was seen on the mock: the widget and its menu on the new dashboard, none on the classic one, the place search, the units and the save. Not seen yet on a real box. install check: result added after the check.
+The core's weather passed its tests (settings, cache, a failed read, the place search) and the answers of the live Open-Meteo API were checked by hand against what the core reads. The interface passed its full suite and was seen on the mock: the widget and its menu on the new dashboard, none on the classic one, the place search, the units and the save. Not seen yet on a real box. The install check passed on all 12 legs on the first try (run 45620860128), and the promote job made it Latest.
 
 ## [0.5.193] - 2026-11-25
 
