@@ -16,7 +16,7 @@ Components: CasaOS-UI `v0.4.229`. Unchanged from v0.5.195: CasaOS `v0.4.125`, Ca
 
 ### Proof
 
-The weather menu was seen too tight on a real box with v0.5.194, then checked on the mock with the fix and a long place name. The Modules window passed its own tests and was seen on the mock in its pull request; it was not tried against this release's core. install check: result added after the check.
+The weather menu was seen too tight on a real box with v0.5.194, then checked on the mock with the fix and a long place name. The Modules window passed its own tests and was seen on the mock in its pull request; it was not tried against this release's core. The install check passed on all 12 legs on the first try (run 45635508383), and the promote job made it Latest.
 
 ## [0.5.195] - 2026-11-25
 
