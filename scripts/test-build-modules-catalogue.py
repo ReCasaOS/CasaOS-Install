@@ -1399,19 +1399,21 @@ if read -r line; then echo "input=$line" >> '@@LOG@@'; exit 9; fi
         with open(path) as f:
             return f.read()
 
-    def run_functions(self, body, python=None, core=None, probe_timeout=30, run_timeout=300):
+    def run_functions(self, body, python=None, core=None, probe_timeout=30, run_timeout=300, base=None):
+        # (readonly where build-release-bundle.sh declares them readonly: a function that assigns to one, even in front of a command, fails here as in a release;
+        # MODULES_LOCK is left assignable for the case that points it at files that are not there)
         script = """set -euo pipefail
-SCRIPT_DIR=%(scripts)s
-STAGING_ROOT=%(staging)s
-OUTPUT_DIR=%(output)s
+readonly SCRIPT_DIR=%(scripts)s
+readonly STAGING_ROOT=%(staging)s
+readonly OUTPUT_DIR=%(output)s
 MODULES_LOCK=%(env)s
-CHECKSUMS_BASE_URL=%(base)s
-MODULES_GIT_BASE_URL=%(base)s
-RELEASE_TAG=v9.9.9
-PYTHON=%(python)s
+readonly CHECKSUMS_BASE_URL=%(base)s
+readonly MODULES_GIT_BASE_URL=%(base)s
+readonly RELEASE_TAG=v9.9.9
+readonly PYTHON=%(python)s
 CASAOS_TAG=%(core)s
 CASAOS_COMMIT=%(commit)s
-WORKSPACE_ROOT=%(workspace)s
+readonly WORKSPACE_ROOT=%(workspace)s
 MODULES_PROBE_TIMEOUT=%(timeout)s
 eval "$(tr -d '\\r' <%(script)s | sed -n '/^readonly MODULES_MIN_CORE_TAG=/p')"
 [ -n "${MODULES_MIN_CORE_TAG:-}" ] || { echo "build-release-bundle.sh defines no MODULES_MIN_CORE_TAG" >&2; exit 97; }
@@ -1421,7 +1423,7 @@ for f in fail compute_checksum check_core_for_modules fill_modules_min_core_tag 
 done
 %(body)s
 """ % {
-            "scripts": sh(HERE), "staging": sh(os.path.join(self.tmp, "staging")), "output": sh(self.output), "env": sh(self.env), "base": file_url(self.net),
+            "scripts": sh(HERE), "staging": sh(os.path.join(self.tmp, "staging")), "output": sh(self.output), "env": sh(self.env), "base": base or file_url(self.net),
             "python": sh(python or sys.executable), "script": sh(BUILD_SCRIPT), "body": body, "core": shlex.quote(MIN_CORE if core is None else core),
             "commit": "c" * 40, "workspace": sh(self.workspace), "timeout": probe_timeout,
         }
@@ -1577,7 +1579,7 @@ done
     def test_a_catalogue_is_not_built_for_a_core_that_has_no_module_and_nothing_is_fetched(self):
         self.good()
         shutil.rmtree(self.stage_dir)
-        code, out, err = self.run_functions('CHECKSUMS_BASE_URL=file:///nonexistent\nMODULES_GIT_BASE_URL=file:///nonexistent\nbuild_modules_catalogue', core=CORES_BELOW_THE_MINIMUM[-1])
+        code, out, err = self.run_functions('build_modules_catalogue', core=CORES_BELOW_THE_MINIMUM[-1], base="file:///nonexistent")
         self.assertNotEqual(code, 0, "the build went on")
         self.assertIn("casaos module", err)
         self.assertNotIn("Failed to download", err, "the checksums were fetched before the core was looked at")
@@ -1769,7 +1771,7 @@ done
     def test_a_checkout_of_the_core_that_has_no_assistant_is_refused_before_anything_is_fetched(self):
         self.good_release()
         shutil.rmtree(os.path.join(self.workspace, "CasaOS", "pkg", "modulecmd"))
-        code, out, err = self.run_functions('CHECKSUMS_BASE_URL=file:///nonexistent\nMODULES_GIT_BASE_URL=file:///nonexistent\nbuild_modules_catalogue')
+        code, out, err = self.run_functions('build_modules_catalogue', base="file:///nonexistent")
         self.assertNotEqual(code, 0)
         self.assertIn("pkg/modulecmd", err)
         self.assertIn("casaos module", err)

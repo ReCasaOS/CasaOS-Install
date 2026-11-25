@@ -359,8 +359,9 @@ build_modules_catalogue() {
     check_core_for_modules
 
     stage="${STAGING_ROOT}/modules"
-    # (the two variables are not exported: they are given to the script that fetches, which says why it stops)
-    CHECKSUMS_BASE_URL="${CHECKSUMS_BASE_URL}" PYTHON="${PYTHON}" bash "${SCRIPT_DIR}/stage-modules.sh" "${MODULES_LOCK}" "${stage}" || exit 1
+    # (the two variables are readonly and not exported: env hands them to the script that fetches, which says why it stops; a prefix assignment
+    # to a readonly variable would be an error of this shell)
+    env CHECKSUMS_BASE_URL="${CHECKSUMS_BASE_URL}" PYTHON="${PYTHON}" bash "${SCRIPT_DIR}/stage-modules.sh" "${MODULES_LOCK}" "${stage}" || exit 1
 
     "${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" build --git-base "${MODULES_GIT_BASE_URL}" --out "${file}" "${MODULES_LOCK}" "${stage}" ||
         fail "The module catalogue was not built."
