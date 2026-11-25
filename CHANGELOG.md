@@ -20,6 +20,12 @@ This release is published as a pre-release until the online catalogue has been t
 - **An update of ReCasaOS brings the modules to the versions of that release, not further.** The update of the installed modules at the end of an install now works from the release's own catalogue (`casaos module list --shipped`, `casaos module update --shipped`), so that a release installed at night does not also install a module version the box has seen for less than a day. A module that is already ahead of the release is left as it is.
 - The catalogue builder can write the online format, and its download loop is a script of its own that the catalogue's repository calls ([#343](https://github.com/ReCasaOS/CasaOS-Install/pull/343)). A module may not take the name of the units of the installer's update of the modules.
 
+### Proof
+
+The core's part passed its tests with the race detector on Linux and ran on a full stack in a container: a core fetched the catalogue really published by ReCasaOS/modules and kept it, refused an older one, replaced a broken one, wrote nothing through a link, and went back to the release's list with the setting off. The catalogue's repository published twice, once by hand and once from a merge, and its check ran on a pull request. The installer's update of the modules was tested with the exact arguments of its three calls, for a core at `v0.4.126` and for older ones. The release build proved this release's catalogue with the pinned core, and the install check passed on all 12 legs on the first try (run 45642528741); on those installs the update of the modules ran with `--shipped` and found nothing to update, as expected.
+
+Not proven yet, and the reason this release is held as a pre-release: a real box that fetches the catalogue, a module version offered and installed from it, and an update made by the night after its 24 hours.
+
 ## [0.5.196] - 2026-11-25
 
 Components: CasaOS-UI `v0.4.229`. Unchanged from v0.5.195: CasaOS `v0.4.125`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
