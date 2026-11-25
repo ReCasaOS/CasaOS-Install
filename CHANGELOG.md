@@ -2,6 +2,22 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.196] - 2026-11-25
+
+Components: CasaOS-UI `v0.4.229`. Unchanged from v0.5.195: CasaOS `v0.4.125`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The weather menu has room inside.** Its text touched the menu's edges; it now has a margin all around, and a long place name wraps ([ReCasaOS/CasaOS-UI#240](https://github.com/ReCasaOS/CasaOS-UI/pull/240)).
+
+### Changed
+
+- **The Modules window is ready to look for newer versions.** The interface part of the modules' own catalogue is in ([ReCasaOS/CasaOS-UI#239](https://github.com/ReCasaOS/CasaOS-UI/pull/239)); the core of this release does not have its part yet, so the window looks and works as before.
+
+### Proof
+
+The weather menu was seen too tight on a real box with v0.5.194, then checked on the mock with the fix and a long place name. The Modules window passed its own tests and was seen on the mock in its pull request; it was not tried against this release's core. install check: result added after the check.
+
 ## [0.5.195] - 2026-11-25
 
 Components: CasaOS-UI `v0.4.228`. Unchanged from v0.5.194: CasaOS `v0.4.125`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
