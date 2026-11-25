@@ -2,6 +2,18 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.195] - 2026-11-25
+
+Components: CasaOS-UI `v0.4.228`. Unchanged from v0.5.194: CasaOS `v0.4.125`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The weather menu is no longer crossed by the app cards' settings buttons.** On the new dashboard, the small gear of the cards under the open weather menu showed through it ([ReCasaOS/CasaOS-UI#238](https://github.com/ReCasaOS/CasaOS-UI/pull/238)).
+
+### Proof
+
+Seen on a real box with v0.5.194, then checked on the mock with the fix: nothing covers the open menu. install check: result added after the check.
+
 ## [0.5.194] - 2026-11-25
 
 Components: CasaOS `v0.4.125`, CasaOS-UI `v0.4.227`. Unchanged from v0.5.193: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
