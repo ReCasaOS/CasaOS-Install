@@ -2,6 +2,16 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.193] - 2026-11-25
+
+Components: module `mcp` `v0.2.0`. Unchanged from v0.5.192: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.226`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An AI assistant can read and manage the system of the box.** The `mcp` module now offers the system's actions: the machine's state and load, the updates of ReCasaOS, of the packages and of Docker, the optional modules, the alerts and statistics settings, the guided upgrade of the operating system, restart and shutdown. 241 actions are classed, 55 more than before. Shutdown, restart, every update, the install and removal of a module and each acting step of the operating system upgrade go through `destroy`, the tool an assistant can ask before using; a *Read only* token neither finds nor runs them. The terminal and the SSH sign-in are never offered. The drives, the shares, the accounts, Files and the fleet are not offered yet ([ReCasaOS/ReCasaOS-MCP#5](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/5)).
+
+A box that has the module installed gets the new version with this update, or from the Modules page.
+
 ## [0.5.192] - 2026-11-24
 
 Components: unchanged from v0.5.191: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.226`, module `mcp` `v0.1.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
