@@ -12,6 +12,10 @@ Components: module `mcp` `v0.2.0`. Unchanged from v0.5.192: CasaOS `v0.4.124`, C
 
 A box that has the module installed gets the new version with this update, or from the Modules page.
 
+### Proof
+
+The module's `v0.2.0` passed its tests with the race detector on Linux and ran on a full stack in a container (the real Gateway, accounts service, message bus and core) with a read token and a full token; no action that goes through `destroy` was run there. The catalogue of this release was built from the published archives, with `mcp` at `v0.2.0` in the core tier. The install check passed on all 12 legs on the first try (run 45583537065), and the promote job made it Latest.
+
 ## [0.5.192] - 2026-11-24
 
 Components: unchanged from v0.5.191: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.226`, module `mcp` `v0.1.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
