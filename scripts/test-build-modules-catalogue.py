@@ -1752,6 +1752,29 @@ class CommandLine(Base):
         self.assertFalse(os.path.exists(self.out))
         self.assertEqual(self.run_builder("list", self.env, "--carry", ""), (2, "", builder.USAGE + "\n"))
 
+    def test_a_file_to_carry_from_with_a_bad_name_is_refused_in_one_sentence(self):
+        self.mixed()
+
+        def nameless(parsed):
+            del self.entry_of_other(parsed)["name"]
+
+        def newline(parsed):
+            self.entry_of_other(parsed)["name"] = "bad\nname"
+
+        def number(parsed):
+            self.entry_of_other(parsed)["name"] = 7
+
+        def long(parsed):
+            self.entry_of_other(parsed)["name"] = "x" * 40
+        for what, edit in (("no name", nameless), ("a name with a new line", newline), ("a number", number), ("a name that is too long", long)):
+            with self.subTest(what):
+                path, _ = self.carry_from(edit)
+                code, out, err = self.build_carry(path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("error: ") and err.count("\n") == 1, err)
+                self.assertNotIn("Traceback", err)
+                self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
     def test_carry_is_for_schema_3_only(self):
         self.mixed()
         path, _ = self.carry_from()

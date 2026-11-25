@@ -365,8 +365,16 @@ def read_carried(path):
     try:
         return {e["name"]: e for e in parse_catalogue(raw, COMMUNITY_SCHEMA)["modules"]}
     except Refused as err:
+        who = ""
         at = re.match(r"modules\.([0-9]+)\.", str(err))
-        who = " (module %s)" % json.loads(raw)["modules"][int(at.group(1))]["name"] if at else ""
+        if at:
+            # (the file did not hold: its entry may be of any shape, and its name is text from the web, named only when it is a module's name)
+            try:
+                name = json.loads(raw)["modules"][int(at.group(1))]["name"]
+            except (ValueError, KeyError, IndexError, TypeError):
+                name = None
+            if isinstance(name, str) and NAME_RE.fullmatch(name):
+                who = " (module %s)" % name
         raise Refused("the catalogue to carry over is not a catalogue of schema 3%s: %s" % (who, err))
 
 
