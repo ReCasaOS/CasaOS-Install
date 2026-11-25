@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.198] - 2026-11-25
+
+Components: CasaOS-UI `v0.4.230`. Unchanged from v0.5.197: CasaOS `v0.4.126`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+This is the release that offers to every box what v0.5.197 held as a pre-release: a module can get a new version without a new release of ReCasaOS (see the v0.5.197 entry below).
+
+### Added
+
+- **The settings menu says when a module has an update.** The settings icon of the top bar carries its red dot when an installed module has a later version waiting, as it does for an update of ReCasaOS, and the *Modules* row of the menu carries the same dot and says how many updates wait. The count is read when the dashboard loads and when the Modules window closes ([ReCasaOS/CasaOS-UI#241](https://github.com/ReCasaOS/CasaOS-UI/pull/241)).
+
+### Proof
+
+v0.5.197 was tried on a real box: the box fetched the catalogue published by ReCasaOS/modules, the Modules window gave its date, and a version of the `mcp` module that no release of ReCasaOS ships (`v0.2.1`, published through the catalogue alone) was offered there.
+
 ## [0.5.197] - 2026-11-25
 
 Components: CasaOS `v0.4.126`. Unchanged from v0.5.196: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.229`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
