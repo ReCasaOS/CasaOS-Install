@@ -16,6 +16,8 @@ This is the release that offers to every box what v0.5.197 held as a pre-release
 
 v0.5.197 was tried on a real box: the box fetched the catalogue published by ReCasaOS/modules, the Modules window gave its date, and a version of the `mcp` module that no release of ReCasaOS ships (`v0.2.1`, published through the catalogue alone) was offered there.
 
+The install check of this release passed on all 12 legs on the first try (run 45664874381), and the promote job made it Latest. Not proven on a real box yet: the update of a module from the online catalogue, by hand or by the night after its 24 hours.
+
 ## [0.5.197] - 2026-11-25
 
 Components: CasaOS `v0.4.126`. Unchanged from v0.5.196: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.229`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
