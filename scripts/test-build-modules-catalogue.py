@@ -1257,6 +1257,64 @@ class CommandLine(Base):
             with self.subTest(args):
                 self.assertEqual(self.run_builder(*args)[0], 2)
 
+    # ---- the online format (schema 2): the same modules under a header that says which catalogue it is ----
+
+    def build_with(self, *options):
+        return self.run_builder("build", "--git-base", file_url(self.net), "--out", self.out, *options, self.env, self.stage_dir)
+
+    def test_build_without_options_is_byte_identical(self):
+        # the catalogue of a release, as the builder wrote it before it knew schema 2; only what changes from run to run is filled in
+        r = self.good()
+        self.assertEqual(self.build_with(), (0, "", ""))
+        with open(os.path.join(HERE, "fixtures", "modules-catalogue", "schema-1.json"), "rb") as f:
+            want = f.read()
+        digests = {}
+        for arch in ("amd64", "arm64"):
+            with open(os.path.join(r.dir, r.archive_name(arch)), "rb") as f:
+                digests[arch] = sha256(f.read()).encode()
+        want = want.replace(b"@@COMMIT@@", r.commit.encode()).replace(b"@@SHA256_AMD64@@", digests["amd64"]).replace(b"@@SHA256_ARM64@@", digests["arm64"])
+        self.assertEqual(self.catalogue(), want)
+
+    def test_build_schema_2_has_serial_and_generated(self):
+        self.good()
+        self.assertEqual(self.build_with(), (0, "", ""))
+        one = json.loads(self.catalogue())
+        os.remove(self.out)
+        self.assertEqual(self.build_with("--schema", "2", "--serial", "41", "--generated", "2026-11-25T12:00:00Z"), (0, "", ""))
+        raw = self.catalogue()
+        two = json.loads(raw)
+        self.assertEqual(list(two), ["schema", "serial", "generated", "modules"])
+        self.assertEqual((two["schema"], two["serial"], two["generated"]), (2, 41, "2026-11-25T12:00:00Z"))
+        self.assertIs(type(two["serial"]), int)
+        self.assertEqual(two["modules"], one["modules"])
+        self.assertEqual(raw, (json.dumps(two, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+
+    def refused_with_usage(self, *options):
+        code, out, err = self.build_with(*options)
+        self.assertEqual((code, out, err), (2, "", builder.USAGE + "\n"))
+        self.assertFalse(os.path.exists(self.out), "a catalogue was written")
+
+    def test_schema_2_options_go_together(self):
+        self.good()
+        schema, serial, generated = ("--schema", "2"), ("--serial", "41"), ("--generated", "2026-11-25T12:00:00Z")
+        for options in (schema, serial, generated, schema + serial, schema + generated, serial + generated, serial + schema + generated,
+                        schema + generated + serial, schema + serial + generated + serial, ("--schema", "1") + serial + generated):
+            with self.subTest(options):
+                self.refused_with_usage(*options)
+
+    def test_serial_must_be_a_positive_integer(self):
+        self.good()
+        for serial in ("0", "-1", "01", "1.0", "abc", "", "+1", " 1", "1 ", "١", "9223372036854775808"):
+            with self.subTest(serial):
+                self.refused_with_usage("--schema", "2", "--serial", serial, "--generated", "2026-11-25T12:00:00Z")
+
+    def test_generated_must_be_utc(self):
+        self.good()
+        for generated in ("2026-11-25T12:00:00+01:00", "2026-11-25", "", "2026-11-25T12:00:00z", "2026-11-25 12:00:00Z", "2026-11-25T12:00:00.5Z",
+                          "2026-13-25T12:00:00Z", "2026-02-30T12:00:00Z", "2026-11-25T24:00:00Z", "2026-11-25T12:00:00Z\n"):
+            with self.subTest(generated):
+                self.refused_with_usage("--schema", "2", "--serial", "41", "--generated", generated)
+
 
 # ---- the script that fetches (scripts/build-release-bundle.sh) ---------------------------------------------------------------------------------------------
 
@@ -1341,19 +1399,21 @@ if read -r line; then echo "input=$line" >> '@@LOG@@'; exit 9; fi
         with open(path) as f:
             return f.read()
 
-    def run_functions(self, body, python=None, core=None, probe_timeout=30, run_timeout=300):
+    def run_functions(self, body, python=None, core=None, probe_timeout=30, run_timeout=300, base=None):
+        # (readonly where build-release-bundle.sh declares them readonly: a function that assigns to one, even in front of a command, fails here as in a release;
+        # MODULES_LOCK is left assignable for the case that points it at files that are not there)
         script = """set -euo pipefail
-SCRIPT_DIR=%(scripts)s
-STAGING_ROOT=%(staging)s
-OUTPUT_DIR=%(output)s
+readonly SCRIPT_DIR=%(scripts)s
+readonly STAGING_ROOT=%(staging)s
+readonly OUTPUT_DIR=%(output)s
 MODULES_LOCK=%(env)s
-CHECKSUMS_BASE_URL=%(base)s
-MODULES_GIT_BASE_URL=%(base)s
-RELEASE_TAG=v9.9.9
-PYTHON=%(python)s
+readonly CHECKSUMS_BASE_URL=%(base)s
+readonly MODULES_GIT_BASE_URL=%(base)s
+readonly RELEASE_TAG=v9.9.9
+readonly PYTHON=%(python)s
 CASAOS_TAG=%(core)s
 CASAOS_COMMIT=%(commit)s
-WORKSPACE_ROOT=%(workspace)s
+readonly WORKSPACE_ROOT=%(workspace)s
 MODULES_PROBE_TIMEOUT=%(timeout)s
 eval "$(tr -d '\\r' <%(script)s | sed -n '/^readonly MODULES_MIN_CORE_TAG=/p')"
 [ -n "${MODULES_MIN_CORE_TAG:-}" ] || { echo "build-release-bundle.sh defines no MODULES_MIN_CORE_TAG" >&2; exit 97; }
@@ -1363,7 +1423,7 @@ for f in fail compute_checksum check_core_for_modules fill_modules_min_core_tag 
 done
 %(body)s
 """ % {
-            "scripts": sh(HERE), "staging": sh(os.path.join(self.tmp, "staging")), "output": sh(self.output), "env": sh(self.env), "base": file_url(self.net),
+            "scripts": sh(HERE), "staging": sh(os.path.join(self.tmp, "staging")), "output": sh(self.output), "env": sh(self.env), "base": base or file_url(self.net),
             "python": sh(python or sys.executable), "script": sh(BUILD_SCRIPT), "body": body, "core": shlex.quote(MIN_CORE if core is None else core),
             "commit": "c" * 40, "workspace": sh(self.workspace), "timeout": probe_timeout,
         }
@@ -1519,7 +1579,7 @@ done
     def test_a_catalogue_is_not_built_for_a_core_that_has_no_module_and_nothing_is_fetched(self):
         self.good()
         shutil.rmtree(self.stage_dir)
-        code, out, err = self.run_functions('CHECKSUMS_BASE_URL=file:///nonexistent\nMODULES_GIT_BASE_URL=file:///nonexistent\nbuild_modules_catalogue', core=CORES_BELOW_THE_MINIMUM[-1])
+        code, out, err = self.run_functions('build_modules_catalogue', core=CORES_BELOW_THE_MINIMUM[-1], base="file:///nonexistent")
         self.assertNotEqual(code, 0, "the build went on")
         self.assertIn("casaos module", err)
         self.assertNotIn("Failed to download", err, "the checksums were fetched before the core was looked at")
@@ -1561,7 +1621,7 @@ done
         self.assertEqual(text.count('\n    check_core_for_modules\n'), 1, "build_modules_catalogue does not look at the core")
         body = text[text.index("\nbuild_modules_catalogue() {"):]
         self.assertLess(body.index('build-modules-catalogue.py" list'), body.index("check_core_for_modules"), "the core is looked at for a release that lists no module")
-        self.assertLess(body.index("check_core_for_modules"), body.index("curl"), "the core is looked at after something is fetched")
+        self.assertLess(body.index("check_core_for_modules"), body.index("stage-modules.sh"), "the core is looked at after something is fetched")
         self.assertNotIn("grep", body[:body.index("check_core_for_modules")], "modules.env is read by something other than the python script")
 
     def test_the_pins_of_this_tree_hold(self):
@@ -1711,7 +1771,7 @@ done
     def test_a_checkout_of_the_core_that_has_no_assistant_is_refused_before_anything_is_fetched(self):
         self.good_release()
         shutil.rmtree(os.path.join(self.workspace, "CasaOS", "pkg", "modulecmd"))
-        code, out, err = self.run_functions('CHECKSUMS_BASE_URL=file:///nonexistent\nMODULES_GIT_BASE_URL=file:///nonexistent\nbuild_modules_catalogue')
+        code, out, err = self.run_functions('build_modules_catalogue', base="file:///nonexistent")
         self.assertNotEqual(code, 0)
         self.assertIn("pkg/modulecmd", err)
         self.assertIn("casaos module", err)
@@ -1809,8 +1869,11 @@ class Workflow(unittest.TestCase):
 
     def test_every_download_of_the_bundle_retries_a_5xx(self):
         # one 504 from GitHub failed v0.5.101 and v0.5.102 three times in a row (2026-11-08)
-        with open(BUILD_SCRIPT, encoding="utf-8") as f:
-            calls = [line for line in f if re.match(r"\s*(\S+=\"\$\()?curl ", line)]
+        # (the download code is in the bundle script and in the two scripts it shares with the repository of the online catalogue)
+        calls = []
+        for path in (BUILD_SCRIPT, os.path.join(HERE, "lib-fetch.sh"), os.path.join(HERE, "stage-modules.sh")):
+            with open(path, encoding="utf-8") as f:
+                calls += [line for line in f if re.match(r"\s*(\S+=\"\$\()?curl ", line)]
         self.assertEqual(len(calls), 3, calls)
         for line in calls:
             self.assertIn("--retry 5", line)

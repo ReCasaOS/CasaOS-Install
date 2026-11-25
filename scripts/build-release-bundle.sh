@@ -126,6 +126,9 @@ fail() {
     exit 1
 }
 
+# shellcheck source=lib-fetch.sh
+source "${SCRIPT_DIR}/lib-fetch.sh"
+
 verify_repo_commit() {
     local repo_name="$1"
     local expected_commit="$2"
@@ -182,14 +185,7 @@ compute_checksum() {
     local url="${base}/${repo}/releases/download/${tag}/${asset}"
     local file="${keep_dir}/${asset}"
 
-    # GitHub's release downloads answer 5xx in bursts (2026-11-08): curl retries those, never a missing file
-    curl -fsSL --retry 5 --retry-delay 10 -o "${file}" "${url}" || fail "Failed to download ${url}."
-    [[ -s "${file}" ]] || fail "Empty download: ${url}"
-    # read the archive from stdin: the shell opens the path, so tar never
-    # parses it, and a keep directory that is a Windows drive-letter path is
-    # not taken for a remote host:path.
-    tar -tzf - <"${file}" >/dev/null 2>&1 || fail "Not a gzip tarball: ${url}"
-
+    fetch_tarball "${url}" "${file}"
     sha256sum "${file}" | awk '{ print $1 }'
 }
 
@@ -338,7 +334,8 @@ prove_modules_core() {
 # and sets MODULES_CATALOGUE_FILE to it. With no module in modules.env there is no
 # catalogue: the variable stays empty and nothing is fetched. For each module the
 # checksums.txt of its release and the two archives that file names are fetched
-# the way the components' are (curl -fsSL from CHECKSUMS_BASE_URL, the digest of
+# by scripts/stage-modules.sh (which the repository of the online catalogue runs
+# too) the way the components' are (curl -fsSL from CHECKSUMS_BASE_URL, the digest of
 # an archive being the one its own release publishes), and
 # build-modules-catalogue.py judges what came: one module that cannot be fetched
 # or does not hold stops the whole bundle, and no half catalogue is left behind.
@@ -347,7 +344,7 @@ prove_modules_core() {
 # to say that it holds no module: grep and python do not end a line in the same places, and
 # a file that cannot be read is not a file with no module in it.
 build_modules_catalogue() {
-    local list stage name component tag commit tier archives archive
+    local list stage
     local file="${OUTPUT_DIR}/modules-catalogue-${RELEASE_TAG}.json"
 
     MODULES_CATALOGUE_FILE=""
@@ -362,16 +359,9 @@ build_modules_catalogue() {
     check_core_for_modules
 
     stage="${STAGING_ROOT}/modules"
-    while read -r name component tag commit tier; do
-        mkdir -p "${stage}/${name}"
-        curl -fsSL --retry 5 --retry-delay 10 -o "${stage}/${name}/checksums.txt" "${CHECKSUMS_BASE_URL}/${component}/releases/download/${tag}/checksums.txt" ||
-            fail "Failed to download the checksums of module ${name} (${component} ${tag})."
-        archives="$("${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" archives "${stage}/${name}/checksums.txt" "${tag}")" ||
-            fail "Module ${name}: its checksums.txt names no usable archives."
-        for archive in ${archives}; do
-            compute_checksum "${CHECKSUMS_BASE_URL}" "${component}" "${tag}" "${archive}" "${stage}/${name}" >/dev/null
-        done
-    done <<<"${list}"
+    # (the two variables are readonly and not exported: env hands them to the script that fetches, which says why it stops; a prefix assignment
+    # to a readonly variable would be an error of this shell)
+    env CHECKSUMS_BASE_URL="${CHECKSUMS_BASE_URL}" PYTHON="${PYTHON}" bash "${SCRIPT_DIR}/stage-modules.sh" "${MODULES_LOCK}" "${stage}" || exit 1
 
     "${PYTHON}" "${SCRIPT_DIR}/build-modules-catalogue.py" build --git-base "${MODULES_GIT_BASE_URL}" --out "${file}" "${MODULES_LOCK}" "${stage}" ||
         fail "The module catalogue was not built."

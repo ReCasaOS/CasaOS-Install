@@ -3,7 +3,7 @@
 
     build-modules-catalogue.py list     MODULES_ENV
     build-modules-catalogue.py archives CHECKSUMS TAG
-    build-modules-catalogue.py build    [--git-base URL] --out FILE MODULES_ENV STAGE
+    build-modules-catalogue.py build    --git-base URL --out FILE [--schema 2 --serial N --generated DATE] MODULES_ENV STAGE
     build-modules-catalogue.py proof    MODULES_ENV OUTPUT
 
 The network is not used here, except by `git fetch` of the tag of a module. scripts/build-release-bundle.sh fetches, exactly as it fetches the checksums of
@@ -15,8 +15,11 @@ catalogue, and writes nothing unless every module passes: a module whose files a
 not at the pinned commit, whose module.json is not, byte for byte, the module.json that the repository has at that commit, whose two archives do not carry the
 same module.json or hold a path that a box would not unpack, or whose manifest and entry would not be accepted by the reader of the box (pkg/osmodule of the
 core: ParseCatalogue and Parse), is an error and there is no catalogue at all; so is a module that shares its unit, its route or its component with another.
-`proof` judges what the core's own `casaos module list` printed when it was run on the catalogue that was built. Exit status: 0 done, 1 refused (the reason on
-the standard error), 2 usage.
+Without options `build` writes what a release ships (schema 1). With --schema 2 --serial N --generated DATE, the three together and in that order, it writes
+the same modules in the online format, for the repository that publishes the catalogue outside the releases: {"schema": 2, "serial": N, "generated": DATE,
+"modules": [...]}, N an integer from 1 with no sign and no leading zero, DATE a UTC time YYYY-MM-DDTHH:MM:SSZ; any other form is a usage error. `proof` judges
+what the core's own `casaos module list` printed when it was run on the catalogue that was built. Exit status: 0 done, 1 refused (the reason on the standard
+error), 2 usage.
 
 The rules of the reader of a box are copied here, to fail early with a sentence that says what is wrong; the core is the judge, and `proof` has it read the
 catalogue that is shipped. scripts/test-build-modules-catalogue.py holds this copy to the Go source of the core. Run this with Python 3.12: its Unicode tables
@@ -26,6 +29,7 @@ release/modules.env: MODULE_<NAME>_TAG, MODULE_<NAME>_COMMIT, MODULE_<NAME>_COMP
 underscores, starts with a letter, and gives the module's name in lower case with each underscore a hyphen (VIRT is virt, VIRT_MANAGEMENT is virt-management). The file
 holds printable ASCII, tabs and line ends and nothing else: another character could end a line for one reader and not for another.
 """
+import datetime
 import hashlib
 
 import json
@@ -68,6 +72,7 @@ OS_RE = re.compile(r"(debian|ubuntu):[0-9]{1,2}(\.[0-9]{2})?")
 TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+SERIAL_RE = re.compile(r"[1-9][0-9]{0,18}")
 ARCHIVE_RE = re.compile(r"linux-(amd64|arm64)-casaos-[a-z-]+-(v[0-9.]+)\.tar\.gz")
 ENV_KEY_RE = re.compile(r"MODULE_([A-Z][A-Z0-9_]*)_(TAG|COMMIT|COMPONENT|TIER)")
 TIERS = ("core", "community")
@@ -655,7 +660,7 @@ def check_distinct(entries):
                 raise Refused("modules %s and %s share the %s %s" % (first, e["name"], what, get(e)))
 
 
-def build(env_path, stage, out, git_base):
+def build(env_path, stage, out, git_base, header=None):
     modules = read_modules_env(env_path)
     if not modules:
         raise Refused("%s has no module: there is no catalogue to build" % env_path)
@@ -668,6 +673,11 @@ def build(env_path, stage, out, git_base):
     check_distinct(entries)
     text = (json.dumps({"schema": CATALOGUE_SCHEMA, "modules": entries}, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     parse_catalogue(text)  # what is written is what the box will read
+    if header is not None:
+        # the online format: the modules judged above, under the header that tells one publication from the next
+        text = (json.dumps(dict(header, modules=entries), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        if len(text) > MAX_CATALOGUE_BYTES:
+            raise invalid("catalogue", "too large")
     with open(out + ".tmp", "wb") as f:
         f.write(text)
     os.replace(out + ".tmp", out)
@@ -709,7 +719,20 @@ def proof(env_path, output_path):
     check_list_output(raw, modules)
 
 
-USAGE = "usage: build-modules-catalogue.py list MODULES_ENV | archives CHECKSUMS TAG | build --git-base URL --out FILE MODULES_ENV STAGE | proof MODULES_ENV OUTPUT"
+USAGE = ("usage: build-modules-catalogue.py list MODULES_ENV | archives CHECKSUMS TAG | build --git-base URL --out FILE [--schema 2 --serial N --generated DATE] MODULES_ENV STAGE"
+         " | proof MODULES_ENV OUTPUT")
+
+
+def online_header(schema, serial, generated):
+    """The header of the online format from the three values of the command line, or None when one of them is not in its one accepted form."""
+    if schema != "2" or SERIAL_RE.fullmatch(serial) is None or int(serial) >= 1 << 63:  # (the serial fits the int64 of a Go reader)
+        return None
+    try:
+        if datetime.datetime.strptime(generated, "%Y-%m-%dT%H:%M:%SZ").strftime("%Y-%m-%dT%H:%M:%SZ") != generated:
+            return None
+    except ValueError:
+        return None
+    return {"schema": 2, "serial": int(serial), "generated": generated}
 
 
 def main(argv):
@@ -729,6 +752,9 @@ def main(argv):
                 print(archive)
         elif len(argv) == 7 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out":
             build(argv[5], argv[6], argv[4], argv[2])
+        elif (len(argv) == 13 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out" and argv[5] == "--schema" and argv[7] == "--serial"
+              and argv[9] == "--generated" and (header := online_header(argv[6], argv[8], argv[10])) is not None):
+            build(argv[11], argv[12], argv[4], argv[2], header)
         elif len(argv) == 3 and argv[0] == "proof":
             proof(argv[1], argv[2])
         else:

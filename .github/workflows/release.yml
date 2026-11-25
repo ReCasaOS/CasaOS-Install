@@ -75,6 +75,9 @@ jobs:
       - name: Check what the uninstaller does with a module
         run: sh scripts/test-uninstall-modules.sh
 
+      - name: Check the fetch of the modules' releases
+        run: bash scripts/test-stage-modules.sh
+
       - name: Check the installer and the uninstaller on boxes that are not the usual one
         run: bash scripts/test-install-hard-cases.sh
 
