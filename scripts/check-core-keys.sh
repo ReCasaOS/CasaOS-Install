@@ -2,7 +2,7 @@
 # A box runs an installer only when its core trusts the key that signed it.
 # Builds tools/core-keys against the core in CORE_DIR and fails unless that core
 # trusts exactly two distinct keys, one of them the key of PUB_FILE. A core
-# without pkg/installersig checks no signature and has no keys to check.
+# without pkg/installersig has no keys to check.
 #
 #   bash scripts/check-core-keys.sh CORE_DIR PUB_FILE
 set -euo pipefail
@@ -12,7 +12,7 @@ pub_file="$2"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [ ! -d "${core}/pkg/installersig" ]; then
-    echo "The pinned core has no pkg/installersig: it checks no installer signature, so it has no keys to check."
+    echo "The pinned core has no pkg/installersig: no keys to check."
     exit 0
 fi
 

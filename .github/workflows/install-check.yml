@@ -2924,7 +2924,7 @@ jobs:
               echo "Release ${TAG} publishes no install.sh.sig." >&2
               exit 1
             fi
-            echo "Release ${TAG} publishes no install.sh.sig (a release older than signed installers): no signature to check."
+            echo "Release ${TAG} publishes no install.sh.sig: no signature to check on a run by hand."
             exit 0
           fi
           gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh.sig
