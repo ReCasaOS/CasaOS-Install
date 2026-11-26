@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.204] - 2026-11-26
+
+Components: CasaOS-Gateway `v0.4.41`. Unchanged from v0.5.203: CasaOS `v0.4.130`, CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A module's page opens from its card and its tile.** They open the page in a new tab, which sends no token, and the gateway refused it. The gateway now lets exactly `GET` of `<gateway_route>/` (and of `<gateway_route>`) through without a token, for the route of an installed module; every other path under the route still needs the token ([ReCasaOS/CasaOS-Gateway#19](https://github.com/ReCasaOS/CasaOS-Gateway/pull/19), [#368](https://github.com/ReCasaOS/CasaOS-Install/pull/368)).
+
 ## [0.5.203] - 2026-11-26
 
 Components: CasaOS `v0.4.130`, CasaOS-UI `v0.4.234`. Unchanged from v0.5.202: CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
