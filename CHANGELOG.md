@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.201] - 2026-11-26
+
+Components: CasaOS `v0.4.129`, CasaOS-AppManagement `v0.4.125`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`. Unchanged from v0.5.200: CasaOS-Gateway `v0.4.40`, CasaOS-UI `v0.4.232`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The API of each service and module is described by its `openapi.yaml` alone.** Its doc route (`/doc/v2/<name>`) serves the OpenAPI description, at the route and at `/openapi.yaml`, and nothing else; the HTML page that used to be there is removed ([ReCasaOS/CasaOS#195](https://github.com/ReCasaOS/CasaOS/pull/195), [ReCasaOS/CasaOS-AppManagement#87](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/87), [ReCasaOS/CasaOS-UserService#17](https://github.com/ReCasaOS/CasaOS-UserService/pull/17), [ReCasaOS/CasaOS-LocalStorage#37](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/37), [ReCasaOS/CasaOS-MessageBus#11](https://github.com/ReCasaOS/CasaOS-MessageBus/pull/11), [ReCasaOS/ReCasaOS-MCP#9](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/9), [ReCasaOS/ReCasaOS-VulnScan#6](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/6), [ReCasaOS/CasaOS-VirtManagement#13](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/13)).
+- Two tests of the core that depended on the speed of the machine no longer do ([ReCasaOS/CasaOS#194](https://github.com/ReCasaOS/CasaOS/pull/194)).
+
 ## [0.5.200] - 2026-11-26
 
 Components: CasaOS-UI `v0.4.232`. Unchanged from v0.5.199: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.2.0`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
