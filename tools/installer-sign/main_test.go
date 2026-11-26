@@ -47,6 +47,9 @@ func keys(t *testing.T) (string, string, string) {
 	if !strings.Contains(out, public) {
 		t.Fatalf("keygen did not print the public key: %s", out)
 	}
+	if runtime.GOOS == "windows" && !strings.Contains(out, "delete it once the secret is set") {
+		t.Fatalf("keygen did not say on Windows that the key file must be deleted: %s", out)
+	}
 	keyPath := filepath.Join(dir, "installer-signing.key")
 	for _, command := range []string{
 		`Get-Content "` + keyPath + `" | gh secret set INSTALLER_SIGNING_KEY --env release-signing`,

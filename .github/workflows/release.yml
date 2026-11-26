@@ -240,7 +240,8 @@ jobs:
           name: dist
           path: dist/
           if-no-files-found: error
-          retention-days: 7
+          # as long as GitHub lets an approval wait
+          retention-days: 30
 
   # Signs exactly the install.sh that was assembled and tested, and refuses to
   # hand on a signature that the repository's public key does not accept.
@@ -251,6 +252,8 @@ jobs:
     environment: release-signing
     permissions:
       contents: read
+    outputs:
+      install_sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       - name: Checkout installer
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -280,6 +283,10 @@ jobs:
       - name: Check the signature with the repository's public key
         run: '"${RUNNER_TEMP}/installer-sign" verify --pub release/installer-signing.pub dist/install.sh'
 
+      - name: The digest of what was signed
+        id: digest
+        run: echo "sha256=$(sha256sum dist/install.sh | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
       - name: Hand the signature to the job that publishes
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -306,6 +313,23 @@ jobs:
         with:
           name: signature
           path: dist
+
+      # The approval of the signature can come days after the build, and a box's
+      # automatic update counts its one-day wait from version.json's published_at,
+      # stamped at the build: a build older than 6 hours is not published.
+      - name: Check that what is published is what was signed, and recent
+        env:
+          SIGNED_SHA256: ${{ needs.sign.outputs.install_sha256 }}
+        run: |
+          set -euo pipefail
+          if [ "$(sha256sum dist/install.sh | cut -d' ' -f1)" != "${SIGNED_SHA256}" ]; then
+            echo "dist/install.sh is not the file that was signed." >&2
+            exit 1
+          fi
+          if ! jq -e '(.published_at | fromdateiso8601) > now - 21600' dist/version.json >/dev/null; then
+            echo "the build is older than 6 hours: use Re-run all jobs to rebuild and sign again" >&2
+            exit 1
+          fi
 
       - name: Publish release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

@@ -4,8 +4,8 @@
 # Checks how install.sh leaves casaos.service: Detach_From_CasaOS_Service is
 # copied out of install.sh as it stands and run with stand-ins for sudo and
 # systemd-run. Run from a file, it hands a root-only copy of that same file to a
-# unit of its own; read from a pipe, it has no file to hand over and goes on in
-# place. It never downloads an installer to run.
+# unit of its own; read from a pipe, it has no file to hand over and stops before
+# it changes anything. It never downloads an installer to run.
 #
 #   bash scripts/test-install-detach.sh
 #
@@ -99,11 +99,18 @@ esac
 case "${last}" in *"${WORK}/log/upgrade.log"*) ;; *) fail "run from a file: the unit does not write to the update log: ${last}" ;; esac
 echo "ok: run from a file, the update goes on from a root-only copy of that file, in a unit of its own"
 
-# read from a pipe: no file to hand over, nothing downloaded, it goes on in place
+# read from a pipe: no file to hand over and nothing downloaded; the update stops
+# before it changes anything and says how to update
 : >"${CALLS}"
-rm -rf "${WORK}/sdrun" "${WORK}/update"
-out="$(cd "${WORK}" && bash <detach.sh 2>&1)" || fail "read from a pipe: ${out}"
-case "${out}" in *"went on in place"*) ;; *) fail "read from a pipe: it did not go on: ${out}" ;; esac
-! grep -qx systemd-run "${CALLS}" || fail "read from a pipe: a unit was started"
-[ ! -e "${WORK}/update" ] || fail "read from a pipe: something was copied"
-echo "ok: read from a pipe, the update goes on in place and downloads nothing"
+rm -rf "${WORK}/sdrun" "${WORK}/update" "${WORK}/log"
+status=0
+out="$(cd "${WORK}" && bash <detach.sh 2>&1)" || status=$?
+[ "${status}" -ne 0 ] || fail "read from a pipe: it did not stop: ${out}"
+case "${out}" in *"went on in place"*) fail "read from a pipe: it went on: ${out}" ;; esac
+case "${out}" in
+*"[1] This box's ReCasaOS is too old to update itself from the dashboard: update it from a terminal with the install command."*) ;;
+*) fail "read from a pipe: not said: ${out}" ;;
+esac
+[ ! -s "${CALLS}" ] || fail "read from a pipe: something was run: $(tr '\n' '|' <"${CALLS}")"
+[ ! -e "${WORK}/update" ] && [ ! -e "${WORK}/log" ] || fail "read from a pipe: something was written"
+echo "ok: read from a pipe, the update stops before it changes anything, downloads nothing and says how to update"

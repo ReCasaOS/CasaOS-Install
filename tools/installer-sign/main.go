@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -98,6 +99,8 @@ func keygen(dir string, stdout io.Writer) error {
 	}
 	pubLine := base64.StdEncoding.EncodeToString(public)
 	if err := writeNew(pubPath, pubLine, 0o644); err != nil {
+		// no private key is left behind without its public half
+		os.Remove(keyPath)
 		return err
 	}
 	fmt.Fprintf(stdout, `Public key:
@@ -116,6 +119,9 @@ or in a POSIX shell:
 
 then keep the file offline (a password manager) and delete it from this machine.
 `, pubLine, pubPath, keyPath, keyPath, keyPath)
+	if runtime.GOOS == "windows" {
+		fmt.Fprintln(stdout, "On Windows the key file is readable by whoever can read that folder: delete it once the secret is set.")
+	}
 	return nil
 }
 

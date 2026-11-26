@@ -1786,7 +1786,7 @@ extract Detach_From_CasaOS_Service >"${WORK}/detach.fn"
     echo 'Running_Under_CasaOS_Service() { return 0; }'
     echo "CASAOS_UPDATE_LOG='${FAKE}/var/log/casaos/upgrade.log'"
     echo 'CASAOS_INSTALL_RELEASE_TAG=v0.0.0'
-    echo 'CASAOS_INSTALLER_SELF_URL=https://example.invalid/install.sh'
+    echo "CASAOS_DETACHED_INSTALLER='${FAKE}/var/lib/casaos/update/install-detached.sh'"
     cat "${WORK}/detach.fn"
     echo 'MODULES_REQUESTED="$1" NO_TELEMETRY="$2" NO_MODULE_UPDATE="$3"'
     echo 'Detach_From_CasaOS_Service'

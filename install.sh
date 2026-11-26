@@ -328,11 +328,12 @@ Detach_From_CasaOS_Service() {
     fi
     Running_Under_CasaOS_Service || return 0
 
-    # Read from a pipe, there is no file to hand over: the update goes on in place
-    # rather than fetch an installer again.
+    # Read from a pipe, there is no file to hand over, and the update would stop
+    # with casaos.service: it stops here, before it changes anything, rather than
+    # fetch an installer again. A file sourced by `bash -c 'source …'` has $0 bash
+    # and is taken as a pipe too.
     if [[ "${BASH_SOURCE[0]}" != "$0" || ! -f "$0" ]]; then
-        Show 3 "The installer is read from a pipe, so it cannot leave casaos.service: the update goes on in place."
-        return 0
+        Show 1 "This box's ReCasaOS is too old to update itself from the dashboard: update it from a terminal with the install command."
     fi
 
     command -v systemd-run >/dev/null 2>&1 || Show 1 "systemd-run is required for in-app updates"

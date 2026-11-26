@@ -54,7 +54,17 @@ done
 [ -z "$(job release)" ] || fail "the old release job is still there"
 job sign | grep -qE '^    environment: release-signing$' || fail "the sign job is not in the release-signing environment"
 case "$(needs_of sign)" in *assemble*) ;; *) fail "the sign job does not wait for the assembly and its tests" ;; esac
-case "$(needs_of publish)" in *sign*) ;; *) fail "the publish job does not wait for the signature" ;; esac
+needs_of publish | grep -qE '[[:space:][,]sign([],[:space:]]|$)' || fail "the publish job does not wait for the signature"
+if job publish | grep -E '^    if:' | grep -qE 'always\(\)|failure\(\)|cancelled\(\)'; then
+    fail "the publication runs even when the signature did not pass"
+fi
+# publish checks that it publishes the install.sh that was signed, and that the
+# build is recent: the automatic update counts its one-day wait from published_at
+job sign | grep -qE '^      install_sha256: \$\{\{ steps\.[a-z_-]+\.outputs\.sha256 \}\}$' || fail "the sign job gives no digest of what it signed"
+job publish | grep -qE 'needs\.sign\.outputs\.install_sha256' || fail "the publish job does not compare install.sh with what was signed"
+job publish | grep -qF 'now - 21600' || fail "the publish job does not refuse a build older than 6 hours"
+job publish | grep -qF 'the build is older than 6 hours: use Re-run all jobs to rebuild and sign again' || fail "the publish job does not say how to rebuild an old build"
+job assemble | grep -qE '^          retention-days: 30$' || fail "dist is not kept for 30 days, as long as an approval can wait"
 case "$(needs_of install-check)" in *publish*) ;; *) fail "the install check does not wait for the publication" ;; esac
 job publish | grep -qE '^ +dist/install\.sh\.sig$' || fail "install.sh.sig is not among the published files"
 job sign | grep -qE 'verify --pub release/installer-signing\.pub' || fail "the sign job does not check its signature with release/installer-signing.pub"
@@ -68,7 +78,9 @@ for name in assemble sign install-check; do
     if job "${name}" | grep -qE '^ +contents: write$'; then fail "the ${name} job can write to the repository"; fi
 done
 
-unpinned="$(grep -E '^ +(- )?uses: ' "${workflow}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"
+# release.yml and the install check it calls, which runs with the same token
+install_check="${2:-$(dirname "${workflow}")/install-check.yml}"
+unpinned="$(grep -HE '^ +(- )?uses: ' "${workflow}" "${install_check}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"
 [ -z "${unpinned}" ] || fail "actions that are not named by their commit:
 ${unpinned}"
 
