@@ -10,6 +10,10 @@ Components: CasaOS-UI `v0.4.233`. Unchanged from v0.5.201: CasaOS `v0.4.129`, Ca
 
 - **The confirmation of a module's install says what it does in a few lines.** One line for the version and the level, the module's description, one sentence for what the install does (with the system packages and their sizes only when there are any), and one line for the checks, with any that did not pass shown above it. *See the details* holds the full text of what the install does to the machine, where the archive comes from and every check. The warning and the confirmation box of a module written outside ReCasaOS are unchanged ([ReCasaOS/CasaOS-UI#245](https://github.com/ReCasaOS/CasaOS-UI/pull/245)).
 
+### Proof
+
+The install check of this release (run 45821612756) passed on all 12 legs on the first try, and the promote job made it Latest.
+
 ## [0.5.201] - 2026-11-26
 
 Components: CasaOS `v0.4.129`, CasaOS-AppManagement `v0.4.125`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`. Unchanged from v0.5.200: CasaOS-Gateway `v0.4.40`, CasaOS-UI `v0.4.232`, rclone `v1.75.1`, restic `v0.19.1`.
