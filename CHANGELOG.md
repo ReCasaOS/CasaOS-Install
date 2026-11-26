@@ -11,6 +11,10 @@ Components: CasaOS `v0.4.130`, CasaOS-UI `v0.4.234`. Unchanged from v0.5.202: Ca
 - **A module can show a card on the home screens.** A module, ours or another author's, serves a description of its card at `<its route>/card` (title, icon, status, up to 8 rows, up to 2 buttons, a link); the dashboard reads it strictly and draws it, as a widget on the classic home (shown, hidden and ordered in Widget settings) and as a panel on the new dashboard. The administrator's only. The core lists the running modules that may have one at `GET /v1/sys/modules/cards` ([ReCasaOS/CasaOS#198](https://github.com/ReCasaOS/CasaOS/pull/198), [ReCasaOS/CasaOS-UI#247](https://github.com/ReCasaOS/CasaOS-UI/pull/247)). The format is in [docs/modules.md](docs/modules.md#a-modules-card) ([#363](https://github.com/ReCasaOS/CasaOS-Install/pull/363)).
 - **A module's tile in the app grid.** A card with a link also gives its module a tile beside Logs and Security, which opens the module's page in a new tab; a card with only a link is just a tile ([ReCasaOS/CasaOS-UI#248](https://github.com/ReCasaOS/CasaOS-UI/pull/248), [#364](https://github.com/ReCasaOS/CasaOS-Install/pull/364)).
 
+### Proof
+
+The install check of this release (run 45854525365) passed on all 12 legs on the first try, and the promote job made it Latest. The cards and tiles were checked against the dashboard's fake core in a browser; they are not yet seen on a real box.
+
 ## [0.5.202] - 2026-11-26
 
 Components: CasaOS-UI `v0.4.233`. Unchanged from v0.5.201: CasaOS `v0.4.129`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
