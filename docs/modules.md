@@ -251,6 +251,67 @@ What a remove never takes stays: the packages the module needed, and its data (f
 - The core serves `GET /v1/sys/modules` (the catalogue joined with what is installed, and whether this system supports each), `POST /v1/sys/modules/<name>/plan`, `POST /v1/sys/modules/<name>/install` (bound to the plan by its id) and `.../remove` (the access token in the header only), and `GET /v1/sys/modules/<name>/status`. An install or a remove runs in a transient unit, `casaos-module-<name>.service`, with a nonce in the marker lines above; the core keeps nothing about a job in memory, reads its state back from the log and the unit, and never starts one again by itself. It is refused while the upgrade of the operating system holds the machine or another package operation runs.
 - The dashboard has a *Modules* page: each module with its title, tier, version, whether this system supports it, and an *Install* button that opens the plan (the packages, the download, the sentence of the `community` tier, the `description` of the module) and asks for a confirmation. *Remove* says what stays. When the service answers on its route the module's own card appears, as the virtual machine card does today.
 
+## A module's card
+
+A module can show a card on the dashboard's home: a title, a status, a few rows and buttons, drawn by the dashboard from a description that the module serves. The module sends data and never markup or code; the dashboard draws it. A module that serves no card shows nothing, and nothing in the manifest or the catalogues changes for cards.
+
+**What the core does.** `GET /v1/sys/modules/cards` lists the installed modules whose unit is active, in the usual answer of the core (`data` holds the list). The gateway refuses it to any account but the administrator.
+
+```json
+{"modules": [{"name": "wake-on-lan", "title": "Wake-on-LAN", "route": "/v1/wake_on_lan", "foreign": true, "repository": "inkly/recasaos-wake-on-lan"}]}
+```
+
+`title` and `route` are those of the installed manifest. `foreign` (a module of another owner) and `repository` are present only when the catalogue says them. The core does not ask the modules for their cards.
+
+**What a module does.** It answers `GET <gateway_route>/card` with `application/json`, the card itself and no envelope around it. The dashboard sends the administrator's token as on any request. A module with no card answers 404.
+
+**Format, version 1.** The card is read strictly: a key that is not in the table, a value of the wrong type or a bound that is passed refuses the whole card. Lengths count characters (code points), not bytes, except where bytes are said. Texts are shown as text, and a text is cleaned before it is counted against its minimum.
+
+| Field | Rule |
+|---|---|
+| `schema` | required, `1`. |
+| `title` | required, 1 to 40 characters. |
+| `icon` | optional, a string. A name from the list below is used; any other string gives the neutral icon `control-outline`; a value that is not a string refuses the card. |
+| `status` | optional: `{"level": ..., "text": ...}`, both required, `level` one of `ok`, `info`, `warning`, `danger`, `text` 0 to 40 characters. |
+| `rows` | optional, 8 at most. A row has `label` (required, 1 to 40 characters), and optional `value` (0 to 40), `level` (as above) and `action`. |
+| `actions` | optional, 2 at most: buttons under the rows. |
+| `link` | optional: `{"label": ..., "path": ...}`, `label` 1 to 24 characters; it opens the module's page, `<gateway_route><path>`, in a new tab. |
+| `refresh` | optional integer, 30 to 3600: seconds before the card is read again. Default 60. |
+
+An **action** (in a row or in `actions`) has `label` (required, 1 to 24 characters), `method` (required, exactly `"POST"`), `path` (required), `body` (optional, a JSON object of 1024 bytes at most once written, default `{}`) and `confirm` (optional, 0 to 120 characters). A `path` of an action or of the link is a string of 200 characters at most that starts with `/`, is joined to the module's own route and so can name nothing else, and holds no `..`, no `//`, no `?`, no `#`, no `\`, no percent-encoded dot, slash or backslash, and no control character.
+
+The icons: `network-outline`, `network2-outline`, `ethernet-outline`, `wifi-outline`, `internet-outline`, `storage-outline`, `hdd-local-outline`, `system-outline`, `time-outline`, `shutdown-outline`, `restart-outline`, `cloud-outline`, `backup-outline`, `protection-outline`, `gpu-outline`, `usb-outline`, `computer-outline`, `media-outline`.
+
+The dashboard reads at most 16 KiB (bytes) of an answer, waits 5 seconds for the card and for an action, and follows no redirect. An answer that is not JSON, is too long or is late is a card that did not answer.
+
+The card of the Wake-on-LAN module (`recasaos-wake-on-lan`, the `route/card.go` of its repository), which is a complete card:
+
+```json
+{
+  "schema": 1,
+  "title": "Wake-on-LAN",
+  "icon": "network-outline",
+  "status": {"level": "info", "text": "2 devices"},
+  "rows": [
+    {"label": "Desk PC", "value": "aa:bb:cc:dd:ee:01",
+     "action": {"label": "Wake", "method": "POST", "path": "/wake", "body": {"mac": "aa:bb:cc:dd:ee:01"}}},
+    {"label": "NAS", "value": "aa:bb:cc:dd:ee:02",
+     "action": {"label": "Wake", "method": "POST", "path": "/wake", "body": {"mac": "aa:bb:cc:dd:ee:02"}}}
+  ],
+  "link": {"label": "Open", "path": "/"},
+  "refresh": 60
+}
+```
+
+**What the dashboard does.**
+
+- Only the administrator's dashboard asks for cards. On the classic home a module's card is a widget in the left column, shown or hidden and ordered in Widget settings; the new dashboard shows it as a panel.
+- A module appears only after one valid read of its card. A module whose first read is a 401, 403, 404, a text that is not JSON or a card that is refused stays out, and nothing is saved for it.
+- The card is read again after `refresh` seconds, and not while the tab is hidden (it is read when the tab is seen again). A 401, 403 or 404 makes the card leave, with no word of it, and it is asked again at the next reading of the list, which is every 5 minutes and after an install or a remove of a module. A card that is refused, or a module that does not answer, shows "This card is unavailable for now", and the card is asked again after 60 seconds.
+- A button sends `POST <gateway_route><path>` with its `body` as JSON and the administrator's token, after a confirmation that shows `confirm` when the action has one. An answer with a `message` shows it (cut at 120 characters) and the card is read again; an empty answer of 2xx is a success with no message. A failure shows the `message` of the module's answer or, when there is none, that the module did not answer. A button is disabled while an action is sent or waits for its confirmation.
+- A module of another owner is signed "by <owner>", the owner of its `repository`.
+- A card is the module's own and trusted no further than this reader: it cannot change the dashboard, name another route or run code.
+
 ## What is built and what is not
 
 Built, each in its own repository, and shipped in the releases of the distribution: `casaos module` and its API (the core), the Modules page (the dashboard), the catalogue builder with the checks above and the proof of the pinned core, `--module`, the placement of the catalogue and the removal of modules by the uninstaller (this repository). Their tests run without a machine: stand-in commands for the installer and the uninstaller, fixtures and stand-in cores for the builder, the unpack on a fake file system.
