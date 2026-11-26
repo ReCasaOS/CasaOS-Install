@@ -11,6 +11,10 @@ Components: CasaOS `v0.4.129`, CasaOS-AppManagement `v0.4.125`, CasaOS-UserServi
 - **The API of each service and module is described by its `openapi.yaml` alone.** Its doc route (`/doc/v2/<name>`) serves the OpenAPI description, at the route and at `/openapi.yaml`, and nothing else; the HTML page that used to be there is removed ([ReCasaOS/CasaOS#195](https://github.com/ReCasaOS/CasaOS/pull/195), [ReCasaOS/CasaOS-AppManagement#87](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/87), [ReCasaOS/CasaOS-UserService#17](https://github.com/ReCasaOS/CasaOS-UserService/pull/17), [ReCasaOS/CasaOS-LocalStorage#37](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/37), [ReCasaOS/CasaOS-MessageBus#11](https://github.com/ReCasaOS/CasaOS-MessageBus/pull/11), [ReCasaOS/ReCasaOS-MCP#9](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/9), [ReCasaOS/ReCasaOS-VulnScan#6](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/6), [ReCasaOS/CasaOS-VirtManagement#13](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/13)).
 - Two tests of the core that depended on the speed of the machine no longer do ([ReCasaOS/CasaOS#194](https://github.com/ReCasaOS/CasaOS/pull/194)).
 
+### Proof
+
+The install check of this release (run 45806870763) passed on 11 of its 12 legs on the first try. The Armbian leg failed before installing anything: the address of its test image redirected to mirrors that did not have the new Armbian image yet (HTTP 404). The release was then made Latest by hand.
+
 ## [0.5.200] - 2026-11-26
 
 Components: CasaOS-UI `v0.4.232`. Unchanged from v0.5.199: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.2.0`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
