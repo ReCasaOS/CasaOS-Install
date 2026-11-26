@@ -27,9 +27,15 @@ order="$(grep -nE '^(Detach_From_CasaOS_Service|Refuse_Docker_Install_On_Update|
 [ "${order}" = "Detach_From_CasaOS_Service Refuse_Docker_Install_On_Update Update_Package_Resource Check_Docker_Install" ] ||
     fail "the check does not run right after the detach and before anything is installed: ${order}"
 
-mkdir -p "${WORK}/with" "${WORK}/without"
+# PATH holds only the tools the check needs, never /usr/bin or /bin: a machine
+# (a CI runner) can have its own docker there.
+mkdir -p "${WORK}/with" "${WORK}/without" "${WORK}/tools" "${WORK}/elsewhere"
+for tool in bash env; do
+    ln -s "$(command -v "${tool}")" "${WORK}/tools/${tool}"
+done
 printf '#!/bin/sh\nexit 0\n' >"${WORK}/with/docker"
-chmod +x "${WORK}/with/docker"
+cp "${WORK}/with/docker" "${WORK}/elsewhere/docker"
+chmod +x "${WORK}/with/docker" "${WORK}/elsewhere/docker"
 cat >"${WORK}/run.sh" <<SH
 set -euo pipefail
 Show() { echo "[\$1] \$2"; if [ "\$1" = 1 ]; then exit 1; fi; }
@@ -41,10 +47,12 @@ SH
 # run <detached> <dir on PATH>: the output; the status in ${status}
 run() {
     status=0
-    out="$(env -i PATH="$2:/usr/bin:/bin" ${1:+CASAOS_INSTALLER_DETACHED=$1} bash "${WORK}/run.sh" 2>&1)" || status=$?
+    out="$(env -i PATH="$2:${WORK}/tools" ${1:+CASAOS_INSTALLER_DETACHED=$1} bash "${WORK}/run.sh" 2>&1)" || status=$?
 }
 
-[ -z "$(PATH=/usr/bin:/bin command -v docker || true)" ] || echo "note: this machine has a docker in /usr/bin or /bin; the cases without docker are not meaningful here" >&2
+# the docker in ${WORK}/elsewhere is not on that PATH
+[ -z "$(env -i PATH="${WORK}/without:${WORK}/tools" bash -c 'command -v docker' || true)" ] ||
+    fail "a docker is on the PATH of the cases without docker"
 
 run 1 "${WORK}/without"
 [ "${status}" -ne 0 ] || fail "self-update without docker: it went on: ${out}"

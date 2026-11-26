@@ -2906,12 +2906,25 @@ jobs:
           cache: false
 
       # The box's core runs an installer only with a good signature: the one
-      # published has to be good for the repository's public key.
+      # published has to be good for the repository's public key. Called by the
+      # release (the caller's event, a push), a release without install.sh.sig
+      # fails; only a run by hand against an older release goes on without one.
       - name: Check the published installer's signature
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if ! gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json assets -q '.assets[].name' | grep -qxF install.sh.sig; then
-            echo "Release ${TAG} publishes no install.sh.sig, so there is no signature to check."
+          assets="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json assets -q '.assets[].name')"
+          grep -qxF install.sh <<<"${assets}" || {
+            echo "The asset list of release ${TAG} does not hold install.sh: it cannot be trusted." >&2
+            exit 1
+          }
+          if ! grep -qxF install.sh.sig <<<"${assets}"; then
+            if [ "${EVENT}" != "workflow_dispatch" ]; then
+              echo "Release ${TAG} publishes no install.sh.sig." >&2
+              exit 1
+            fi
+            echo "Release ${TAG} publishes no install.sh.sig (a release older than signed installers): no signature to check."
             exit 0
           fi
           gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh.sig

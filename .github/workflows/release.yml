@@ -29,8 +29,9 @@ permissions:
 # jobs that publish and promote hold a token that can write to this repository.
 # No checkout leaves that token behind for the steps that follow.
 #
-# Three jobs: assemble builds and tests dist/ (alone on a workflow_dispatch,
-# a dry run that publishes nothing); sign, in the release-signing
+# Three jobs: assemble builds and tests dist/ (alone on anything but a pushed
+# tag: a workflow_dispatch, even on a tag, is a dry run that publishes
+# nothing); sign, in the release-signing
 # environment (it waits for the owner's approval and alone sees the private
 # key), writes install.sh.sig and checks it with release/installer-signing.pub;
 # publish puts both on the release. A box's core runs an installer only when
@@ -180,19 +181,13 @@ jobs:
         run: scripts/build-release-bundle.sh dist
 
       # A box runs an installer only when its core trusts the key that signed it:
-      # the pinned core has to hold the key of release/installer-signing.pub, and
-      # the installer has to announce the release it is published under.
+      # built against the pinned core, its installersig.Keys has to hold exactly
+      # two distinct keys, one of them the key of release/installer-signing.pub;
+      # and the installer has to announce the release it is published under.
       - name: Check that the pinned core trusts the signing key
         run: |
           set -euo pipefail
-          keys=work/CasaOS/pkg/installersig/keys.go
-          if [ -f "${keys}" ]; then
-            pub="$(grep -vE '^\s*(#|$)' release/installer-signing.pub | head -n 1 || true)"
-            if [ -z "${pub}" ] || ! grep -qF "\"${pub}\"" "${keys}" || grep -qE '^\s*keyA\s*=\s*""' "${keys}"; then
-              echo "The pinned core does not trust the key of release/installer-signing.pub." >&2
-              exit 1
-            fi
-          fi
+          bash scripts/check-core-keys.sh work/CasaOS release/installer-signing.pub
           if [ "${GITHUB_REF_TYPE:-}" = "tag" ] &&
             ! grep -qx "readonly CASAOS_INSTALL_RELEASE_TAG=\"${GITHUB_REF_NAME}\"" dist/install.sh; then
             echo "dist/install.sh does not announce the release ${GITHUB_REF_NAME}." >&2
@@ -272,7 +267,7 @@ jobs:
   sign:
     name: Sign the installer
     needs: assemble
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     environment: release-signing
     permissions:
@@ -323,7 +318,7 @@ jobs:
   publish:
     name: Publish the installer
     needs: [assemble, sign]
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -357,6 +352,23 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
+      # The approval of the signature can come days after the build, and a box's
+      # automatic update counts its one-day wait from version.json's published_at,
+      # stamped at the build: a build older than 6 hours is not published.
+      - name: Check that what is published is what was signed, and recent
+        env:
+          SIGNED_SHA256: ${{ needs.sign.outputs.install_sha256 }}
+        run: |
+          set -euo pipefail
+          if [ "$(sha256sum dist/install.sh | cut -d' ' -f1)" != "${SIGNED_SHA256}" ]; then
+            echo "dist/install.sh is not the file that was signed." >&2
+            exit 1
+          fi
+          if ! jq -e '(.published_at | fromdateiso8601) > now - 21600' dist/version.json >/dev/null; then
+            echo "the build is older than 6 hours: use Re-run all jobs to rebuild and sign again" >&2
+            exit 1
+          fi
+
       # Only what this workflow builds: not the App Store seed, which is mirrored.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -376,23 +388,6 @@ jobs:
             dist/linux-zz-casaos-compat-overlay-*.tar.gz
             ${{ needs.assemble.outputs.modules }}
           sbom-path: installer-${{ github.ref_name }}.spdx.json
-
-      # The approval of the signature can come days after the build, and a box's
-      # automatic update counts its one-day wait from version.json's published_at,
-      # stamped at the build: a build older than 6 hours is not published.
-      - name: Check that what is published is what was signed, and recent
-        env:
-          SIGNED_SHA256: ${{ needs.sign.outputs.install_sha256 }}
-        run: |
-          set -euo pipefail
-          if [ "$(sha256sum dist/install.sh | cut -d' ' -f1)" != "${SIGNED_SHA256}" ]; then
-            echo "dist/install.sh is not the file that was signed." >&2
-            exit 1
-          fi
-          if ! jq -e '(.published_at | fromdateiso8601) > now - 21600' dist/version.json >/dev/null; then
-            echo "the build is older than 6 hours: use Re-run all jobs to rebuild and sign again" >&2
-            exit 1
-          fi
 
       - name: Publish release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

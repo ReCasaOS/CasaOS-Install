@@ -93,9 +93,10 @@ job publish | grep -qE '^ +dist/install\.sh\.sig$' &&
     job publish | grep -qE '^ +subject-path: \|$' || fail "the publish job attests no archive"
 job publish | grep -qE '^ +installer-.*\.spdx\.json$' || fail "the SBOM is not among the published files"
 
-# a release ships only from a tag: a workflow_dispatch is a dry run of assemble
+# a release ships only from a pushed tag: a workflow_dispatch, even on a tag, is
+# a dry run of assemble
 for name in sign publish; do
-    job "${name}" | grep -qxF "    if: github.ref_type == 'tag'" || fail "the ${name} job runs on more than a tag"
+    job "${name}" | grep -qxF "    if: github.event_name == 'push' && github.ref_type == 'tag'" || fail "the ${name} job runs on more than a pushed tag"
 done
 
 # step_names <job>: the names of that job's steps, in order
@@ -108,22 +109,38 @@ gate="Check that the pinned core trusts the signing key"
 assemble="$(job assemble)"
 [ "$(step_names assemble | grep -A1 -xF 'Assemble the release bundle' | tail -n 1)" = "${gate}" ] ||
     fail "the check of the core's keys does not come right after the assembly"
-grep -qF 'work/CasaOS/pkg/installersig/keys.go' <<<"${assemble}" || fail "assemble does not look at the keys the pinned core trusts"
-grep -qF 'release/installer-signing.pub | head -n 1' <<<"${assemble}" || fail "assemble does not read the key of release/installer-signing.pub"
-grep -qF "grep -qE '^\s*keyA\s*=\s*\"\"' \"\${keys}\"" <<<"${assemble}" || fail "assemble lets through a core whose keyA is empty"
+# the keys are those the pinned core really trusts: tools/core-keys built against it
+grep -qxF '          bash scripts/check-core-keys.sh work/CasaOS release/installer-signing.pub' <<<"${assemble}" ||
+    fail "assemble does not check the keys the pinned core trusts with scripts/check-core-keys.sh"
+if grep -qF 'keys.go' <<<"${assemble}"; then fail "assemble reads keys.go as text instead of building against the core"; fi
+root="${here}/.."
+grep -qF 'go -C "${core}" run "${here}/tools/core-keys/main.go"' "${root}/scripts/check-core-keys.sh" ||
+    fail "check-core-keys.sh does not build tools/core-keys against the core"
+grep -qF 'installersig.Keys' "${root}/tools/core-keys/main.go" || fail "tools/core-keys does not print installersig.Keys"
 grep -qF '! grep -qx "readonly CASAOS_INSTALL_RELEASE_TAG=\"${GITHUB_REF_NAME}\"" dist/install.sh' <<<"${assemble}" ||
     fail "assemble does not check that a tagged install.sh announces its tag"
 
-# what is published is compared with what was signed after every step that could
-# touch dist, just before it is published
-[ "$(step_names publish | grep -B1 -xF 'Publish release assets' | head -n 1)" = "Check that what is published is what was signed, and recent" ] ||
-    fail "the digest check is not the step just before the publication"
+# what is published is compared with what was signed right after the SBOM, before
+# anything is attested or published
+[ "$(step_names publish | grep -A4 -xF 'Generate the SBOM' | paste -sd'|')" = "Generate the SBOM|Check that what is published is what was signed, and recent|Attest build provenance|Attest the SBOM|Publish release assets" ] ||
+    fail "the digest check does not come right after the SBOM, before the attestations and the publication"
 files="$(job publish | sed -n '/^          files: |$/,/^          [a-z_]*:/p')"
 [ "$(printf '%s\n' "${files}" | grep -xE ' +dist/install\.sh(\.sig)?' | tr -d ' ' | paste -sd' ')" = "dist/install.sh.sig dist/install.sh" ] ||
     fail "install.sh.sig is not published before install.sh"
 
 # release.yml and the install check it calls, which runs with the same token
 install_check="${2:-$(dirname "${workflow}")/install-check.yml}"
+
+# the install check fails closed on the published signature: the asset list is
+# read once (no gh ... | grep -q), and a release without install.sh.sig fails
+# unless the check was started by hand
+sig_step="$(sed -n "/- name: Check the published installer's signature$/,/- name: /p" "${install_check}")"
+[ -n "${sig_step}" ] || fail "the install check does not check the published signature"
+grep -qF 'assets="$(gh release view "${TAG}"' <<<"${sig_step}" || fail "the install check does not read the asset list first"
+if grep -qE 'gh release view[^|]*\|[[:space:]]*grep' <<<"${sig_step}"; then fail "the install check pipes gh into grep"; fi
+grep -qF 'EVENT: ${{ github.event_name }}' <<<"${sig_step}" &&
+    grep -qF 'if [ "${EVENT}" != "workflow_dispatch" ]; then' <<<"${sig_step}" ||
+    fail "a release checked by the release workflow may go without install.sh.sig"
 unpinned="$(grep -HE '^ +(- )?uses: ' "${workflow}" "${install_check}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"
 [ -z "${unpinned}" ] || fail "actions that are not named by their commit:
 ${unpinned}"

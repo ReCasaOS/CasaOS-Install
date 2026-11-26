@@ -27,11 +27,15 @@ There are two key pairs from the start:
 Their public halves live in two places, which have to agree:
 
 - the core, `pkg/installersig/keys.go` in ReCasaOS/CasaOS: `keyA` and `keyB`,
-  the keys every box trusts. The core's tests fail while either is empty, so a
-  core without them is never tagged.
+  the keys every box trusts. Its test `TestTheCoreTrustsTwoKeys` checks them
+  when run with `CASAOS_REQUIRE_INSTALLER_KEYS=1`.
 - this repository, `release/installer-signing.pub`: the public half of the key
-  that signs today. The sign job checks its own signature with it, and the
-  release refuses to build when the core it pins does not hold that key.
+  that signs today. The sign job checks its own signature with it.
+
+The release builds a small program against the core it pins
+(`scripts/check-core-keys.sh`, `tools/core-keys`) and refuses to go on unless
+that core trusts exactly two distinct keys, one of them the key of
+`release/installer-signing.pub`. A core whose keys are empty is never shipped.
 
 Keys are made with the tool in `tools/installer-sign`, on the owner's own machine:
 
@@ -65,16 +69,16 @@ the release is offered to boxes once it passes. Without an approval nothing is
 published. A build older than 6 hours at the approval is not published: run the
 workflow again with "Re-run all jobs".
 
-Running the workflow by hand (`workflow_dispatch`) only assembles and tests:
-nothing is signed or published.
+Only a pushed tag signs and publishes. Running the workflow by hand
+(`workflow_dispatch`), on a branch or on a tag, only assembles and tests.
 
 ## When key A is lost or leaks
 
 Boxes trust A and B, so B takes over without any box being left behind:
 
-1. In one commit of this repository, put B's private half as the secret
-   `INSTALLER_SIGNING_KEY` of `release-signing` and B's public half in
-   `release/installer-signing.pub`. If A leaked, delete A's secret first.
+1. Set B's private half as the secret `INSTALLER_SIGNING_KEY` of
+   `release-signing` with `gh secret set` (as above; if A leaked, delete A's
+   secret first), and commit B's public half in `release/installer-signing.pub`.
 2. Make a new spare, key C, on the owner's machine.
 3. In the core, set `keyA` to B's public half and `keyB` to C's (A is removed),
    tag the core, and pin it in `release/components.env`.
