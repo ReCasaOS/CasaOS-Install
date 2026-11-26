@@ -23,18 +23,25 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 # Every action is named by its commit: a tag is its owner's to move, and the
-# job that publishes holds a token that can write to this repository. No
-# checkout leaves that token behind for the steps that follow.
+# jobs that publish and promote hold a token that can write to this repository.
+# No checkout leaves that token behind for the steps that follow.
+#
+# Three jobs: assemble builds and tests dist/; sign, in the release-signing
+# environment (it waits for the owner's approval and alone sees the private
+# key), writes install.sh.sig and checks it with release/installer-signing.pub;
+# publish puts both on the release. A box's core runs an installer only when
+# its signature is good.
 
 jobs:
-  release:
-    name: Assemble and publish the installer
+  assemble:
+    name: Assemble and test the installer
     runs-on: ubuntu-22.04
     outputs:
       held: ${{ steps.pre.outputs.value }}
+      modules: ${{ steps.modules.outputs.files }}
     steps:
       - name: Checkout installer
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -62,6 +69,9 @@ jobs:
 
       - name: Check the port the installer's closing banner shows
         run: bash scripts/test-install-banner.sh
+
+      - name: Check how the installer leaves casaos.service
+        run: bash scripts/test-install-detach.sh
 
       - name: Check that nobody is offered a release before the install check
         run: bash scripts/test-release-workflow.sh
@@ -156,6 +166,9 @@ jobs:
           go-version-file: work/CasaOS/go.mod
           cache: false
 
+      - name: Check the tool that signs the installer
+        run: go -C tools/installer-sign test ./...
+
       - name: Assemble the release bundle
         env:
           WORKSPACE_ROOT: ${{ github.workspace }}/work
@@ -221,6 +234,79 @@ jobs:
         id: pre
         run: echo "value=$(bash scripts/release-is-prerelease.sh)" >> "$GITHUB_OUTPUT"
 
+      - name: Hand dist to the jobs that sign and publish
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Signs exactly the install.sh that was assembled and tested, and refuses to
+  # hand on a signature that the repository's public key does not accept.
+  sign:
+    name: Sign the installer
+    needs: assemble
+    runs-on: ubuntu-22.04
+    environment: release-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout installer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: tools/installer-sign/go.mod
+          cache: false
+
+      - name: Build the signing tool
+        run: go -C tools/installer-sign build -o "${RUNNER_TEMP}/installer-sign" .
+
+      - name: Fetch the assembled installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+
+      - name: Sign install.sh
+        env:
+          INSTALLER_SIGNING_KEY: ${{ secrets.INSTALLER_SIGNING_KEY }}
+        run: '"${RUNNER_TEMP}/installer-sign" sign --key-env INSTALLER_SIGNING_KEY dist/install.sh'
+
+      - name: Check the signature with the repository's public key
+        run: '"${RUNNER_TEMP}/installer-sign" verify --pub release/installer-signing.pub dist/install.sh'
+
+      - name: Hand the signature to the job that publishes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signature
+          path: dist/install.sh.sig
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish the installer
+    needs: [assemble, sign]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch the assembled release
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+
+      - name: Fetch the signature
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signature
+          path: dist
+
       - name: Publish release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
@@ -228,6 +314,7 @@ jobs:
           body_path: dist/release-notes.md
           files: |
             dist/install.sh
+            dist/install.sh.sig
             dist/install.sh.sha256
             dist/casaos-uninstall
             dist/linux-zz-casaos-compat-overlay-*.tar.gz
@@ -235,7 +322,7 @@ jobs:
             dist/version.json
             dist/components.lock
             dist/checksums.txt
-            ${{ steps.modules.outputs.files }}
+            ${{ needs.assemble.outputs.modules }}
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
@@ -244,7 +331,7 @@ jobs:
   # workflow, so it can also be run by hand against any release without
   # publishing anything again.
   install-check:
-    needs: release
+    needs: publish
     uses: ./.github/workflows/install-check.yml
     with:
       tag: ${{ github.ref_name }}
@@ -255,9 +342,11 @@ jobs:
   # that publishes again, and what is published is a pre-release.
   promote:
     name: Offer the release to boxes
-    needs: [release, install-check]
-    if: github.ref_type == 'tag' && needs.release.outputs.held == 'false'
+    needs: [assemble, install-check]
+    if: github.ref_type == 'tag' && needs.assemble.outputs.held == 'false'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - name: Make it the latest release
         env:

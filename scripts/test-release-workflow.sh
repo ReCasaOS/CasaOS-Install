@@ -4,7 +4,10 @@
 #   - what it publishes is always a pre-release, and only a job that waits for
 #     the install check makes it the latest release;
 #   - every action is named by its commit, not by a tag its owner can move;
-#   - no checkout leaves the token behind for the steps that follow.
+#   - no checkout leaves the token behind for the steps that follow;
+#   - install.sh is signed in a job of its own, in the release-signing
+#     environment, after the tests and before anything is published, and its
+#     signature is published next to it.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,9 +41,32 @@ esac
 if printf '%s\n' "${promote}" | grep -E '^    if:' | grep -qE 'always\(\)|failure\(\)|cancelled\(\)'; then
     fail "the promotion runs even when the install check did not pass"
 fi
-if job release | grep -vE '^ *#' | grep -qE 'gh release edit|--latest'; then
+if job publish | grep -vE '^ *#' | grep -qE 'gh release edit|--latest'; then
     fail "the job that publishes also promotes"
 fi
+
+# needs_of <job>: the needs line of that job
+needs_of() { job "$1" | grep -E '^    needs:' || true; }
+
+for name in assemble sign publish; do
+    [ -n "$(job "${name}")" ] || fail "no ${name} job"
+done
+[ -z "$(job release)" ] || fail "the old release job is still there"
+job sign | grep -qE '^    environment: release-signing$' || fail "the sign job is not in the release-signing environment"
+case "$(needs_of sign)" in *assemble*) ;; *) fail "the sign job does not wait for the assembly and its tests" ;; esac
+case "$(needs_of publish)" in *sign*) ;; *) fail "the publish job does not wait for the signature" ;; esac
+case "$(needs_of install-check)" in *publish*) ;; *) fail "the install check does not wait for the publication" ;; esac
+job publish | grep -qE '^ +dist/install\.sh\.sig$' || fail "install.sh.sig is not among the published files"
+job sign | grep -qE 'verify --pub release/installer-signing\.pub' || fail "the sign job does not check its signature with release/installer-signing.pub"
+# the private key is given to the sign job only
+others="$(grep -nE 'secrets\.INSTALLER_SIGNING_KEY' "${workflow}" | wc -l)"
+in_sign="$(job sign | grep -cE 'secrets\.INSTALLER_SIGNING_KEY' || true)"
+[ "${in_sign}" -ge 1 ] && [ "${others}" = "${in_sign}" ] || fail "the signing key is given to a job other than sign, or to none"
+# only what publishes or promotes can write to the repository
+grep -qE '^  contents: read$' "${workflow}" || fail "the workflow's own permissions are not read only"
+for name in assemble sign install-check; do
+    if job "${name}" | grep -qE '^ +contents: write$'; then fail "the ${name} job can write to the repository"; fi
+done
 
 unpinned="$(grep -E '^ +(- )?uses: ' "${workflow}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"
 [ -z "${unpinned}" ] || fail "actions that are not named by their commit:
@@ -51,4 +77,4 @@ without_token="$(grep -cE '^ +persist-credentials: false$' "${workflow}" || true
 [ "${checkouts}" -gt 0 ] && [ "${checkouts}" = "${without_token}" ] ||
     fail "${checkouts} checkouts, ${without_token} of them leave no token behind"
 
-echo "ok: release.yml publishes a pre-release, promotes it after the install check, and names its actions by commit"
+echo "ok: release.yml signs install.sh in release-signing, publishes a pre-release with its signature, promotes it after the install check, and names its actions by commit"

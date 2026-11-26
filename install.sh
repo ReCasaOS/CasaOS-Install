@@ -81,7 +81,6 @@ readonly CASA_STATE_DIR=/var/lib/casaos
 readonly CASAOS_APP_MANAGEMENT_TAG="__CASAOS_APP_MANAGEMENT_TAG__"
 readonly CASAOS_INSTALL_RELEASE_TAG="__CASAOS_RELEASE_TAG__"
 readonly CASAOS_RELEASE_BASE_URL="https://github.com/ReCasaOS/CasaOS-Install/releases/download/${CASAOS_INSTALL_RELEASE_TAG}"
-readonly CASAOS_INSTALLER_SELF_URL="${CASAOS_RELEASE_BASE_URL}/install.sh"
 readonly CASA_UNINSTALL_URL="${CASAOS_RELEASE_BASE_URL}/casaos-uninstall"
 # Component releases this installer was cut against. Every double-underscore
 # marker below is
@@ -100,6 +99,8 @@ readonly CASAOS_APPSTORE_TAG="__CASAOS_APPSTORE_TAG__"
 readonly RCLONE_TAG="__RCLONE_TAG__"
 readonly RESTIC_TAG="__RESTIC_TAG__"
 readonly CASAOS_UPDATE_LOG="/var/log/casaos/upgrade.log"
+# The root-only copy of this file that an update started inside casaos.service goes on from.
+readonly CASAOS_DETACHED_INSTALLER="/var/lib/casaos/update/install-detached.sh"
 readonly CASAOS_COMPAT_OVERLAY_FILE="linux-zz-casaos-compat-overlay-${CASAOS_INSTALL_RELEASE_TAG}.tar.gz"
 readonly CASAOS_CORE_PACKAGE_FILE_PREFIX="casaos-${CASAOS_TAG}"
 readonly CASAOS_APP_MANAGEMENT_SHA256_AMD64="__CASAOS_APP_MANAGEMENT_SHA256_AMD64__"
@@ -327,15 +328,27 @@ Detach_From_CasaOS_Service() {
     fi
     Running_Under_CasaOS_Service || return 0
 
+    # Read from a pipe, there is no file to hand over: the update goes on in place
+    # rather than fetch an installer again.
+    if [[ "${BASH_SOURCE[0]}" != "$0" || ! -f "$0" ]]; then
+        Show 3 "The installer is read from a pipe, so it cannot leave casaos.service: the update goes on in place."
+        return 0
+    fi
+
     command -v systemd-run >/dev/null 2>&1 || Show 1 "systemd-run is required for in-app updates"
     ${sudo_cmd} install -d -m 0755 "$(dirname "${CASAOS_UPDATE_LOG}")" || Show 1 "Failed to prepare CasaOS update log directory"
     ${sudo_cmd} touch "${CASAOS_UPDATE_LOG}" || Show 1 "Failed to prepare CasaOS update log"
 
+    # Whoever started this file may remove it once it is handed over: the unit
+    # runs a copy that only root can read or change.
+    ${sudo_cmd} install -d -m 0700 "$(dirname "${CASAOS_DETACHED_INSTALLER}")" || Show 1 "Failed to prepare the directory of the detached update"
+    ${sudo_cmd} install -m 0700 "$0" "${CASAOS_DETACHED_INSTALLER}" || Show 1 "Failed to copy the installer for the detached update"
+
     release_unit=${CASAOS_INSTALL_RELEASE_TAG//./-}
     update_unit="casaos-update-${release_unit}-$(date +%s)-$$"
-    printf -v detached_command 'exec >> %q 2>&1; curl -fsSL %q | /bin/bash' \
+    printf -v detached_command 'exec >> %q 2>&1; exec /bin/bash %q' \
         "${CASAOS_UPDATE_LOG}" \
-        "${CASAOS_INSTALLER_SELF_URL}"
+        "${CASAOS_DETACHED_INSTALLER}"
 
     # The detached run gets no arguments: an opt-out goes through the environment.
     local opt_out_env=()
@@ -359,7 +372,7 @@ Detach_From_CasaOS_Service() {
         --property=Type=exec \
         --setenv=CASAOS_INSTALLER_DETACHED=1 \
         "${opt_out_env[@]}" \
-        /bin/bash -o pipefail -c "${detached_command}"; then
+        /bin/bash -c "${detached_command}"; then
         Show 1 "Failed to detach the in-app update from casaos.service"
     fi
 
