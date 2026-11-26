@@ -1887,6 +1887,11 @@ Update_One_Module() {
             Show 2 "The module ${name} has nothing to update (${MODULE_CODE})."
             return 0
             ;;
+        refused:withdrawn)
+            # (the list offers no withdrawn version: the catalogue withdrew it between the list and the update)
+            Show 2 "The module ${name} keeps its version: the one of this release was withdrawn from the catalogue (${MODULE_CODE})."
+            return 0
+            ;;
         refused:*)
             Show 3 "The module ${name} was not updated: the assistant refused it (${MODULE_CODE}). Nothing was changed: it keeps its old version. ${retry}"
             ;;

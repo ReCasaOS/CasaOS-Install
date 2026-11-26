@@ -259,7 +259,7 @@ refused)
     echo "CASAOS_MODULE_RESULT - ${name} refused - already_installed - ${T}"
     exit 2
     ;;
-uptodate | downgrade | busy)
+uptodate | downgrade | busy | withdrawn)
     code="${mode}"
     [ "${mode}" != uptodate ] || code=up_to_date
     echo "refused: ${code}"
@@ -1335,6 +1335,8 @@ answer() { # <mode> <what is said> [counted as not updated: yes|no]
 }
 answer uptodate "[2] The module virt has nothing to update (up_to_date)." no
 answer downgrade "[2] The module virt has nothing to update (downgrade)." no
+# the catalogue withdrew the version this release offers (after the list was read): the module keeps the one it has
+answer withdrawn "[2] The module virt keeps its version: the one of this release was withdrawn from the catalogue (withdrawn)." no
 # failed - backup_not_dropped -: the new version is installed, only the backup of the old one is left: updated, with what to do
 ufresh
 list_says "$(entry virt newer)"
