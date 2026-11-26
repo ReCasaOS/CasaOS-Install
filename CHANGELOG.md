@@ -16,6 +16,10 @@ Components: CasaOS-UI `v0.4.232`. Unchanged from v0.5.199: CasaOS `v0.4.128`, Ca
 
 - **An update at the end of an install that meets a withdrawn version says it as nothing to do.** If the catalogue withdraws the version of this release between the list of the modules and their update, the module keeps the version it has and the install says so, instead of reporting a failed update.
 
+### Proof
+
+The install check of this release (run 45778000243) passed on 11 of its 12 legs. Ubuntu 26.04 failed once because its package index was incomplete at that moment, and passed when run again. The Armbian leg failed twice before installing anything: the address of its test image redirected to a mirror that did not have the new Armbian image yet (HTTP 404). The release was then made Latest by hand. The Modules window was checked in a browser against the dashboard's development stub; not tried yet on a real box: a module written outside ReCasaOS, which the catalogue does not hold yet.
+
 ## [0.5.199] - 2026-11-26
 
 Components: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-UI `v0.4.231`, module `vuln-scan` `v0.2.0`. Unchanged from v0.5.198: CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
