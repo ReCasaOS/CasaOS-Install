@@ -265,6 +265,8 @@ A module can show a card on the dashboard's home: a title, a status, a few rows 
 
 **What a module does.** It answers `GET <gateway_route>/card` with `application/json`, the card itself and no envelope around it. The dashboard sends the administrator's token as on any request. A module with no card answers 404.
 
+**A module's page.** A card's `link` opens a new tab, which sends no token. So the gateway lets exactly `GET` (and `HEAD`) of `<gateway_route>/` and `<gateway_route>` through without a token, for a route that is the `gateway_route` of a manifest in `/etc/casaos/modules`. Every other path under the route still needs the token. That page must be static: it holds no data, and reads the dashboard's token (`localStorage.access_token`, the same origin) to send it, in `Authorization`, on its own calls.
+
 **Format, version 1.** The card is read strictly: a key that is not in the table, a value of the wrong type or a bound that is passed refuses the whole card. Lengths count characters (code points), not bytes, except where bytes are said. Texts are shown as text, and a text is cleaned before it is counted against its minimum.
 
 | Field | Rule |
