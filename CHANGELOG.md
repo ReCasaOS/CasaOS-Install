@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.200] - 2026-11-26
+
+Components: CasaOS-UI `v0.4.232`. Unchanged from v0.5.199: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.2.0`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The Modules window says who wrote a module.** A module whose repository is not ReCasaOS's says *Written by {owner}, not by ReCasaOS*, with a link to its repository. Before such a module is installed, the window says who wrote it and that it runs with every right on the machine, and the install waits for *I understand that ReCasaOS did not write this module* to be ticked; an update shows the same warning. The *Community* level now reads *Written outside ReCasaOS, reviewed when it entered the catalogue, not tested by ReCasaOS* ([ReCasaOS/CasaOS-UI#243](https://github.com/ReCasaOS/CasaOS-UI/pull/243)).
+- **The night updates such a module only if its owner says so.** An installed module of another owner has its own *Update it at night* switch, off unless turned on; it acts when automatic updates are on, 24 hours after a new version appears.
+- **A withdrawn version is shown.** A module whose installed version the catalogue withdrew shows the version and the reason given; it stays installed, and that version is offered to no box.
+
+### Changed
+
+- **An update at the end of an install that meets a withdrawn version says it as nothing to do.** If the catalogue withdraws the version of this release between the list of the modules and their update, the module keeps the version it has and the install says so, instead of reporting a failed update.
+
 ## [0.5.199] - 2026-11-26
 
 Components: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-UI `v0.4.231`, module `vuln-scan` `v0.2.0`. Unchanged from v0.5.198: CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
