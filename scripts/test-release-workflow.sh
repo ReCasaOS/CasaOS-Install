@@ -78,6 +78,21 @@ for name in assemble sign install-check; do
     if job "${name}" | grep -qE '^ +contents: write$'; then fail "the ${name} job can write to the repository"; fi
 done
 
+# build provenance and an SBOM: attested by the job that publishes, which alone
+# gets the OIDC token
+for p in id-token attestations; do
+    job publish | grep -qE "^      ${p}: write$" || fail "the publish job cannot write ${p}"
+    for name in assemble sign install-check promote; do
+        if job "${name}" | grep -qE "^ +${p}: write$"; then fail "the ${name} job can write ${p}"; fi
+    done
+done
+for a in attest-build-provenance attest-sbom sbom-action; do
+    job publish | grep -qE "uses: [^ ]*${a}@" || fail "the publish job does not use ${a}"
+done
+job publish | grep -qE '^ +dist/install\.sh\.sig$' &&
+    job publish | grep -qE '^ +subject-path: \|$' || fail "the publish job attests no archive"
+job publish | grep -qE '^ +installer-.*\.spdx\.json$' || fail "the SBOM is not among the published files"
+
 # release.yml and the install check it calls, which runs with the same token
 install_check="${2:-$(dirname "${workflow}")/install-check.yml}"
 unpinned="$(grep -HE '^ +(- )?uses: ' "${workflow}" "${install_check}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"
