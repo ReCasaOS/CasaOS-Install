@@ -106,12 +106,16 @@ func keygen(dir string, stdout io.Writer) error {
 It is written in %s.
 The private key is in %s.
 Never commit it and never paste it anywhere. Give it to the release-signing
-environment of the repository with:
+environment of the repository with, in PowerShell:
+
+  Get-Content "%s" | gh secret set INSTALLER_SIGNING_KEY --env release-signing -R ReCasaOS/CasaOS-Install
+
+or in a POSIX shell:
 
   gh secret set INSTALLER_SIGNING_KEY --env release-signing -R ReCasaOS/CasaOS-Install < "%s"
 
 then keep the file offline (a password manager) and delete it from this machine.
-`, pubLine, pubPath, keyPath, keyPath)
+`, pubLine, pubPath, keyPath, keyPath, keyPath)
 	return nil
 }
 

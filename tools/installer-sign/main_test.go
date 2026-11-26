@@ -47,6 +47,15 @@ func keys(t *testing.T) (string, string, string) {
 	if !strings.Contains(out, public) {
 		t.Fatalf("keygen did not print the public key: %s", out)
 	}
+	keyPath := filepath.Join(dir, "installer-signing.key")
+	for _, command := range []string{
+		`Get-Content "` + keyPath + `" | gh secret set INSTALLER_SIGNING_KEY --env release-signing`,
+		`gh secret set INSTALLER_SIGNING_KEY --env release-signing -R ReCasaOS/CasaOS-Install < "` + keyPath + `"`,
+	} {
+		if !strings.Contains(out, command) {
+			t.Fatalf("keygen did not print %q: %s", command, out)
+		}
+	}
 	return dir, private, public
 }
 
