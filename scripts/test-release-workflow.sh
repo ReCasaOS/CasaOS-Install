@@ -93,6 +93,35 @@ job publish | grep -qE '^ +dist/install\.sh\.sig$' &&
     job publish | grep -qE '^ +subject-path: \|$' || fail "the publish job attests no archive"
 job publish | grep -qE '^ +installer-.*\.spdx\.json$' || fail "the SBOM is not among the published files"
 
+# a release ships only from a tag: a workflow_dispatch is a dry run of assemble
+for name in sign publish; do
+    job "${name}" | grep -qxF "    if: github.ref_type == 'tag'" || fail "the ${name} job runs on more than a tag"
+done
+
+# step_names <job>: the names of that job's steps, in order
+step_names() { job "$1" | sed -n 's/^      - name: //p'; }
+
+# right after the bundle is assembled, the pinned core has to trust the key of
+# release/installer-signing.pub, and a tagged install.sh has to announce its tag
+gate="Check that the pinned core trusts the signing key"
+# held in a variable: grep -q would stop reading a long job and fail its pipe under pipefail
+assemble="$(job assemble)"
+[ "$(step_names assemble | grep -A1 -xF 'Assemble the release bundle' | tail -n 1)" = "${gate}" ] ||
+    fail "the check of the core's keys does not come right after the assembly"
+grep -qF 'work/CasaOS/pkg/installersig/keys.go' <<<"${assemble}" || fail "assemble does not look at the keys the pinned core trusts"
+grep -qF 'release/installer-signing.pub | head -n 1' <<<"${assemble}" || fail "assemble does not read the key of release/installer-signing.pub"
+grep -qF "grep -qE '^\s*keyA\s*=\s*\"\"' \"\${keys}\"" <<<"${assemble}" || fail "assemble lets through a core whose keyA is empty"
+grep -qF '! grep -qx "readonly CASAOS_INSTALL_RELEASE_TAG=\"${GITHUB_REF_NAME}\"" dist/install.sh' <<<"${assemble}" ||
+    fail "assemble does not check that a tagged install.sh announces its tag"
+
+# what is published is compared with what was signed after every step that could
+# touch dist, just before it is published
+[ "$(step_names publish | grep -B1 -xF 'Publish release assets' | head -n 1)" = "Check that what is published is what was signed, and recent" ] ||
+    fail "the digest check is not the step just before the publication"
+files="$(job publish | sed -n '/^          files: |$/,/^          [a-z_]*:/p')"
+[ "$(printf '%s\n' "${files}" | grep -xE ' +dist/install\.sh(\.sig)?' | tr -d ' ' | paste -sd' ')" = "dist/install.sh.sig dist/install.sh" ] ||
+    fail "install.sh.sig is not published before install.sh"
+
 # release.yml and the install check it calls, which runs with the same token
 install_check="${2:-$(dirname "${workflow}")/install-check.yml}"
 unpinned="$(grep -HE '^ +(- )?uses: ' "${workflow}" "${install_check}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"

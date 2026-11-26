@@ -2899,6 +2899,25 @@ jobs:
           grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|CASAOS_UI_TAG|CASAOS_TAG)=' published/components.lock > published/expected.env
           cat published/expected.env
 
+      - name: Set up Go for the signing tool
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: tools/installer-sign/go.mod
+          cache: false
+
+      # The box's core runs an installer only with a good signature: the one
+      # published has to be good for the repository's public key.
+      - name: Check the published installer's signature
+        run: |
+          set -euo pipefail
+          if ! gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json assets -q '.assets[].name' | grep -qxF install.sh.sig; then
+            echo "Release ${TAG} publishes no install.sh.sig, so there is no signature to check."
+            exit 0
+          fi
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh.sig
+          go -C tools/installer-sign build -o "${RUNNER_TEMP}/installer-sign" .
+          "${RUNNER_TEMP}/installer-sign" verify --pub release/installer-signing.pub published/install.sh
+
       - name: The distribution's cloud image
         run: |
           set -euo pipefail

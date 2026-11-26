@@ -314,6 +314,14 @@ Show() {
     fi
 }
 
+# An update started from the dashboard never installs Docker: it stops before it
+# changes anything. An install typed by hand installs it as before.
+Refuse_Docker_Install_On_Update() {
+    if [[ "${CASAOS_INSTALLER_DETACHED:-0}" == "1" && ! -x "$(command -v docker)" ]]; then
+        Show 1 "Docker is missing on this box: install Docker, then update ReCasaOS from a terminal."
+    fi
+}
+
 Running_Under_CasaOS_Service() {
     [[ -r /proc/$$/cgroup ]] && grep -Eq '(^|/)casaos\.service($|/)' /proc/$$/cgroup
 }
@@ -2171,6 +2179,7 @@ Validate_Module_Request
 # Existing CasaOS releases start this installer inside casaos.service. Move the
 # real update into its own systemd unit before the installer stops CasaOS.
 Detach_From_CasaOS_Service
+Refuse_Docker_Install_On_Update
 
 # Step 0 : Get Download Url Domain
 # Step 1: Check ARCH
