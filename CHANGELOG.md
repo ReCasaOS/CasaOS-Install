@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.206] - 2026-11-27
+
+Components unchanged from v0.5.205: CasaOS `v0.4.131`, CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The first update checked by the box.** A box on v0.5.205 installs this release only after checking its signature and release ([ReCasaOS/CasaOS#199](https://github.com/ReCasaOS/CasaOS/pull/199)). Nothing else changes.
+
 ## [0.5.205] - 2026-11-27
 
 Components: CasaOS `v0.4.131`. Unchanged from v0.5.204: CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
