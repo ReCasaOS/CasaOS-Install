@@ -2512,11 +2512,13 @@ done
 WORKFLOW = os.environ.get("WORKFLOW") or os.path.join(HERE, "..", ".github", "workflows", "release.yml")
 
 
-def workflow_steps():
-    """The steps of the first job of release.yml: a list of the lines of each (comments between steps go with the step before them)."""
+def workflow_steps(job=None):
+    """The steps of the first job of release.yml, or of JOB: a list of the lines of each (comments between steps go with the step before them)."""
     with open(WORKFLOW, newline="") as f:
         lines = f.read().replace("\r", "").split("\n")
     steps = []
+    if job:
+        lines = lines[lines.index("  %s:" % job):]
     lines = lines[lines.index("    steps:") + 1:]
     for line in lines:
         if line.startswith("      - "):
@@ -2643,8 +2645,12 @@ class Workflow(unittest.TestCase):
                 self.assertIn(sentence, err, "the job does not say what is wrong")
 
     def test_the_publish_step_publishes_what_that_step_found(self):
-        step = self.text("Publish release assets")
-        self.assertIn("${{ steps.modules.outputs.files }}", step)
+        # assemble hands what the step found on to the publish job
+        with open(WORKFLOW, newline="") as f:
+            self.assertIn("      modules: ${{ steps.modules.outputs.files }}\n", f.read().replace("\r", ""))
+        publish = workflow_steps("publish")
+        step = "\n".join(publish[step_index(publish, "Publish release assets")])
+        self.assertIn("${{ needs.assemble.outputs.modules }}", step)
         self.assertIn("fail_on_unmatched_files: true", step)
 
 

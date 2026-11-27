@@ -4,7 +4,10 @@
 #   - what it publishes is always a pre-release, and only a job that waits for
 #     the install check makes it the latest release;
 #   - every action is named by its commit, not by a tag its owner can move;
-#   - no checkout leaves the token behind for the steps that follow.
+#   - no checkout leaves the token behind for the steps that follow;
+#   - install.sh is signed in a job of its own, in the release-signing
+#     environment, after the tests and before anything is published, and its
+#     signature is published next to it.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,11 +41,107 @@ esac
 if printf '%s\n' "${promote}" | grep -E '^    if:' | grep -qE 'always\(\)|failure\(\)|cancelled\(\)'; then
     fail "the promotion runs even when the install check did not pass"
 fi
-if job release | grep -vE '^ *#' | grep -qE 'gh release edit|--latest'; then
+if job publish | grep -vE '^ *#' | grep -qE 'gh release edit|--latest'; then
     fail "the job that publishes also promotes"
 fi
 
-unpinned="$(grep -E '^ +(- )?uses: ' "${workflow}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"
+# needs_of <job>: the needs line of that job
+needs_of() { job "$1" | grep -E '^    needs:' || true; }
+
+for name in assemble sign publish; do
+    [ -n "$(job "${name}")" ] || fail "no ${name} job"
+done
+[ -z "$(job release)" ] || fail "the old release job is still there"
+job sign | grep -qE '^    environment: release-signing$' || fail "the sign job is not in the release-signing environment"
+case "$(needs_of sign)" in *assemble*) ;; *) fail "the sign job does not wait for the assembly and its tests" ;; esac
+needs_of publish | grep -qE '[[:space:][,]sign([],[:space:]]|$)' || fail "the publish job does not wait for the signature"
+if job publish | grep -E '^    if:' | grep -qE 'always\(\)|failure\(\)|cancelled\(\)'; then
+    fail "the publication runs even when the signature did not pass"
+fi
+# publish checks that it publishes the install.sh that was signed, and that the
+# build is recent: the automatic update counts its one-day wait from published_at
+job sign | grep -qE '^      install_sha256: \$\{\{ steps\.[a-z_-]+\.outputs\.sha256 \}\}$' || fail "the sign job gives no digest of what it signed"
+job publish | grep -qE 'needs\.sign\.outputs\.install_sha256' || fail "the publish job does not compare install.sh with what was signed"
+job publish | grep -qF 'now - 21600' || fail "the publish job does not refuse a build older than 6 hours"
+job publish | grep -qF 'the build is older than 6 hours: use Re-run all jobs to rebuild and sign again' || fail "the publish job does not say how to rebuild an old build"
+job assemble | grep -qE '^          retention-days: 30$' || fail "dist is not kept for 30 days, as long as an approval can wait"
+case "$(needs_of install-check)" in *publish*) ;; *) fail "the install check does not wait for the publication" ;; esac
+job publish | grep -qE '^ +dist/install\.sh\.sig$' || fail "install.sh.sig is not among the published files"
+job sign | grep -qE 'verify --pub release/installer-signing\.pub' || fail "the sign job does not check its signature with release/installer-signing.pub"
+# the private key is given to the sign job only
+others="$(grep -nE 'secrets\.INSTALLER_SIGNING_KEY' "${workflow}" | wc -l)"
+in_sign="$(job sign | grep -cE 'secrets\.INSTALLER_SIGNING_KEY' || true)"
+[ "${in_sign}" -ge 1 ] && [ "${others}" = "${in_sign}" ] || fail "the signing key is given to a job other than sign, or to none"
+# only what publishes or promotes can write to the repository
+grep -qE '^  contents: read$' "${workflow}" || fail "the workflow's own permissions are not read only"
+for name in assemble sign install-check; do
+    if job "${name}" | grep -qE '^ +contents: write$'; then fail "the ${name} job can write to the repository"; fi
+done
+
+# build provenance and an SBOM: attested by the job that publishes, which alone
+# gets the OIDC token
+for p in id-token attestations; do
+    job publish | grep -qE "^      ${p}: write$" || fail "the publish job cannot write ${p}"
+    for name in assemble sign install-check promote; do
+        if job "${name}" | grep -qE "^ +${p}: write$"; then fail "the ${name} job can write ${p}"; fi
+    done
+done
+for a in attest-build-provenance attest-sbom sbom-action; do
+    job publish | grep -qE "uses: [^ ]*${a}@" || fail "the publish job does not use ${a}"
+done
+job publish | grep -qE '^ +dist/install\.sh\.sig$' &&
+    job publish | grep -qE '^ +subject-path: \|$' || fail "the publish job attests no archive"
+job publish | grep -qE '^ +installer-.*\.spdx\.json$' || fail "the SBOM is not among the published files"
+
+# a release ships only from a pushed tag: a workflow_dispatch, even on a tag, is
+# a dry run of assemble
+for name in sign publish; do
+    job "${name}" | grep -qxF "    if: github.event_name == 'push' && github.ref_type == 'tag'" || fail "the ${name} job runs on more than a pushed tag"
+done
+
+# step_names <job>: the names of that job's steps, in order
+step_names() { job "$1" | sed -n 's/^      - name: //p'; }
+
+# right after the bundle is assembled, the pinned core has to trust the key of
+# release/installer-signing.pub, and a tagged install.sh has to announce its tag
+gate="Check that the pinned core trusts the signing key"
+# held in a variable: grep -q would stop reading a long job and fail its pipe under pipefail
+assemble="$(job assemble)"
+[ "$(step_names assemble | grep -A1 -xF 'Assemble the release bundle' | tail -n 1)" = "${gate}" ] ||
+    fail "the check of the core's keys does not come right after the assembly"
+# the keys are those the pinned core really trusts: tools/core-keys built against it
+grep -qxF '          bash scripts/check-core-keys.sh work/CasaOS release/installer-signing.pub' <<<"${assemble}" ||
+    fail "assemble does not check the keys the pinned core trusts with scripts/check-core-keys.sh"
+if grep -qF 'keys.go' <<<"${assemble}"; then fail "assemble reads keys.go as text instead of building against the core"; fi
+root="${here}/.."
+grep -qF 'go -C "${core}" run "${here}/tools/core-keys/main.go"' "${root}/scripts/check-core-keys.sh" ||
+    fail "check-core-keys.sh does not build tools/core-keys against the core"
+grep -qF 'installersig.Keys' "${root}/tools/core-keys/main.go" || fail "tools/core-keys does not print installersig.Keys"
+grep -qF '! grep -qx "readonly CASAOS_INSTALL_RELEASE_TAG=\"${GITHUB_REF_NAME}\"" dist/install.sh' <<<"${assemble}" ||
+    fail "assemble does not check that a tagged install.sh announces its tag"
+
+# what is published is compared with what was signed right after the SBOM, before
+# anything is attested or published
+[ "$(step_names publish | grep -A4 -xF 'Generate the SBOM' | paste -sd'|')" = "Generate the SBOM|Check that what is published is what was signed, and recent|Attest build provenance|Attest the SBOM|Publish release assets" ] ||
+    fail "the digest check does not come right after the SBOM, before the attestations and the publication"
+files="$(job publish | sed -n '/^          files: |$/,/^          [a-z_]*:/p')"
+[ "$(printf '%s\n' "${files}" | grep -xE ' +dist/install\.sh(\.sig)?' | tr -d ' ' | paste -sd' ')" = "dist/install.sh.sig dist/install.sh" ] ||
+    fail "install.sh.sig is not published before install.sh"
+
+# release.yml and the install check it calls, which runs with the same token
+install_check="${2:-$(dirname "${workflow}")/install-check.yml}"
+
+# the install check fails closed on the published signature: the asset list is
+# read once (no gh ... | grep -q), and a release without install.sh.sig fails
+# unless the check was started by hand
+sig_step="$(sed -n "/- name: Check the published installer's signature$/,/- name: /p" "${install_check}")"
+[ -n "${sig_step}" ] || fail "the install check does not check the published signature"
+grep -qF 'assets="$(gh release view "${TAG}"' <<<"${sig_step}" || fail "the install check does not read the asset list first"
+if grep -qE 'gh release view[^|]*\|[[:space:]]*grep' <<<"${sig_step}"; then fail "the install check pipes gh into grep"; fi
+grep -qF 'EVENT: ${{ github.event_name }}' <<<"${sig_step}" &&
+    grep -qF 'if [ "${EVENT}" != "workflow_dispatch" ]; then' <<<"${sig_step}" ||
+    fail "a release checked by the release workflow may go without install.sh.sig"
+unpinned="$(grep -HE '^ +(- )?uses: ' "${workflow}" "${install_check}" | grep -vE 'uses: (\./|[^@ ]+@[0-9a-f]{40}( |$))' || true)"
 [ -z "${unpinned}" ] || fail "actions that are not named by their commit:
 ${unpinned}"
 
@@ -51,4 +150,4 @@ without_token="$(grep -cE '^ +persist-credentials: false$' "${workflow}" || true
 [ "${checkouts}" -gt 0 ] && [ "${checkouts}" = "${without_token}" ] ||
     fail "${checkouts} checkouts, ${without_token} of them leave no token behind"
 
-echo "ok: release.yml publishes a pre-release, promotes it after the install check, and names its actions by commit"
+echo "ok: release.yml signs install.sh in release-signing, publishes a pre-release with its signature, promotes it after the install check, and names its actions by commit"
