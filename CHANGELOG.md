@@ -11,6 +11,10 @@ Components: CasaOS `v0.4.131`. Unchanged from v0.5.204: CasaOS-UI `v0.4.234`, Ca
 - **Signed installer.** Each release now publishes `install.sh.sig`, an Ed25519 signature of `install.sh`. It is made in a protected job that the owner approves. The release also publishes build provenance and an SBOM for its assets ([#367](https://github.com/ReCasaOS/CasaOS-Install/pull/367)).
 - **The box checks the installer before an update.** The Update button and the night update take `install.sh` and its signature from the same release. The box runs the script only if the signature is ReCasaOS's and the script is that release, no older than the one installed. A release that cannot be downloaded is tried again later. One whose signature is missing or wrong is not installed, and you get an alert ([ReCasaOS/CasaOS#199](https://github.com/ReCasaOS/CasaOS/pull/199)).
 
+### Proof
+
+The release run 45969256924 passed: the owner approved the sign job, the published `install.sh.sig` verifies against `release/installer-signing.pub`, `gh attestation verify install.sh --repo ReCasaOS/CasaOS-Install` passes, all 12 install-check legs were green on the first try, and the promote job made the release Latest. Not proven yet: a box on v0.4.131 updating through the check, which first happens with the next release.
+
 ## [0.5.204] - 2026-11-26
 
 Components: CasaOS-Gateway `v0.4.41`. Unchanged from v0.5.203: CasaOS `v0.4.130`, CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
