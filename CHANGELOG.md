@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.207] - 2026-11-27
+
+Components: CasaOS `v0.4.132`, CasaOS-UI `v0.4.235`, CasaOS-AppManagement `v0.4.126`, module `vuln-scan` `v0.2.2`. Unchanged from v0.5.206: CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Vulnerabilities attackers already exploit.** Once a day the scan module downloads CISA's list of exploited vulnerabilities (KEV) and the EPSS scores. A high vulnerability on that list counts as a critical one for the badge and the alert. The Security window lists what you can fix first, then exploited vulnerabilities, then by EPSS score. You get an alert when an app gains an exploited vulnerability ([ReCasaOS/ReCasaOS-VulnScan#8](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/8), [ReCasaOS/CasaOS#196](https://github.com/ReCasaOS/CasaOS/pull/196), [ReCasaOS/CasaOS-UI#244](https://github.com/ReCasaOS/CasaOS-UI/pull/244)).
+- **An unhealthy app is restarted automatically.** A container that stays unhealthy for 5 minutes is restarted, at most 3 times per app in 6 hours, and never while another operation runs on the app. On by default, with a switch in the settings menu. You get an alert when an app was restarted, and another when it is no longer unhealthy; each restart shows in Logs ([ReCasaOS/CasaOS-AppManagement#88](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/88), [ReCasaOS/CasaOS#197](https://github.com/ReCasaOS/CasaOS/pull/197), [ReCasaOS/CasaOS-UI#246](https://github.com/ReCasaOS/CasaOS-UI/pull/246)).
+
 ## [0.5.206] - 2026-11-27
 
 Components unchanged from v0.5.205: CasaOS `v0.4.131`, CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
