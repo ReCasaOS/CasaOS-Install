@@ -10,6 +10,10 @@ Components unchanged from v0.5.205: CasaOS `v0.4.131`, CasaOS-UI `v0.4.234`, Cas
 
 - **The first update checked by the box.** A box on v0.5.205 installs this release only after checking its signature and release ([ReCasaOS/CasaOS#199](https://github.com/ReCasaOS/CasaOS/pull/199)). Nothing else changes.
 
+### Proof
+
+The release run 46019744938 passed: the owner approved the sign job, all 12 install-check legs were green on the first try, and the promote job made the release Latest. On a real box that was on v0.5.205 (core v0.4.131), the Update action took `install.sh` and `install.sh.sig` from v0.5.206. The box kept the checked script in its private update folder, root only and 0700, byte for byte the published `install.sh`. It ran that file as the unit `CasaOS update v0.5.206`. The box came back on v0.5.206 with every service active.
+
 ## [0.5.205] - 2026-11-27
 
 Components: CasaOS `v0.4.131`. Unchanged from v0.5.204: CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
