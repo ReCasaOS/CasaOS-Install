@@ -2,9 +2,11 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
-## [0.5.213] - 2026-11-28
+## [0.5.214] - 2026-11-28
 
-Components: CasaOS-AppManagement `v0.4.128`. Unchanged from v0.5.212: CasaOS `v0.4.133`, CasaOS-UI `v0.4.239`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.8`, module `vuln-scan` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
+v0.5.213 was published as a pre-release only and never offered as a release: its install check found that the restore of a box stopped on a folder that held no file, and every box has one, the folder of an account that has neither a picture nor a file. This release is v0.5.213 with that fixed ([ReCasaOS/CasaOS-AppManagement#92](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/92)). A box backup taken with the pre-release v0.5.213 may not restore: take a new one after this update.
+
+Components: CasaOS-AppManagement `v0.4.129`. Unchanged from v0.5.212: CasaOS `v0.4.133`, CasaOS-UI `v0.4.239`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.8`, module `vuln-scan` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
 
 ### Changed
 
