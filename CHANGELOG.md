@@ -16,6 +16,10 @@ Components: CasaOS `v0.4.133`, CasaOS-UI `v0.4.237`, CasaOS-AppManagement `v0.4.
 - **The weather menu is readable under the light theme.** Its text was dark on the menu's dark background ([ReCasaOS/CasaOS#203](https://github.com/ReCasaOS/CasaOS/issues/203), [ReCasaOS/CasaOS-UI#253](https://github.com/ReCasaOS/CasaOS-UI/pull/253)).
 - After a box restore, the files that hold secrets are set back to owner-only ([ReCasaOS/CasaOS-AppManagement#90](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/90)).
 
+### Proof
+
+The release run 46136753303 passed: the sign job was approved, all 12 install-check legs were green on the first try, and the promote job made the release Latest. API widgets passed their own tests and the dashboard's, and were checked in a browser on mock data; they are not yet tried on a real box. The qBittorrent fix was checked against qBittorrent 4.6.7 with requests, not yet by a click on a real box. The weather menu was measured in a browser under both themes.
+
 ## [0.5.208] - 2026-11-28
 
 Components: CasaOS-UI `v0.4.236`. Unchanged from v0.5.207: CasaOS `v0.4.132`, CasaOS-AppManagement `v0.4.126`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.2`, rclone `v1.75.1`, restic `v0.19.1`.
