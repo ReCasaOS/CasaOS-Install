@@ -638,6 +638,8 @@ jobs:
         if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
+          # bash -e stops without a word: say which line and which command
+          trap 'echo "the box step stopped at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
           # The polls below run while user-service is stopped for the copy. A token
           # is checked against a key fetched from user-service every ten seconds;
           # since Common v0.4.25 the key last seen serves while it is down, but a
@@ -685,7 +687,6 @@ jobs:
           grep -q 'install-check-marker$' box-files.txt
           grep -q 'rclone.conf$' box-files.txt
           grep -q 'install-check-unknown.json$' box-files.txt
-          grep -q 'install-check-unknown/marker$' box-files.txt
           # no pipe into a reader that stops early: grep on the file, in an if
           if grep -q 'install-check-excluded$' box-files.txt; then echo "a file of an excluded folder went out"; exit 1; fi
           if grep -q 'install-check-big$' box-files.txt; then echo "the 60 MB entry went out"; exit 1; fi
@@ -693,6 +694,12 @@ jobs:
           test "$(jq -r '.skipped_count // 0' <<<"${run}")" -ge 1
           stamp="$(jq -r '.stamp' <<<"${run}")"
           sudo cat "/var/tmp/casaos-backup-smoke/casaos-system/${stamp}/manifest.json" > box-manifest.json
+          jq -c '.operations[] | {source, destination, directory}' box-manifest.json
+          # a folder is one part of the copy, binds/<n>, and its files sit there without
+          # the folder's own name: the manifest says which part is the unknown folder
+          unknown_part="$(jq -r '.operations[] | select(.source == "/var/lib/casaos/install-check-unknown" and .directory) | .destination' box-manifest.json)"
+          test -n "${unknown_part}"
+          test "$(sudo cat "/var/tmp/casaos-backup-smoke/casaos-system/${stamp}/${unknown_part}/marker")" = "unknown folder"
           jq -e '.skipped | map(select(.path == "/var/lib/casaos/install-check-big" and (.skip | contains("over 50 MB")))) | length == 1' box-manifest.json >/dev/null
           # and the copy stayed small: the 60 MB file is not in it
           size="$(sudo du -sb "/var/tmp/casaos-backup-smoke/casaos-system/${stamp}" | cut -f1)"
