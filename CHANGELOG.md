@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.215] - 2026-11-28
+
+Components: CasaOS-AppManagement `v0.4.130`. Unchanged from v0.5.214: CasaOS `v0.4.133`, CasaOS-UI `v0.4.239`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.8`, module `vuln-scan` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The restore of an app no longer stops on a folder that held no file.** An app with a folder it has not written to yet could not be restored whole from a destination that keeps one copy per backup: the copy holds nothing of such a folder, and the restore stopped there with "directory not found", with the parts before it back and the parts after it not. A destination switched to restic keeps empty folders and was not affected. A backup now says which folders held no file, and the restore makes them. A backup taken before v0.5.214 does not say it and still stops at such a folder: take a new backup after this update ([ReCasaOS/CasaOS-AppManagement#93](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/93)).
+
 ## [0.5.214] - 2026-11-28
 
 v0.5.213 was published as a pre-release only and never offered as a release: its install check found that the restore of a box stopped on a folder that held no file, and every box has one, the folder of an account that has neither a picture nor a file. This release is v0.5.213 with that fixed ([ReCasaOS/CasaOS-AppManagement#92](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/92)). A box backup taken with the pre-release v0.5.213 may not restore: take a new one after this update.
