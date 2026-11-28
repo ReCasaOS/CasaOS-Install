@@ -2,6 +2,20 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.209] - 2026-11-28
+
+Components: CasaOS `v0.4.133`, CasaOS-UI `v0.4.237`, CasaOS-AppManagement `v0.4.127`, module `mcp` `v0.2.3`. Unchanged from v0.5.208: CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.2`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **API widgets.** You can build a dashboard card from any JSON API, without code: give an address, press Test, click the fields of the answer to keep, choose how each is shown (text, number, size, percent, duration, date) and up to three colour rules per row. The cards show on both home pages and are shown, hidden and ordered like the built-in ones. A recipe can be exported and imported as a file; an export never contains a secret. Keys and tokens are stored on the box, never sent back and never logged. The box only reads (GET, JSON, 5 seconds, 256 KiB at most), and refuses loopback and link-local addresses. The box backup carries the widgets, and the AI access module can read them ([ReCasaOS/CasaOS#204](https://github.com/ReCasaOS/CasaOS/pull/204), [ReCasaOS/CasaOS-UI#252](https://github.com/ReCasaOS/CasaOS-UI/pull/252), [ReCasaOS/CasaOS-AppManagement#90](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/90), [ReCasaOS/ReCasaOS-MCP#12](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/12)).
+
+### Fixed
+
+- **qBittorrent no longer answers "Unauthorized" when opened from its card.** qBittorrent 4 refuses a page asked from another site, and the dashboard counted as one. An app is now opened without telling it where the click came from ([ReCasaOS/CasaOS#202](https://github.com/ReCasaOS/CasaOS/issues/202), [ReCasaOS/CasaOS-UI#253](https://github.com/ReCasaOS/CasaOS-UI/pull/253)).
+- **The weather menu is readable under the light theme.** Its text was dark on the menu's dark background ([ReCasaOS/CasaOS#203](https://github.com/ReCasaOS/CasaOS/issues/203), [ReCasaOS/CasaOS-UI#253](https://github.com/ReCasaOS/CasaOS-UI/pull/253)).
+- After a box restore, the files that hold secrets are set back to owner-only ([ReCasaOS/CasaOS-AppManagement#90](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/90)).
+
 ## [0.5.208] - 2026-11-28
 
 Components: CasaOS-UI `v0.4.236`. Unchanged from v0.5.207: CasaOS `v0.4.132`, CasaOS-AppManagement `v0.4.126`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.2`, rclone `v1.75.1`, restic `v0.19.1`.
