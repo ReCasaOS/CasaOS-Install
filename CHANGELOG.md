@@ -15,6 +15,10 @@ Components: CasaOS-UI `v0.4.238`, module `vuln-scan` `v0.2.3`. Unchanged from v0
 
 - **Card subtitles no longer cut on wide screens.** The French line under the Logs card and the Brazilian Portuguese line under the AI access card were a few pixels too long and ended in an ellipsis; both are shorter ([ReCasaOS/CasaOS-UI#254](https://github.com/ReCasaOS/CasaOS-UI/pull/254)).
 
+### Proof
+
+The release run 46169601533 passed: the sign job was approved, all 12 install-check legs were green on the first try, and the promote job made the release Latest. The scan of one app and the Shared folders tab passed their own tests and the dashboard's; they are not yet tried on a real box. A module that lacks the new route answers the dashboard in a way "Scan now" does not yet take as "scan everything"; this release ships the module that has the route, and the dashboard side follows in [ReCasaOS/CasaOS-UI#255](https://github.com/ReCasaOS/CasaOS-UI/pull/255). The shorter subtitles were measured in the cards' font (86 and 89 px for 131 px available), not seen again in a browser.
+
 ## [0.5.209] - 2026-11-28
 
 Components: CasaOS `v0.4.133`, CasaOS-UI `v0.4.237`, CasaOS-AppManagement `v0.4.127`, module `mcp` `v0.2.3`. Unchanged from v0.5.208: CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.2`, rclone `v1.75.1`, restic `v0.19.1`.
