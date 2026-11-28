@@ -638,6 +638,8 @@ jobs:
         if: ${{ !matrix.engine_only }}
         run: |
           set -euo pipefail
+          # bash -e stops without a word: say which line and which command
+          trap 'echo "the box step stopped at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
           # The polls below run while user-service is stopped for the copy. A token
           # is checked against a key fetched from user-service every ten seconds;
           # since Common v0.4.25 the key last seen serves while it is down, but a
