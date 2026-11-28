@@ -18,6 +18,10 @@ Components: CasaOS-UI `v0.4.239`. Unchanged from v0.5.210: CasaOS `v0.4.133`, Ca
 
 - **"Scan now" in an app's Security window no longer fails when the scan module is older than the dashboard.** The window asks the module to scan that app only, and scans every image when the module cannot. A module that had not been updated yet (v0.2.2 or older) was not recognised as one that cannot: the window showed an error and started no scan. It now starts the full scan ([ReCasaOS/CasaOS-UI#255](https://github.com/ReCasaOS/CasaOS-UI/pull/255)).
 
+### Proof
+
+The release run 46172893500 passed on its second attempt: the sign job was approved, 11 of the 12 install-check legs were green on the first try, and the promote job made the release Latest once the twelfth was green. That leg (the published bundle on arm64, "Docker current") had stopped on a failed download of a component this release does not change, and passed when it was run again alone. Before the tag, a dry run of the release workflow on the release branch had assembled the same tree (run 46172575204). The fix passed the dashboard's tests, with a new test that fails without it; the answer it now takes as "scan everything" (400, "no matching operation was found") was read from a throwaway test against the scan module at v0.2.2. No install-check leg exercises it, and it is not yet tried on a real box whose module is older than the dashboard.
+
 ## [0.5.210] - 2026-11-28
 
 Components: CasaOS-UI `v0.4.238`, module `vuln-scan` `v0.2.3`. Unchanged from v0.5.209: CasaOS `v0.4.133`, CasaOS-AppManagement `v0.4.127`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.7`, rclone `v1.75.1`, restic `v0.19.1`.
