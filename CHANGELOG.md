@@ -10,6 +10,10 @@ Components: module `virt` `v0.2.8`. Unchanged from v0.5.211: CasaOS `v0.4.133`, 
 
 - **A virtual machine with UEFI firmware can be created on Debian 12.** Its libvirt (9.0) refused the definition the module wrote, so the VM was never created; a guest that needs UEFI, such as Home Assistant OS, could not be made from the dashboard. The module now writes what that libvirt accepts, and keeps the former definition on the others. Found and explained by [@imBxi](https://github.com/imBxi) ([ReCasaOS/CasaOS-VirtManagement#16](https://github.com/ReCasaOS/CasaOS-VirtManagement/issues/16), [ReCasaOS/CasaOS-VirtManagement#18](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/18)).
 
+### Proof
+
+The release run 46174673689 passed: the sign job was approved, all 12 install-check legs were green on the first try, and the promote job made the release Latest. The module's tests cover the definition written for each libvirt version, on both sides of the two bounds. It was not tried on a real libvirt 9.0: the report shows the same definition, written by hand, defining and starting on Debian 12.
+
 ## [0.5.211] - 2026-11-28
 
 Components: CasaOS-UI `v0.4.239`. Unchanged from v0.5.210: CasaOS `v0.4.133`, CasaOS-AppManagement `v0.4.127`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
