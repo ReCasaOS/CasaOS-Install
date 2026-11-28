@@ -10,6 +10,10 @@ Components: CasaOS-UI `v0.4.236`. Unchanged from v0.5.207: CasaOS `v0.4.132`, Ca
 
 - **A line under the Logs and AI access cards.** On the new dashboard, these two cards of the System section now say what they are for, like the others: "System and app logs" and "Connect AI assistants", in English, French and Brazilian Portuguese ([ReCasaOS/CasaOS#201](https://github.com/ReCasaOS/CasaOS/issues/201), [ReCasaOS/CasaOS-UI#251](https://github.com/ReCasaOS/CasaOS-UI/pull/251)).
 
+### Proof
+
+The release run 46127262765 passed: the sign job was approved, all 12 install-check legs were green on the first try, and the promote job made the release Latest. The change passed the dashboard's tests; the two cards are not yet seen in a browser.
+
 ## [0.5.207] - 2026-11-27
 
 Components: CasaOS `v0.4.132`, CasaOS-UI `v0.4.235`, CasaOS-AppManagement `v0.4.126`, module `vuln-scan` `v0.2.2`. Unchanged from v0.5.206: CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, rclone `v1.75.1`, restic `v0.19.1`.
