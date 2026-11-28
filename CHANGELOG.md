@@ -2,6 +2,14 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.211] - 2026-11-28
+
+Components: CasaOS-UI `v0.4.239`. Unchanged from v0.5.210: CasaOS `v0.4.133`, CasaOS-AppManagement `v0.4.127`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **"Scan now" in an app's Security window no longer fails when the scan module is older than the dashboard.** The window asks the module to scan that app only, and scans every image when the module cannot. A module that had not been updated yet (v0.2.2 or older) was not recognised as one that cannot: the window showed an error and started no scan. It now starts the full scan ([ReCasaOS/CasaOS-UI#255](https://github.com/ReCasaOS/CasaOS-UI/pull/255)).
+
 ## [0.5.210] - 2026-11-28
 
 Components: CasaOS-UI `v0.4.238`, module `vuln-scan` `v0.2.3`. Unchanged from v0.5.209: CasaOS `v0.4.133`, CasaOS-AppManagement `v0.4.127`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.7`, rclone `v1.75.1`, restic `v0.19.1`.
