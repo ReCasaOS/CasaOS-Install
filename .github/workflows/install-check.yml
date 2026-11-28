@@ -675,16 +675,29 @@ jobs:
             -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
             -d "{\"destination\":\"smoke\",\"app\":\"casaos-system\",\"stamp\":\"${stamp}\"}" | jq .
           for _ in $(seq 1 60); do
+            # a restore that brings the gateway's files back ends by restarting it, and
+            # CASA_URL talks to it: a refused connection here is not a failure, the poll goes on
             run="$(curl -sS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
-              | jq -c --arg b "${before}" '.data // [] | map(select(.app == "casaos-system" and .restore == true and .started_at > $b)) | first // empty')"
+              | jq -c --arg b "${before}" '.data // [] | map(select(.app == "casaos-system" and .restore == true and .started_at > $b)) | first // empty' || true)"
             [ -n "${run}" ] && break
             sleep 3
           done
           echo "box restore run: ${run}"
           test -n "${run}"
           test "$(jq -r '.error // ""' <<<"${run}")" = ""
-          test "$(cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
-          for unit in casaos casaos-user-service casaos-local-storage rclone; do test "$(systemctl is-active ${unit}.service)" = active; done
+          # read as root: a restore may leave what it put back to root only
+          test "$(sudo cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
+          # the run is written only after the restart returned, but the gateway may
+          # still be taking up its restored files: wait, bounded, until it answers
+          # again before the checks that need it
+          sleep 5
+          up=""
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /dev/null --max-time 5 "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}"; then up=yes; break; fi
+            sleep 2
+          done
+          test "${up}" = yes
+          for unit in casaos casaos-gateway casaos-user-service casaos-local-storage rclone; do test "$(systemctl is-active ${unit}.service)" = active; done
           # the dashboard is back, and so is the login
           port="$(sed -nE 's/^[[:space:]]*HttpPort[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' /etc/casaos/gateway.ini | sed -n 1p)"
           curl -fsS -o /dev/null "http://127.0.0.1:${port:-80}/"
