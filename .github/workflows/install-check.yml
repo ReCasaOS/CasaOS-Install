@@ -709,8 +709,8 @@ jobs:
             -H "Authorization: ${CASA_TOKEN}" -H 'content-type: application/json' \
             -d "{\"destination\":\"smoke\",\"app\":\"casaos-system\",\"stamp\":\"${stamp}\"}" | jq .
           for _ in $(seq 1 60); do
-            # the restore ends by restarting the gateway, which is what CASA_URL talks to:
-            # a refused connection here is not a failure, the poll goes on
+            # a restore that brings the gateway's files back ends by restarting it, and
+            # CASA_URL talks to it: a refused connection here is not a failure, the poll goes on
             run="$(curl -sS "${CASA_URL}/v2/app_management/backup/runs" -H "Authorization: ${CASA_TOKEN}" \
               | jq -c --arg b "${before}" '.data // [] | map(select(.app == "casaos-system" and .restore == true and .started_at > $b)) | first // empty' || true)"
             [ -n "${run}" ] && break
@@ -721,6 +721,7 @@ jobs:
           test "$(jq -r '.error // ""' <<<"${run}")" = ""
           # nothing the manifest named was refused
           test "$(jq -r '.skipped_count // 0' <<<"${run}")" = 0
+          # read as root: a restore may leave what it put back to root only
           test "$(sudo cat /var/lib/casaos/conf/install-check-marker)" = "box marker ${CASAOS_RELEASE_TAG}"
           test "$(sudo cat /var/lib/casaos/install-check-unknown.json)" = "unknown file"
           test "$(sudo cat /var/lib/casaos/install-check-unknown/marker)" = "unknown folder"
