@@ -332,6 +332,30 @@ Modules_Left_Notice() {
     fi
 }
 
+# Takes the storage merge off /DATA. Stopping casaos-local-storage used to do it
+# by killing the mergerfs process; since ReCasaOS/CasaOS#207 a stop leaves the
+# merge mounted, so that an update does not take /DATA away from the apps, and
+# the uninstall has to ask. Only the merge and the AppData folder bound on it
+# are touched: a drive mounted under /DATA is not ReCasaOS's to unmount. A mount
+# that is in use is detached (umount -l). Returns 1 when the merge is still
+# there afterwards.
+Unmount_Data() {
+    local mounts="${CASA_PROC_MOUNTS:-/proc/mounts}" point
+
+    Data_Is_Merge() { awk '$2 == "/DATA" && $3 == "fuse.mergerfs" { found = 1 } END { exit !found }' "${mounts}"; }
+
+    Data_Is_Merge || return 0
+
+    for point in /DATA/AppData /DATA; do
+        if awk -v point="${point}" '$2 == point { found = 1 } END { exit !found }' "${mounts}"; then
+            Show 2 "Unmounting ${point}..."
+            ${sudo_cmd} umount "${point}" 2>/dev/null || ${sudo_cmd} umount -l "${point}" || Show 3 "${point} could not be unmounted."
+        fi
+    done
+
+    ! Data_Is_Merge
+}
+
 Uninstall_Casaos() {
 
     for SERVICE in "${CASA_SERVICES[@]}"; do
@@ -339,6 +363,9 @@ Uninstall_Casaos() {
         systemctl stop "${SERVICE}" || Show 3 "Service ${SERVICE} does not exist."
         systemctl disable "${SERVICE}" || Show 3 "Service ${SERVICE} does not exist."
     done
+
+    DATA_UNMOUNTED=true
+    Unmount_Data || DATA_UNMOUNTED=false
 
     # Remove Service file
     if [[ -f ${CASA_SERVICE_USR} ]]; then
@@ -402,7 +429,12 @@ Uninstall_Casaos() {
     fi
 
     if [[ ${REMOVE_APP_DATA} = true ]]; then
-        $sudo_cmd rm -fr /DATA/AppData || Show 1 "Failed to delete AppData."
+        if [[ ${DATA_UNMOUNTED} = true ]]; then
+            $sudo_cmd rm -fr /DATA/AppData || Show 1 "Failed to delete AppData."
+        else
+            # with the merge still there, /DATA/AppData is the disks, not a leftover folder
+            Show 3 "The storage merge is still mounted on /DATA: /DATA/AppData was left as it is."
+        fi
     fi
 
     if [[ -d ${CASA_CONF_PATH} ]]; then

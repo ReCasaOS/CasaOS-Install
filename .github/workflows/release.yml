@@ -90,6 +90,9 @@ jobs:
       - name: Check what the uninstaller does with a module
         run: sh scripts/test-uninstall-modules.sh
 
+      - name: Check what the uninstaller does with the storage merge on /DATA
+        run: bash scripts/test-uninstall-data.sh
+
       - name: Check the fetch of the modules' releases
         run: bash scripts/test-stage-modules.sh
 
