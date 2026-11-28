@@ -2,6 +2,652 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.208] - 2026-11-28
+
+Components: CasaOS-UI `v0.4.236`. Unchanged from v0.5.207: CasaOS `v0.4.132`, CasaOS-AppManagement `v0.4.126`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.2`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **A line under the Logs and AI access cards.** On the new dashboard, these two cards of the System section now say what they are for, like the others: "System and app logs" and "Connect AI assistants", in English, French and Brazilian Portuguese ([ReCasaOS/CasaOS#201](https://github.com/ReCasaOS/CasaOS/issues/201), [ReCasaOS/CasaOS-UI#251](https://github.com/ReCasaOS/CasaOS-UI/pull/251)).
+
+### Proof
+
+The release run 46127262765 passed: the sign job was approved, all 12 install-check legs were green on the first try, and the promote job made the release Latest. The change passed the dashboard's tests; the two cards are not yet seen in a browser.
+
+## [0.5.207] - 2026-11-27
+
+Components: CasaOS `v0.4.132`, CasaOS-UI `v0.4.235`, CasaOS-AppManagement `v0.4.126`, module `vuln-scan` `v0.2.2`. Unchanged from v0.5.206: CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Vulnerabilities attackers already exploit.** Once a day the scan module downloads CISA's list of exploited vulnerabilities (KEV) and the EPSS scores. A high vulnerability on that list counts as a critical one for the badge and the alert. The Security window lists what you can fix first, then exploited vulnerabilities, then by EPSS score. You get an alert when an app gains an exploited vulnerability ([ReCasaOS/ReCasaOS-VulnScan#8](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/8), [ReCasaOS/CasaOS#196](https://github.com/ReCasaOS/CasaOS/pull/196), [ReCasaOS/CasaOS-UI#244](https://github.com/ReCasaOS/CasaOS-UI/pull/244)).
+- **An unhealthy app is restarted automatically.** A container that stays unhealthy for 5 minutes is restarted, at most 3 times per app in 6 hours, and never while another operation runs on the app. On by default, with a switch in the settings menu. You get an alert when an app was restarted, and another when it is no longer unhealthy; each restart shows in Logs ([ReCasaOS/CasaOS-AppManagement#88](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/88), [ReCasaOS/CasaOS#197](https://github.com/ReCasaOS/CasaOS/pull/197), [ReCasaOS/CasaOS-UI#246](https://github.com/ReCasaOS/CasaOS-UI/pull/246)).
+
+### Proof
+
+The release run 46076776244 passed: the owner approved the sign job, all 12 install-check legs were green on the first try, and the promote job made the release Latest. Both features passed their own tests and the dashboard's; they are not yet seen on a real box.
+
+## [0.5.206] - 2026-11-27
+
+Components unchanged from v0.5.205: CasaOS `v0.4.131`, CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The first update checked by the box.** A box on v0.5.205 installs this release only after checking its signature and release ([ReCasaOS/CasaOS#199](https://github.com/ReCasaOS/CasaOS/pull/199)). Nothing else changes.
+
+### Proof
+
+The release run 46019744938 passed: the owner approved the sign job, all 12 install-check legs were green on the first try, and the promote job made the release Latest. On a real box that was on v0.5.205 (core v0.4.131), the Update action took `install.sh` and `install.sh.sig` from v0.5.206. The box kept the checked script in its private update folder, root only and 0700, byte for byte the published `install.sh`. It ran that file as the unit `CasaOS update v0.5.206`. The box came back on v0.5.206 with every service active.
+
+## [0.5.205] - 2026-11-27
+
+Components: CasaOS `v0.4.131`. Unchanged from v0.5.204: CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Signed installer.** Each release now publishes `install.sh.sig`, an Ed25519 signature of `install.sh`. It is made in a protected job that the owner approves. The release also publishes build provenance and an SBOM for its assets ([#367](https://github.com/ReCasaOS/CasaOS-Install/pull/367)).
+- **The box checks the installer before an update.** The Update button and the night update take `install.sh` and its signature from the same release. The box runs the script only if the signature is ReCasaOS's and the script is that release, no older than the one installed. A release that cannot be downloaded is tried again later. One whose signature is missing or wrong is not installed, and you get an alert ([ReCasaOS/CasaOS#199](https://github.com/ReCasaOS/CasaOS/pull/199)).
+
+### Proof
+
+The release run 45969256924 passed: the owner approved the sign job, the published `install.sh.sig` verifies against `release/installer-signing.pub`, `gh attestation verify install.sh --repo ReCasaOS/CasaOS-Install` passes, all 12 install-check legs were green on the first try, and the promote job made the release Latest. Not proven yet: a box on v0.4.131 updating through the check, which first happens with the next release.
+
+## [0.5.204] - 2026-11-26
+
+Components: CasaOS-Gateway `v0.4.41`. Unchanged from v0.5.203: CasaOS `v0.4.130`, CasaOS-UI `v0.4.234`, CasaOS-AppManagement `v0.4.125`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A module's page opens from its card and its tile.** They open the page in a new tab, which sends no token, and the gateway refused it. The gateway now lets exactly `GET` of `<gateway_route>/` (and of `<gateway_route>`) through without a token, for the route of an installed module; every other path under the route still needs the token ([ReCasaOS/CasaOS-Gateway#19](https://github.com/ReCasaOS/CasaOS-Gateway/pull/19), [#368](https://github.com/ReCasaOS/CasaOS-Install/pull/368)).
+
+### Proof
+
+The install check of this release (run 45888276080) passed on all 12 legs on the first try, and the promote job made it Latest.
+
+## [0.5.203] - 2026-11-26
+
+Components: CasaOS `v0.4.130`, CasaOS-UI `v0.4.234`. Unchanged from v0.5.202: CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A module can show a card on the home screens.** A module, ours or another author's, serves a description of its card at `<its route>/card` (title, icon, status, up to 8 rows, up to 2 buttons, a link); the dashboard reads it strictly and draws it, as a widget on the classic home (shown, hidden and ordered in Widget settings) and as a panel on the new dashboard. The administrator's only. The core lists the running modules that may have one at `GET /v1/sys/modules/cards` ([ReCasaOS/CasaOS#198](https://github.com/ReCasaOS/CasaOS/pull/198), [ReCasaOS/CasaOS-UI#247](https://github.com/ReCasaOS/CasaOS-UI/pull/247)). The format is in [docs/modules.md](docs/modules.md#a-modules-card) ([#363](https://github.com/ReCasaOS/CasaOS-Install/pull/363)).
+- **A module's tile in the app grid.** A card with a link also gives its module a tile beside Logs and Security, which opens the module's page in a new tab; a card with only a link is just a tile ([ReCasaOS/CasaOS-UI#248](https://github.com/ReCasaOS/CasaOS-UI/pull/248), [#364](https://github.com/ReCasaOS/CasaOS-Install/pull/364)).
+
+### Proof
+
+The install check of this release (run 45854525365) passed on all 12 legs on the first try, and the promote job made it Latest. The cards and tiles were checked against the dashboard's fake core in a browser; they are not yet seen on a real box.
+
+## [0.5.202] - 2026-11-26
+
+Components: CasaOS-UI `v0.4.233`. Unchanged from v0.5.201: CasaOS `v0.4.129`, CasaOS-AppManagement `v0.4.125`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The confirmation of a module's install says what it does in a few lines.** One line for the version and the level, the module's description, one sentence for what the install does (with the system packages and their sizes only when there are any), and one line for the checks, with any that did not pass shown above it. *See the details* holds the full text of what the install does to the machine, where the archive comes from and every check. The warning and the confirmation box of a module written outside ReCasaOS are unchanged ([ReCasaOS/CasaOS-UI#245](https://github.com/ReCasaOS/CasaOS-UI/pull/245)).
+
+### Proof
+
+The install check of this release (run 45821612756) passed on all 12 legs on the first try, and the promote job made it Latest.
+
+## [0.5.201] - 2026-11-26
+
+Components: CasaOS `v0.4.129`, CasaOS-AppManagement `v0.4.125`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.2`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.1`. Unchanged from v0.5.200: CasaOS-Gateway `v0.4.40`, CasaOS-UI `v0.4.232`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The API of each service and module is described by its `openapi.yaml` alone.** Its doc route (`/doc/v2/<name>`) serves the OpenAPI description, at the route and at `/openapi.yaml`, and nothing else; the HTML page that used to be there is removed ([ReCasaOS/CasaOS#195](https://github.com/ReCasaOS/CasaOS/pull/195), [ReCasaOS/CasaOS-AppManagement#87](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/87), [ReCasaOS/CasaOS-UserService#17](https://github.com/ReCasaOS/CasaOS-UserService/pull/17), [ReCasaOS/CasaOS-LocalStorage#37](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/37), [ReCasaOS/CasaOS-MessageBus#11](https://github.com/ReCasaOS/CasaOS-MessageBus/pull/11), [ReCasaOS/ReCasaOS-MCP#9](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/9), [ReCasaOS/ReCasaOS-VulnScan#6](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/6), [ReCasaOS/CasaOS-VirtManagement#13](https://github.com/ReCasaOS/CasaOS-VirtManagement/pull/13)).
+- Two tests of the core that depended on the speed of the machine no longer do ([ReCasaOS/CasaOS#194](https://github.com/ReCasaOS/CasaOS/pull/194)).
+
+### Proof
+
+The install check of this release (run 45806870763) passed on 11 of its 12 legs on the first try. The Armbian leg failed before installing anything: the address of its test image redirected to mirrors that did not have the new Armbian image yet (HTTP 404). The release was then made Latest by hand.
+
+## [0.5.200] - 2026-11-26
+
+Components: CasaOS-UI `v0.4.232`. Unchanged from v0.5.199: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.2.0`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The Modules window says who wrote a module.** A module whose repository is not ReCasaOS's says *Written by {owner}, not by ReCasaOS*, with a link to its repository. Before such a module is installed, the window says who wrote it and that it runs with every right on the machine, and the install waits for *I understand that ReCasaOS did not write this module* to be ticked; an update shows the same warning. The *Community* level now reads *Written outside ReCasaOS, reviewed when it entered the catalogue, not tested by ReCasaOS* ([ReCasaOS/CasaOS-UI#243](https://github.com/ReCasaOS/CasaOS-UI/pull/243)).
+- **The night updates such a module only if its owner says so.** An installed module of another owner has its own *Update it at night* switch, off unless turned on; it acts when automatic updates are on, 24 hours after a new version appears.
+- **A withdrawn version is shown.** A module whose installed version the catalogue withdrew shows the version and the reason given; it stays installed, and that version is offered to no box.
+
+### Changed
+
+- **An update at the end of an install that meets a withdrawn version says it as nothing to do.** If the catalogue withdraws the version of this release between the list of the modules and their update, the module keeps the version it has and the install says so, instead of reporting a failed update.
+
+### Proof
+
+The install check of this release (run 45778000243) passed on 11 of its 12 legs. Ubuntu 26.04 failed once because its package index was incomplete at that moment, and passed when run again. The Armbian leg failed twice before installing anything: the address of its test image redirected to a mirror that did not have the new Armbian image yet (HTTP 404). The release was then made Latest by hand. The Modules window was checked in a browser against the dashboard's development stub; not tried yet on a real box: a module written outside ReCasaOS, which the catalogue does not hold yet.
+
+## [0.5.199] - 2026-11-26
+
+Components: CasaOS `v0.4.128`, CasaOS-AppManagement `v0.4.124`, CasaOS-UI `v0.4.231`, module `vuln-scan` `v0.2.0`. Unchanged from v0.5.198: CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An app update that makes things worse is not applied.** When the `vuln-scan` module is installed, an app update looks at the new image before the app is recreated. If the new image carries more critical vulnerabilities with a known fix than the one the app runs, the update is undone: the app keeps its containers, its tags and its files, and the image that was pulled is removed. Fewer or as many vulnerabilities, a scan that cannot conclude, a module that is absent or does not answer, or more than 10 minutes for the app: the update goes through. This holds for the update button, *Update every app* and the night ([ReCasaOS/ReCasaOS-VulnScan#5](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/5), [ReCasaOS/CasaOS-AppManagement#86](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/86)).
+- **The dashboard says so.** The update card says *Checking the new version for vulnerabilities* while the new image is scanned. A blocked update opens a window on the app that was updated: how many more critical vulnerabilities the new version has, the ones it adds and the version that fixes each, *Keep the installed version*, and for the owner *Update anyway*. *Update every app* and the list of the last nights show an update blocked with its reason ([ReCasaOS/CasaOS-UI#242](https://github.com/ReCasaOS/CasaOS-UI/pull/242)).
+- **The night tells it once.** A night that blocks an app's update says so in its alert, and does not try that app again until the registry publishes another image or the app's next version changes ([ReCasaOS/CasaOS#193](https://github.com/ReCasaOS/CasaOS/pull/193)).
+- **A switch turns the check off**: *Check the new version before an update*, in *Automatic app updates*, shown when the module is installed and on by default.
+- **Modules written outside ReCasaOS can enter the catalogue.** The core reads a third format of the online catalogue, where each module says the repository it comes from; a module that ReCasaOS did not write is said so before it is installed, and the night updates it only if its owner said yes for it ([ReCasaOS/CasaOS#192](https://github.com/ReCasaOS/CasaOS/pull/192)). The catalogue builder writes that format ([#354](https://github.com/ReCasaOS/CasaOS-Install/pull/354)); the catalogue shipped with this release is unchanged.
+
+### Proof
+
+The install check of this release passed on all 12 legs on the first try (run 45719359058), and the promote job made it Latest. Not proven on a real box yet: an update actually blocked, the window on the dashboard, the night's alert, and how long a first scan of a new image takes on a small box.
+
+## [0.5.198] - 2026-11-25
+
+Components: CasaOS-UI `v0.4.230`. Unchanged from v0.5.197: CasaOS `v0.4.126`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+This is the release that offers to every box what v0.5.197 held as a pre-release: a module can get a new version without a new release of ReCasaOS (see the v0.5.197 entry below).
+
+### Added
+
+- **The settings menu says when a module has an update.** The settings icon of the top bar carries its red dot when an installed module has a later version waiting, as it does for an update of ReCasaOS, and the *Modules* row of the menu carries the same dot and says how many updates wait. The count is read when the dashboard loads and when the Modules window closes ([ReCasaOS/CasaOS-UI#241](https://github.com/ReCasaOS/CasaOS-UI/pull/241)).
+
+### Proof
+
+v0.5.197 was tried on a real box: the box fetched the catalogue published by ReCasaOS/modules, the Modules window gave its date, and a version of the `mcp` module that no release of ReCasaOS ships (`v0.2.1`, published through the catalogue alone) was offered there.
+
+The install check of this release passed on all 12 legs on the first try (run 45664874381), and the promote job made it Latest. Not proven on a real box yet: the update of a module from the online catalogue, by hand or by the night after its 24 hours.
+
+## [0.5.197] - 2026-11-25
+
+Components: CasaOS `v0.4.126`. Unchanged from v0.5.196: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.229`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+This release is published as a pre-release until the online catalogue has been tried on a real box.
+
+### Added
+
+- **A module can get a new version without a new release of ReCasaOS.** Until now a box learned the version of a module only from the catalogue that came with its release. It now also reads a catalogue published by [ReCasaOS/modules](https://github.com/ReCasaOS/modules), where each version of a module is proposed as a pull request, checked (the archives against their published sums, the tag against its commit, the list read by the real core) and published when it is merged. The box fetches it shortly after it starts, every 6 hours, and when the Modules window asks; it keeps a fetched catalogue only when it is valid as a whole and not older than the one it has. For each module it takes the highest version its system accepts, from either catalogue, so a box too old for the newest version of a module keeps the one of its release. A box that cannot reach the catalogue goes on with the versions that came with ReCasaOS ([ReCasaOS/CasaOS#189](https://github.com/ReCasaOS/CasaOS/pull/189)).
+- **The night updates the installed modules**, with the switch and the hours of the automatic updates of ReCasaOS: a version is installed 24 hours after the box first saw it, one module after the other, never a module that is not installed and never backwards. A version that failed is put back and not tried again; one alert tells what the night did.
+- **The Modules window says where its versions come from**, with the date of the catalogue, and has a *Look for newer versions* button. The window itself came with the interface of v0.5.196; the line and the button show with this release's core ([ReCasaOS/CasaOS-UI#239](https://github.com/ReCasaOS/CasaOS-UI/pull/239)).
+- **`[modules] OnlineCatalogue = false`** in `/etc/casaos/casaos.conf` turns the online catalogue off: the box then offers only the versions that came with its release.
+
+### Changed
+
+- **An update of ReCasaOS brings the modules to the versions of that release, not further.** The update of the installed modules at the end of an install now works from the release's own catalogue (`casaos module list --shipped`, `casaos module update --shipped`), so that a release installed at night does not also install a module version the box has seen for less than a day. A module that is already ahead of the release is left as it is.
+- The catalogue builder can write the online format, and its download loop is a script of its own that the catalogue's repository calls ([#343](https://github.com/ReCasaOS/CasaOS-Install/pull/343)). A module may not take the name of the units of the installer's update of the modules.
+
+### Proof
+
+The core's part passed its tests with the race detector on Linux and ran on a full stack in a container: a core fetched the catalogue really published by ReCasaOS/modules and kept it, refused an older one, replaced a broken one, wrote nothing through a link, and went back to the release's list with the setting off. The catalogue's repository published twice, once by hand and once from a merge, and its check ran on a pull request. The installer's update of the modules was tested with the exact arguments of its three calls, for a core at `v0.4.126` and for older ones. The release build proved this release's catalogue with the pinned core, and the install check passed on all 12 legs on the first try (run 45642528741); on those installs the update of the modules ran with `--shipped` and found nothing to update, as expected.
+
+Not proven yet, and the reason this release is held as a pre-release: a real box that fetches the catalogue, a module version offered and installed from it, and an update made by the night after its 24 hours.
+
+## [0.5.196] - 2026-11-25
+
+Components: CasaOS-UI `v0.4.229`. Unchanged from v0.5.195: CasaOS `v0.4.125`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The weather menu has room inside.** Its text touched the menu's edges; it now has a margin all around, and a long place name wraps ([ReCasaOS/CasaOS-UI#240](https://github.com/ReCasaOS/CasaOS-UI/pull/240)).
+
+### Changed
+
+- **The Modules window is ready to look for newer versions.** The interface part of the modules' own catalogue is in ([ReCasaOS/CasaOS-UI#239](https://github.com/ReCasaOS/CasaOS-UI/pull/239)); the core of this release does not have its part yet, so the window looks and works as before.
+
+### Proof
+
+The weather menu was seen too tight on a real box with v0.5.194, then checked on the mock with the fix and a long place name. The Modules window passed its own tests and was seen on the mock in its pull request; it was not tried against this release's core. The install check passed on all 12 legs on the first try (run 45635508383), and the promote job made it Latest.
+
+## [0.5.195] - 2026-11-25
+
+Components: CasaOS-UI `v0.4.228`. Unchanged from v0.5.194: CasaOS `v0.4.125`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The weather menu is no longer crossed by the app cards' settings buttons.** On the new dashboard, the small gear of the cards under the open weather menu showed through it ([ReCasaOS/CasaOS-UI#238](https://github.com/ReCasaOS/CasaOS-UI/pull/238)).
+
+### Proof
+
+Seen on a real box with v0.5.194, then checked on the mock with the fix: nothing covers the open menu. The install check passed on all 12 legs on the first try (run 45625892140), and the promote job made it Latest.
+
+## [0.5.194] - 2026-11-25
+
+Components: CasaOS `v0.4.125`, CasaOS-UI `v0.4.227`. Unchanged from v0.5.193: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, module `mcp` `v0.2.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The weather on the new dashboard.** Settings → *Weather*: the owner searches a town by name, picks the units (°C and km/h, or °F and mph) and turns it on. The new dashboard then shows the icon, the temperature and the place next to its bell; its menu, in the dashboard's glass, gives the humidity, the wind and five days with their chance of rain. It is off by default, the owner's only, and the classic dashboard does not show it. The box, not the browser, asks [Open-Meteo](https://open-meteo.com/) (no key): every 30 minutes with the coordinates of the chosen place, and with the name typed when a place is searched. When Open-Meteo does not answer, the last forecast stays with the time it was read ([ReCasaOS/CasaOS#188](https://github.com/ReCasaOS/CasaOS/issues/188), [ReCasaOS/CasaOS#190](https://github.com/ReCasaOS/CasaOS/pull/190), [ReCasaOS/CasaOS-UI#236](https://github.com/ReCasaOS/CasaOS-UI/pull/236), [ReCasaOS/CasaOS-UI#237](https://github.com/ReCasaOS/CasaOS-UI/pull/237)).
+
+### Proof
+
+The core's weather passed its tests (settings, cache, a failed read, the place search) and the answers of the live Open-Meteo API were checked by hand against what the core reads. The interface passed its full suite and was seen on the mock: the widget and its menu on the new dashboard, none on the classic one, the place search, the units and the save. Not seen yet on a real box. The install check passed on all 12 legs on the first try (run 45620860128), and the promote job made it Latest.
+
+## [0.5.193] - 2026-11-25
+
+Components: module `mcp` `v0.2.0`. Unchanged from v0.5.192: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.226`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An AI assistant can read and manage the system of the box.** The `mcp` module now offers the system's actions: the machine's state and load, the updates of ReCasaOS, of the packages and of Docker, the optional modules, the alerts and statistics settings, the guided upgrade of the operating system, restart and shutdown. 241 actions are classed, 55 more than before. Shutdown, restart, every update, the install and removal of a module and each acting step of the operating system upgrade go through `destroy`, the tool an assistant can ask before using; a *Read only* token neither finds nor runs them. The terminal and the SSH sign-in are never offered. The drives, the shares, the accounts, Files and the fleet are not offered yet ([ReCasaOS/ReCasaOS-MCP#5](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/5)).
+
+A box that has the module installed gets the new version with this update, or from the Modules page.
+
+### Proof
+
+The module's `v0.2.0` passed its tests with the race detector on Linux and ran on a full stack in a container (the real Gateway, accounts service, message bus and core) with a read token and a full token; no action that goes through `destroy` was run there. The catalogue of this release was built from the published archives, with `mcp` at `v0.2.0` in the core tier. The install check passed on all 12 legs on the first try (run 45583537065), and the promote job made it Latest.
+
+## [0.5.192] - 2026-11-24
+
+Components: unchanged from v0.5.191: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.226`, module `mcp` `v0.1.0`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The `mcp` module is in the core tier.** It is maintained here like `virt` and `vuln-scan`, and the Modules page no longer presents it as a community module. v0.5.191 listed it in the community tier and stayed a pre-release; this release is the one boxes are offered.
+
+### Proof
+
+The module was tried on a real box by its maintainer before this release. The catalogue was built from the published archives of the three modules, with `mcp` at `v0.1.0` in the core tier. The install check of this release passed on all 12 legs on the first try (run 45505321694), and the promote job made it Latest.
+
+## [0.5.191] - 2026-11-24
+
+Components: CasaOS-Gateway `v0.4.40`, CasaOS-UserService `v0.4.39`, CasaOS-UI `v0.4.226`, new module `mcp` `v0.1.0`. Unchanged from v0.5.190: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.3`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+This release is published as a pre-release: the module has run on a stack in a container, not yet on a real box.
+
+### Added
+
+- **An AI assistant can read and manage the box, as an optional module.** The module `mcp` (Modules page, or `casaos module install mcp`, community tier) serves an MCP endpoint behind the Gateway. An assistant running on a computer of the same network connects to it with a token the owner creates, and gets five tools: it searches the box's actions, reads how one is called, then runs it through `read`, `change` or `destroy`, so that an assistant can ask before the last. Every call is made as the owner's account, through the Gateway. Each action of the box's API carries a class in the module (`read`, `secret`, `change`, `danger`, `never`), and an action without a class is not offered: 186 actions are classed today, those of the apps, the backups, the virtual machines and part of the storage; the older routes of the system, the drives, the shares, the accounts and Files are not offered yet. Passwords, two-factor settings and the creation or deletion of accounts are never offered. One line per call is kept in `/var/log/casaos/mcp-calls.log`, without any value ([ReCasaOS/ReCasaOS-MCP#1](https://github.com/ReCasaOS/ReCasaOS-MCP/pull/1)).
+- **Two levels of token.** *Read only* runs the actions that read and answer with no secret. *Everything* also reads what can carry a secret, changes and deletes: such a token has the owner's full power over the box, and the window says so when it is chosen.
+- **An *AI access* card for the owner**, shown when the module is installed: the tokens with their level and last use, a token revoked after a confirmation, a new token shown once with the command to give the assistant. The address in that command is the box's own on the local network ([ReCasaOS/CasaOS-UI#235](https://github.com/ReCasaOS/CasaOS-UI/pull/235)).
+- The Gateway lets the module's endpoint through, which checks its own token ([ReCasaOS/CasaOS-Gateway#16](https://github.com/ReCasaOS/CasaOS-Gateway/pull/16)), and the accounts service hands the box's own services a five-minute access token for an account ([ReCasaOS/CasaOS-UserService#16](https://github.com/ReCasaOS/CasaOS-UserService/pull/16)).
+
+Limits: the assistant must run on a computer of the same network as the box; a Gateway whose main port serves HTTPS only, or that is bound to one address, is not supported by the module yet; uploads, downloads, streams and consoles are not offered.
+
+### Proof
+
+CI passed on the four pull requests; the module's, the accounts service's and the Gateway's tests also pass on Linux with the race detector. On a stack in a container (the real Gateway, accounts service, message bus and core, the module built from its branch) the owner created and revoked tokens, a real MCP client connected over the local network with a read token and with a full one, saw only the three reading tools with the first, ran a read and a change, and a revoked token was refused at once; the journal held one line per call and no token, value or secret. The card was seen in a browser on the mock. Not seen yet: the module installed by `casaos module install` on a real box, an app installed and removed through an assistant, whether an assistant asks before `destroy`, and the actions of app management, storage and virtual machines, which were not in that stack. The release runs of the four components passed on their tags.
+
+## [0.5.190] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.225`, module `vuln-scan` `v0.1.3`. Unchanged from v0.5.189: CasaOS `v0.4.124`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **A scan no longer freezes the vulnerability scan module.** The scan and the module's API shared one 512 MB memory cap. A scan of a large image went over it, the module stopped answering for as long as the scan crawled (50 minutes on a real box), and the dashboard left out its Security card. Trivy now runs in a systemd scope of its own, capped at 1.5 GB, with the same low CPU and I/O priority; the API keeps its 512 MB ([ReCasaOS/ReCasaOS-VulnScan#4](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/4)).
+- **The Security card comes back by itself.** A module that does not answer within 15 s is asked again a minute later, the card keeping its place, instead of being taken for absent until the page is reloaded ([ReCasaOS/CasaOS-UI#234](https://github.com/ReCasaOS/CasaOS-UI/pull/234)).
+
+### Proof
+
+CI passed on ReCasaOS-VulnScan#4, with a new test of the scope's command line, and on CasaOS-UI#234, with new tests of the probe (true, false on 404, null with no answer, a bounded wait) and of the card asked for again at its saved place. The freeze was seen on a real box (memory pressure at 85 % full, the status route pending); after a restart of the module the card came back. On that box `systemd-run --scope` gave a command its own cgroup and kept the service's nice 19 and idle I/O class. A full scan under the new scope has not been watched on a real box yet. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45499238798), and the promote job made it Latest.
+
+## [0.5.189] - 2026-11-24
+
+Components: CasaOS `v0.4.124`, CasaOS-UI `v0.4.224`. Unchanged from v0.5.188: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **An update channel: releases, or pre-releases too.** Settings > Updates > *Update channel*. With *Pre-releases too*, the Update button also offers a pre-release newer than the last release, and installs it by its own tag; once a release is newer, the release is offered again. The night's automatic update still installs releases only, whatever the channel. A box going back to *Releases* keeps the version it runs until a newer release comes ([ReCasaOS/CasaOS#186](https://github.com/ReCasaOS/CasaOS/pull/186), [ReCasaOS/CasaOS-UI#233](https://github.com/ReCasaOS/CasaOS-UI/pull/233)).
+
+### Proof
+
+CI passed on CasaOS#186, with new tests of the channel (release until chosen, back to release, an unknown or unreadable channel), of the pre-release offered (the newest one newer than the last release, drafts left out, the release offered again once newer, a feed set in config unchanged) and of the routes behind the token, and on CasaOS-UI#233, with new tests of the row and of saving the channel. Not looked at in a browser, nor tried on a real box: the first pre-release offered this way will be the proof. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45475179625), and the promote job made it Latest.
+
+## [0.5.188] - 2026-11-24
+
+Components: CasaOS `v0.4.123`, CasaOS-UI `v0.4.223`. Unchanged from v0.5.187: CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+All for the owner's account, in Files ([ReCasaOS/CasaOS#184](https://github.com/ReCasaOS/CasaOS/issues/184)):
+
+- **Search by name.** A search field in Files' header (Ctrl+K goes to it): Enter searches the folder shown and below, *Search everywhere* every folder Files can show. Names only, links not followed, at most 200 results; network shares, cloud drives and the system's own folders are not walked into from outside ([ReCasaOS/CasaOS#185](https://github.com/ReCasaOS/CasaOS/pull/185), [ReCasaOS/CasaOS-UI#231](https://github.com/ReCasaOS/CasaOS-UI/pull/231)).
+- **A path typed or copied.** A pencil beside the path turns it into a field to type or paste a path (Enter opens it), and a button copies the folder shown ([ReCasaOS/CasaOS-UI#230](https://github.com/ReCasaOS/CasaOS-UI/pull/230)).
+- **The room left.** The free and total space of the drive the folder is on, beside the item count, and the size of the Trash beside its entry (#230).
+- **Type badges.** The extension (PDF, ZIP, MD…) on a file's icon, except over an image's thumbnail (#230).
+- **Drives with their room, external sources apart.** A bar under each internal and USB drive in the sidebar, and an *External* heading before USB devices, network shares and cloud accounts ([ReCasaOS/CasaOS-UI#232](https://github.com/ReCasaOS/CasaOS-UI/pull/232)).
+
+### Proof
+
+CI passed on CasaOS#185, with new tests of the search (names, case, a link not walked through, each limit, network mounts and overlays read from the mount table, a search held to the roots as the listing is, from `/` and from inside a root, paths outside refused), and on CasaOS-UI#230, #231 and #232, with new tests of the path typed, the copy, the room left, the trash size, the badges, the search and the drives' bars. An independent review of the search route found nothing that reveals names past what Files may list; its two points before a release (a network mount that stops answering, container layers filling the budget) were fixed before the merge. Not looked at in a browser, nor tried on a real box. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45467972917), and the promote job made it Latest.
+
+## [0.5.187] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.222`. Unchanged from v0.5.186: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.123`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The new dashboard shows the version an app runs on a desktop too.** It came after "Running" and the memory, and the tiles are narrow enough on a desktop that it was always cut off. It now has its own line under them, smaller; a long one is cut there and shown whole on hover ([ReCasaOS/CasaOS#179](https://github.com/ReCasaOS/CasaOS/issues/179), [ReCasaOS/CasaOS-UI#229](https://github.com/ReCasaOS/CasaOS-UI/pull/229)).
+
+### Proof
+
+CI passed on CasaOS-UI#229, with the card's test now checking the version is on its own line and whole on hover. Not looked at in a browser, nor tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45444518651), and the promote job made it Latest.
+
+## [0.5.186] - 2026-11-24
+
+Components: CasaOS-AppManagement `v0.4.123`. Unchanged from v0.5.185: CasaOS `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.221`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **Docker cleanup counts only the old app versions it can free.** An old version a container still uses (an app whose container was not recreated after its update, or a leftover stopped container) cannot be removed, and *Free up* left it while the count kept saying it was there. It is no longer counted, and a removal Docker refuses is written in the log with its reason ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#85](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/85)).
+
+### Proof
+
+CI passed on CasaOS-AppManagement#85, with a new test that failed before the fix: an old version a container uses is neither counted nor asked to be removed, one whose containers the daemon did not count is still removed. Not reproduced on a real box (one at hand had 61 old versions, none held by a container); the reporter showed his: a Redis container of another app still running the image its tag had moved from. The release run of CasaOS-AppManagement passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45426266575), and the promote job made it Latest.
+
+## [0.5.185] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.221`. Unchanged from v0.5.184: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The app sort menu looks like the filters beside it.** It was the browser's own list box; it is now a round chip with a sort icon and the order chosen, opening the dashboard's menu with a check on that order ([ReCasaOS/CasaOS#183](https://github.com/ReCasaOS/CasaOS/issues/183), [ReCasaOS/CasaOS-UI#228](https://github.com/ReCasaOS/CasaOS-UI/pull/228)).
+
+### Proof
+
+CI passed on CasaOS-UI#228; only the menu's template and style changed, the orders and their tests are the same. Not looked at in a browser, nor tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45419964245), and the promote job made it Latest.
+
+## [0.5.184] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.220`. Unchanged from v0.5.183: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The order you give your apps is kept.** Each save of the order forgot the apps the dashboard did not show at that moment, and a page load saves it a few times: a card joining (Logs, Security, Fleet, Virtual Machines), or the list read right after an update, before every app is back. An app missing from one such save lost its place and came back at the end, so the arrangement looked reset after updates. Every app now keeps its saved place. An order already lost has to be arranged once more ([ReCasaOS/CasaOS#183](https://github.com/ReCasaOS/CasaOS/issues/183), [ReCasaOS/CasaOS-UI#227](https://github.com/ReCasaOS/CasaOS-UI/pull/227)).
+
+### Proof
+
+CI passed on CasaOS-UI#227, with two new tests that failed before the fix: a save from a list lacking saved apps keeps them at their place, and a list read before the apps are back does not lose their order. A real box's user-service log showed the cause on a plain reload: four saves of the order within a second, one without the Logs and Security cards. The fix has not been tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45417354753), and the promote job made it Latest.
+
+## [0.5.183] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.219`. Unchanged from v0.5.182: CasaOS `v0.4.122`, CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The new dashboard's apps can be sorted.** A *Sort by* menu next to the All / Running / Stopped / Updates filters: *Custom order* (the order you drag, still the default), *Name* A to Z or Z to A, *Memory used* (largest first), *Running first*. It works with the filters, and the browser remembers the choice. Apps are dragged in the custom order only, so a sorted view never changes the saved order. The classic dashboard is unchanged ([ReCasaOS/CasaOS#183](https://github.com/ReCasaOS/CasaOS/issues/183), [ReCasaOS/CasaOS-UI#226](https://github.com/ReCasaOS/CasaOS-UI/pull/226)).
+
+### Proof
+
+CI passed on CasaOS-UI#226, with new tests of each order, ties kept in the custom order, the remembered choice (and a browser refusing its storage), a sorted grid combined with a filter, and a drag of a sorted grid saving nothing. Not looked at in a browser, nor tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45414689501), and the promote job made it Latest.
+
+## [0.5.182] - 2026-11-24
+
+Components: CasaOS `v0.4.122`. Unchanged from v0.5.181: CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.218`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The footer shows ReCasaOS's releases until you choose otherwise.** A box whose owner never saved Settings > *Footer news* shows the headlines of https://github.com/ReCasaOS/CasaOS-Install/releases.atom, read every 30 minutes. Turning it off, or changing the feeds, is kept as chosen ([ReCasaOS/CasaOS#180](https://github.com/ReCasaOS/CasaOS/issues/180), [ReCasaOS/CasaOS#182](https://github.com/ReCasaOS/CasaOS/pull/182)).
+
+### Proof
+
+CI passed on CasaOS#182, with a new test: a box with no settings reads the releases feed, a saved "off" is kept over it, and a settings file that cannot be read stays off. Not tried on a real box. The release run of CasaOS passed on its tag. The install check of this release passed on all 12 legs on the first try (run 45411010566), and the promote job made it Latest.
+
+## [0.5.181] - 2026-11-24
+
+Components: CasaOS `v0.4.121`, CasaOS-UI `v0.4.218`. Unchanged from v0.5.180: CasaOS-AppManagement `v0.4.122`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Headlines of your own RSS or Atom feeds in the dashboard's footer.** Settings > *Footer news*: a switch, off by default, and up to ten feeds, one address per line. The footer shows one headline at a time, the next every few seconds, paused while pointed at; a click opens it in a new tab. The box reads the feeds every 30 minutes, from the Internet only: a feed served by the box itself or its own network is refused, and the settings say why a feed could not be read. For the owner's account only ([ReCasaOS/CasaOS#180](https://github.com/ReCasaOS/CasaOS/issues/180), [ReCasaOS/CasaOS#181](https://github.com/ReCasaOS/CasaOS/pull/181), [ReCasaOS/CasaOS-UI#225](https://github.com/ReCasaOS/CasaOS-UI/pull/225)).
+
+### Proof
+
+CI passed on CasaOS#181, with new tests of the feeds (RSS 2.0, RSS 1.0 and Atom, a Latin-1 feed, relative links, links that must be dropped, the addresses refused, a redirect toward a refused address, nothing read while off, the cache and a failed refresh keeping its headlines, refused settings writing nothing), and on CasaOS-UI#225, with new tests of the footer and the settings. The footer and the settings were checked in a browser on the classic mock dashboard; the new dashboard's footer is the same bar, not looked at there. Not tried on a real box. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45404860910), and the promote job made it Latest.
+
+## [0.5.180] - 2026-11-24
+
+Components: CasaOS-AppManagement `v0.4.122`, CasaOS-UI `v0.4.217`. Unchanged from v0.5.179: CasaOS `v0.4.120`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, module `vuln-scan` `v0.1.2`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Each app card says the version the app runs, and links its release notes.** The version is read from the image (its `org.opencontainers.image.version` label, else its tag unless that is `latest`): under the name on the classic card, after Running on the new dashboard. When the image names a GitHub repository as its source, the card's menu has *Release notes*, which opens that repository's releases page. Apps installed from a compose file only; nothing changes for loose containers ([ReCasaOS/CasaOS#179](https://github.com/ReCasaOS/CasaOS/issues/179), [ReCasaOS/CasaOS-AppManagement#84](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/84), [ReCasaOS/CasaOS-UI#224](https://github.com/ReCasaOS/CasaOS-UI/pull/224)).
+
+### Proof
+
+CI passed on CasaOS-AppManagement#84, with a new test of the version and the link (label over tag, `latest`, digests, a registry with a port, and sources that must give no link: http, another host, a lookalike host, `javascript:`), and on CasaOS-UI#224, with new card tests. The card and its menu were checked in a browser on a mock dashboard; the new dashboard's card by its unit test only. Not tried on a real box. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs on the first try (run 45388491978), and the promote job made it Latest.
+
+## [0.5.179] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.216`, module `vuln-scan` `v0.1.2`. Unchanged from v0.5.178: CasaOS `v0.4.120`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The vulnerability scan follows the apps.** The module scanned at night, after its install and on demand: an app that was just updated kept the results of the image it no longer ran until 05:30, an app just installed had none, and a removed one stayed in the list. The module now scans when the images the apps run are no longer those of its last scan. A restart of an app, or a container made by hand, starts nothing ([ReCasaOS/ReCasaOS-VulnScan#3](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/3)).
+- **The Security card and the red badge follow too.** After an app is installed, updated, changed or removed, the dashboard reads the scans at once, and again when the scan that follows has ended; it read them once in five minutes at most ([ReCasaOS/CasaOS-UI#223](https://github.com/ReCasaOS/CasaOS-UI/pull/223)).
+
+### Proof
+
+CI passed on the two pull requests, and the release runs of both tags. Not seen on a real machine or in a browser: both changes are covered by their tests only.
+
+## [0.5.178] - 2026-11-24
+
+Components: CasaOS-UI `v0.4.215`, module `vuln-scan` `v0.1.1`. Unchanged from v0.5.177: CasaOS `v0.4.120`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A Security card for the vulnerability scan.** Where the module `vuln-scan` is installed, the dashboard has a Security card, for the administrator. Its window says where the scan stands, can start one, and lists each app with what was found, the apps an update would fix first; a line opens the vulnerabilities of that app. The card comes as soon as the module is installed, without a reload ([ReCasaOS/CasaOS-UI#222](https://github.com/ReCasaOS/CasaOS-UI/pull/222)).
+
+### Changed
+
+- **The vulnerability scan module is in the `core` tier.** It is maintained by ReCasaOS and was proven on a real machine (v0.5.177); the Modules page said `community`.
+
+### Fixed
+
+- **The module scans right after its install.** A box that had just installed it had nothing to show until 05:30, and no way to the Scan now button, which sat in a window that only opens once a scan has run ([ReCasaOS/ReCasaOS-VulnScan#2](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/2)).
+
+### Proof
+
+CI passed on the two pull requests, and the release runs of both tags. The card, its window and the vulnerabilities of an app opened from it were checked in a browser on a mock dashboard. Not seen: the window while a first scan runs and the card coming right after an install (tests only), and the module v0.1.1 on a real machine.
+
+## [0.5.177] - 2026-11-24
+
+Components: CasaOS `v0.4.120`, CasaOS-UI `v0.4.214`, new module `vuln-scan` `v0.1.0`. Unchanged from v0.5.176: CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **A vulnerability scan of the installed apps, as an optional module.** The module `vuln-scan` (Modules page, or `casaos module install vuln-scan`) checks the images of the installed apps every night against a vulnerability database, with a copy of Trivy that ships inside the module and is pinned by its SHA-256. An app's card shows a red badge only when the scan found a critical vulnerability that an update of the app fixes; the Security entry of the app's menu lists every critical and high vulnerability that has a fix, with the version that fixes it, and can start a scan. A new category of Settings › Alerts, on by default, sends the same news once. Only the administrator sees any of it. The module is in the `community` tier: it needs about 2 GB beside Docker's data for its database, and skips an image it has no room to read ([ReCasaOS/ReCasaOS-VulnScan#1](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/1), [ReCasaOS/CasaOS#178](https://github.com/ReCasaOS/CasaOS/pull/178), [ReCasaOS/CasaOS-UI#221](https://github.com/ReCasaOS/CasaOS-UI/pull/221)).
+
+### Proof
+
+CI passed on the three pull requests. On a real machine (Ubuntu 22.04, amd64, ten apps, twenty images) running v0.5.176, `casaos module install vuln-scan` installed the published v0.1.0 from a catalogue built from its archives: the service started, its routes answered 401 without a token, and a scan of every image took seven minutes, skipped none, left 1.7 GB of database and an empty temporary folder, and named the one app that had both a critical vulnerability and an update offered. The alert and the badge need this release's core and dashboard and were not seen on that machine; the badge and the Security window were checked in a browser on a mock dashboard. Not tried: the nightly run, a Raspberry Pi, a remove.
+
+## [0.5.176] - 2026-11-23
+
+Components: CasaOS-UI `v0.4.213`. Unchanged from v0.5.175: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.69`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The dashboard is fully translated into Brazilian Portuguese.** Every text of the dashboard now has a pt_BR translation, where only about one in ten had one, and the existing ones were reviewed. Contributed by @kendikaku ([ReCasaOS/CasaOS-UI#220](https://github.com/ReCasaOS/CasaOS-UI/pull/220)).
+
+### Proof
+
+The pt_BR file has exactly the keys of the English one, none dropped, and keeps every `{placeholder}` and the `@` and `|` signs vue-i18n reads. Not seen in a browser. The release run of CasaOS-UI passed on its tag. The first tag run of this release stopped before publishing anything, because `CASAOS_RELEASE_TAG` had not been bumped (fixed by #311). The install check of this release then passed on all 12 legs on the first try (run 45250310084), and the promote job made it Latest.
+
+## [0.5.175] - 2026-11-23
+
+Components: CasaOS-LocalStorage `v0.4.69`, CasaOS-UI `v0.4.212`. Unchanged from v0.5.174: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **`/DATA` is readable by every user again.** The merged `/DATA` was mounted without `allow_other`, so on boxes whose mergerfs is older than 2.35 (Ubuntu 24.04 ships 2.33.5) only root could read it, and containers running as another user (PUID 1000, for example) got `Permission denied` after an upgrade from CasaOS v0.4.15. It is mounted with `defaults,allow_other,use_ino` again, as in CasaOS v0.4.15 ([ReCasaOS/CasaOS#175](https://github.com/ReCasaOS/CasaOS/issues/175), [ReCasaOS/CasaOS-LocalStorage#36](https://github.com/ReCasaOS/CasaOS-LocalStorage/pull/36)).
+- **The File Manager's Sort by menu opens over the list.** In list view the column headers covered the top of the menu. The Type column and sort choice are now translated in every language ([ReCasaOS/CasaOS#174](https://github.com/ReCasaOS/CasaOS/issues/174), [ReCasaOS/CasaOS-UI#219](https://github.com/ReCasaOS/CasaOS-UI/pull/219)).
+
+### Proof
+
+CI passed on CasaOS-LocalStorage#36, with a new test that the mergerfs mount keeps `allow_other`, `use_ino` and its `fsname`, and on CasaOS-UI#219. The menu was checked in a browser on a mock dashboard: without the fix the first choice sat under the list header, with it every choice is on top. The reporter of #175 mounted test branches by hand on Ubuntu 24.04.5 with mergerfs 2.33.5: with the old options neither a non-root user nor a container running as `1000:1000` could read them, with the new ones both could. A full upgrade to this release has not met a real box yet, and the menu has not been seen on one. The release runs of both components passed on their tags. The install check of this release passed on all 12 legs (run 45215726468), the DietPi leg on a rerun: on the first try the runner's own apt ran out its timeout while unpacking QEMU's packages, before the installer started (fixed by #308, whose run 45220532281 passed all 12 legs on this release). The release was promoted to Latest by hand while that rerun was going; the promote job confirmed it once the rerun passed.
+
+## [0.5.174] - 2026-11-23
+
+Components: CasaOS-UI `v0.4.211`. Unchanged from v0.5.173: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The File Manager sorts again.** In list view the Name, Type, Date modified and Size headers sort, and a second click reverses the order; the grid view gets a Sort by menu with the same choices. Folders stay first, names sort in natural order (`b2` before `b10`), and the choice is kept in the browser ([ReCasaOS/CasaOS#174](https://github.com/ReCasaOS/CasaOS/issues/174), [ReCasaOS/CasaOS-UI#218](https://github.com/ReCasaOS/CasaOS-UI/pull/218)).
+
+### Proof
+
+CI passed on CasaOS-UI#218, with new tests of the sort (folders first, natural name order, date, size and type both ways), and the sort was tried in a browser on a mock dashboard: grid view by name and by date modified, list view by size from its header. Not tried on a real box. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs (run 45140296793), the Armbian leg on a rerun: on the first try dl.armbian.com broke off the image download (curl error 92). The release was promoted to Latest by hand while that rerun was still downloading; the promote job confirmed it once the rerun passed.
+
+## [0.5.173] - 2026-11-20
+
+Components: CasaOS `v0.4.119`, CasaOS-AppManagement `v0.4.121`, CasaOS-UI `v0.4.210`. Unchanged from v0.5.172: CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: what it adds to v0.5.172, and v0.5.170 to v0.5.172 themselves, have not met a real box yet.
+
+### Added
+
+- **Three more alerts, in two new categories of Settings › Alerts.** App updates: what the night's automatic updates did (the apps updated, and those whose update failed, each still running the version it had; a night that changed nothing says nothing), and the newer versions of images pinned to one, each told once, even across a restart. Cleanup: what the weekly cleanup freed, or why it failed. Both are on by default and can be turned off like the others ([ReCasaOS/CasaOS#170](https://github.com/ReCasaOS/CasaOS/issues/170), [ReCasaOS/CasaOS-AppManagement#83](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/83), [ReCasaOS/CasaOS#173](https://github.com/ReCasaOS/CasaOS/pull/173), [ReCasaOS/CasaOS-UI#217](https://github.com/ReCasaOS/CasaOS-UI/pull/217)).
+
+### Proof
+
+CI passed on the three pull requests: the events of AppManagement (a night that changed nothing says nothing, a newer version told once across restarts, the cleanup's result or failure), the alerts the core makes of them, and the two switches of Settings › Alerts. No alert has been sent from a real box yet: the release stays a pre-release. The release runs of the components passed on their tags. The install check of this release passed on all 12 legs at once (run 44807722488); `release/PRERELEASE` kept it a pre-release.
+
+## [0.5.172] - 2026-11-20
+
+Components: CasaOS-UI `v0.4.209`. Unchanged from v0.5.171: CasaOS `v0.4.118`, CasaOS-AppManagement `v0.4.120`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: what it adds to v0.5.171, and v0.5.170 and v0.5.171 themselves, have not met a real box yet.
+
+### Added
+
+- **An account's network shares, from Accounts.** Each account other than the owner has a section Network shares. Give network access makes the share account of the same name, with a password of its own (network shares cannot use the sign-in password); then the network password can be changed, the access removed, the account's network folders set, and its folders in Files opened on the network: they are ticked in the network folders window, each read-only or read-write as in Files, to review before saving. A folder already shared keeps its other accounts; a folder shared for the first time is shared with this account alone. A name a network account cannot take is said ([ReCasaOS/CasaOS#168](https://github.com/ReCasaOS/CasaOS/issues/168), [ReCasaOS/CasaOS-UI#216](https://github.com/ReCasaOS/CasaOS-UI/pull/216)).
+
+### Proof
+
+CI passed on the pull request; the Accounts screen and the network folders window are covered by their specs. Nothing of it has met a real box yet: the release stays a pre-release. The release run of CasaOS-UI passed on its tag. The install check of this release passed on all 12 legs at once (run 44800818044); `release/PRERELEASE` kept it a pre-release.
+
+## [0.5.171] - 2026-11-20
+
+Components: CasaOS `v0.4.118`, CasaOS-Gateway `v0.4.39`, CasaOS-UserService `v0.4.38`, CasaOS-UI `v0.4.208` (with CasaOS-Common `v0.4.35`). Unchanged from v0.5.170: CasaOS-AppManagement `v0.4.120`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: the folders of an account, and the container files of v0.5.170, have not met a real box yet.
+
+### Added
+
+- **An account can be given folders in Files, each to read or to read and write.** In Accounts, each account other than the owner has a section Folders in Files: add a folder with the folder picker, set it to Read or Read and write, take it away. An account given folders sees the Files app with those folders only; above them it sees only the way down to them. In a folder it may only read, nothing can be made, sent, pasted, renamed, moved or deleted. The drives, the shares, the transfer between devices and the trash stay the owner's: an account deletes for good. With no folder, Files stays closed, as before. The box confines every path of such an account to its folders: each read and change goes through the folder itself as the system opened it, so a folder swapped for a link out of it, by the account or by an app writing there, leads nowhere outside; a copy or a move waiting in the queue reads the account's folders again when it runs. A folder taken away applies within five seconds ([ReCasaOS/CasaOS#168](https://github.com/ReCasaOS/CasaOS/issues/168), [ReCasaOS/CasaOS#172](https://github.com/ReCasaOS/CasaOS/pull/172), [ReCasaOS/CasaOS-UserService#15](https://github.com/ReCasaOS/CasaOS-UserService/pull/15), [ReCasaOS/CasaOS-Gateway#15](https://github.com/ReCasaOS/CasaOS-Gateway/pull/15), [ReCasaOS/CasaOS-UI#215](https://github.com/ReCasaOS/CasaOS-UI/pull/215), [ReCasaOS/CasaOS-Common#15](https://github.com/ReCasaOS/CasaOS-Common/pull/15)).
+
+### Proof
+
+CI passed on the five pull requests. The confinement of an account is tested as root: every route of Files through the folder's root, on folders holding links out of them (relative and absolute) with no check before, a queued copy whose destination is swapped for a link, a device or a pipe in a folder, a folder taken away. On a real stack (Gateway, UserService and core, run in WSL) an account was checked through the Gateway: 45 checks passed, from no folder (nothing) to read-only and read-write folders, links to /etc and to other folders, downloads, archives, uploads, copies, the trash and Samba closed, the owner unchanged, and the folders taken away. The Files page was seen in a browser as such an account. Nothing of it has met a real box yet: the release stays a pre-release. The release runs of the components passed on their tags. The install check of this release passed on all 12 legs at once (run 44792680930); `release/PRERELEASE` kept it a pre-release.
+
+## [0.5.170] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.120`, CasaOS-UI `v0.4.207`. Unchanged from v0.5.169: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+Published as a pre-release: the container files have not met a real box yet.
+
+### Added
+
+- **The files inside an app's container, in a Files tab.** Beside Terminal and Logs, and as a button per running container in the Containers tab, for the owner of the box: folders with their size, permissions, owner and date, a text file read, edited and saved in place, a file downloaded to the disk as it comes, files sent with their progress, a new folder or file, a deletion after a confirmation. The window says whether a folder is on a volume, kept when the app is updated, or in the container itself, lost then. The files are read from the box, so an image without a shell is browsed too, and nothing leaves the container: a link or `..` resolves inside it, no device or file of /proc and /sys is opened, a file bound in from the box is written in place, and a volume, or a folder holding one, is never deleted. Nothing is written while the app is updated, restored or removed. Needs Linux 5.6 or newer ([ReCasaOS/CasaOS#169](https://github.com/ReCasaOS/CasaOS/issues/169), [ReCasaOS/CasaOS-AppManagement#82](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/82), [ReCasaOS/CasaOS-UI#214](https://github.com/ReCasaOS/CasaOS-UI/pull/214)).
+
+### Fixed
+
+- **App icons in the Automatic app updates window.** An app whose icon does not load, or that has none, shows the dashboard's default icon instead of a broken image ([ReCasaOS/CasaOS-UI#213](https://github.com/ReCasaOS/CasaOS-UI/pull/213)).
+
+### Proof
+
+CI passed on both pull requests: reading (folders, modes and owners, links and `..` kept inside, device nodes, FIFOs and /proc never opened) and writing (owner of the folder, a replaced file keeping its mode, a name taken meanwhile left alone, a mount point or a folder holding one never removed, a file bound in written in place, the app held) are tested as root, the mounts made in another mount namespace as Docker makes them. Neither the window nor the routes have met a real container yet: the release stays a pre-release until they are tried on a box. The release runs of CasaOS-AppManagement `v0.4.120` and CasaOS-UI `v0.4.207` passed on their tags. The install check of this release passed on all 12 legs at once (run 44769721824); `release/PRERELEASE` kept it a pre-release.
+
+## [0.5.169] - 2026-11-20
+
+v0.5.168 was tagged but never published: its build stopped at once, since the release tag in `release/components.env` still named v0.5.167. This release is v0.5.168 with that tag set.
+
+Components: CasaOS-AppManagement `v0.4.119`, CasaOS-UI `v0.4.205`. Unchanged from v0.5.167: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Newer versions of an image pinned to one are said.** An app pinned to a version, like `1.40.2`, never gets an update: the newer version is another tag. Once a day the box reads the tags the registry holds for every pinned image, once per repository, and keeps for each the highest bug-fix, minor and major version of the same flavour, as the registry spells them: only a trailing build number may differ, and an architecture, a distribution release or a CUDA or PHP version is never crossed. A prerelease is offered the release it leads to; prereleases are offered to nothing else. The card shows the next bug-fix or minor version as a badge, never a major version alone, and the Tag list in the app's settings offers every newer version, major ones included. Nothing is applied by itself. A registry that does not answer keeps what the last day found, and a repository with more than 50,000 tags is not concluded on ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#81](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/81), [ReCasaOS/CasaOS-UI#212](https://github.com/ReCasaOS/CasaOS-UI/pull/212)).
+
+### Proof
+
+CI passed on both pull requests: reading the tags (as the registry spells them, only a trailing build number differing within a flavour, a prerelease offered its release, one read per repository, a failed registry keeping the last day, a list too long not concluded on) and the card and Tag list are tested. The badge was seen in a browser on the mock server; the reading ran against the real registries once on a development box before the review fixes, not since. The release runs of CasaOS-AppManagement `v0.4.119` and CasaOS-UI `v0.4.205` passed on their tags. The install check of this release passed on all 12 legs (run 44748873065): 11 at once, and amd64 with Docker preinstalled on a second try, after apt stalled while the machine was being prepared. The workflow made the release the latest one on 2026-11-20.
+
+## [0.5.167] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.118`, CasaOS-UI `v0.4.204`. Unchanged from v0.5.166: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Apps can update by themselves at night, app by app.** Settings has a new entry, Automatic app updates, with a switch per app, off for every app. Every night at two, on the box's clock, the apps turned on are updated one after another when they have an update, with the update button's own update. An update is applied only once it has been known for a few days, three unless the owner chooses otherwise, since an image published broken is usually replaced within a day or two. An app that does not start again is put back on the version it ran, and the alert of a failed update is raised; an app that fails two nights in a row is left alone until its switch is turned off and on again. The night waits while something runs on an app or an upgrade of the system is open, the box's own update waits for the night, and a night that cannot start within two hours is skipped. Apps built from a repository deploy by themselves already and are not offered ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#80](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/80), [ReCasaOS/CasaOS-UI#211](https://github.com/ReCasaOS/CasaOS-UI/pull/211)).
+
+### Fixed
+
+- **A failed update puts the app back on the image it ran.** When an update kept its tag, `latest` pulled again for a newer build, putting the old compose file back started the app on the new image all the same, since the tag had moved. The image each service ran is now noted before the pull, and a failed update points the tag back at it, unless another app runs the new one. This holds for updates made by hand too.
+
+### Proof
+
+CI passed on both pull requests: the night's rules (off until turned on, the first night after, the wait, the window, two failures, apps that are gone or busy, no second night at once, the exclusion of "Update every app") and the rollback of a moved tag are tested. The window was seen in a browser on the mock server. No night has run on an installed box, and the rollback of a moved tag has only met a fake daemon. The release runs of CasaOS-AppManagement `v0.4.118` and CasaOS-UI `v0.4.204` passed on their tags. The install check of this release passed on all 12 legs (run 44733735942): 11 at once, and Armbian on a second try, after apt stalled while the machine was being prepared. The workflow made the release the latest one on 2026-11-20.
+
+## [0.5.166] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.117`, CasaOS-UI `v0.4.203`. Unchanged from v0.5.165: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The Docker cleanup can run by itself every week.** A switch at the bottom of the window, off by default, makes the box free the old app versions and the build cache on Sunday at four in the morning, on its own clock. Nothing else: images and volumes of no app are only ever deleted in the window, after a list. Turned on, the first run is the next Sunday, never at once. A run waits while something runs on an app or while an upgrade of the system is open, and a box that was off on Sunday runs when it is back ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#79](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/79), [ReCasaOS/CasaOS-UI#210](https://github.com/ReCasaOS/CasaOS-UI/pull/210)).
+- **The window lists the last cleanups.** What each one freed, whether the box made it by itself or it was done by hand, and why a run failed.
+
+### Proof
+
+CI passed on both pull requests: the weekly run frees the old versions and the build cache and nothing else, waits while the box is busy, and writes a failure once. The card was seen in a browser on the mock server. The weekly run has not met the Docker of an installed box. The release runs of CasaOS-AppManagement `v0.4.117` and CasaOS-UI `v0.4.203` passed on their tags. The install check of this release passed on all 12 legs (run 44719679771): 11 at once, and Ubuntu 24.04 on a second try, after apt stalled three times while the machine was being prepared. The workflow made the release the latest one on 2026-11-20.
+
+## [0.5.165] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.116`, CasaOS-UI `v0.4.202`. Unchanged from v0.5.164: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The Docker cleanup lists the folders of apps that are gone.** An install that failed, or an app whose containers were removed by hand, leaves a folder among the apps with no container to go with it. Such an app is not on the dashboard, and its folder kept its images and volumes out of the cleanup for ever. The window now lists these folders first, with nothing ticked, and moves the ones chosen to `apps-removed`, beside the folder of the apps. Moved, not deleted: a folder holds the compose file of the app. The list is shown when an app cannot be read too, since such a folder is the usual reason ([ReCasaOS/CasaOS-AppManagement#77](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/77), [ReCasaOS/CasaOS-UI#209](https://github.com/ReCasaOS/CasaOS-UI/pull/209)).
+
+### Fixed
+
+- **An image name Docker cannot read no longer stops the Docker cleanup.** On a real box an app named its image `ghcr.io/mckaywrigley/chatbot-ui@undefined`, and the window offered nothing. No image was ever pulled under such a name, so it holds nothing back any more; every image of its repository is kept ([ReCasaOS/CasaOS-AppManagement#78](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/78)).
+
+### Proof
+
+CI passed on the three pull requests, with the back end's tests run against Docker: a folder with no container is listed and moved aside, the folder of an app that has one is refused, and an unreadable image name holds nothing. The new row was seen in a browser on the mock server. Not tried on the box that showed the faults. The release runs of CasaOS-AppManagement `v0.4.116` and CasaOS-UI `v0.4.202` passed on their tags. The install check of this release passed on all 12 legs (run 44705737828), and the workflow made the release the latest one on 2026-11-20.
+
+## [0.5.164] - 2026-11-20
+
+Components: CasaOS-AppManagement `v0.4.115`, CasaOS-UI `v0.4.201`. Unchanged from v0.5.163: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Fixed
+
+- **The Docker cleanup no longer stops on a compose file that Docker Compose would refuse.** On a real box the window said it could not read what an app needs, and offered nothing: the folder of an app that was gone still held a compose file whose service set both `network_mode` and `networks`. Such a file still says which images and volumes are the app's, and the cleanup now reads them from it. A file that does not parse still holds the cleanup, naming the app ([ReCasaOS/CasaOS-AppManagement#76](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/76)).
+- **The build cache can be freed when an app cannot be read.** It holds the data of no app; its button was greyed out with the rest ([ReCasaOS/CasaOS-UI#208](https://github.com/ReCasaOS/CasaOS-UI/pull/208)).
+
+### Changed
+
+- **The folder sync window says what an account reaches.** A backup destination added with a folder only reaches inside that folder, so a sync task on it only showed the backup files. The window now says so under the list of accounts, and that adding the same account again with its folder left empty reaches the rest ([ReCasaOS/CasaOS#153](https://github.com/ReCasaOS/CasaOS/issues/153), [ReCasaOS/CasaOS-UI#204](https://github.com/ReCasaOS/CasaOS-UI/pull/204)).
+
+### Proof
+
+CI passed on the three pull requests; a test loads a compose file with `network_mode` and `networks` and reads its image and its volume. The fix was not yet tried on the box that showed the fault. The release runs of CasaOS-AppManagement `v0.4.115` and CasaOS-UI `v0.4.201` passed on their tags. The install check of this release passed on all 12 legs (run 44699819717), and the workflow made the release the latest one on 2026-11-20.
+
+## [0.5.163] - 2026-11-19
+
+Components: CasaOS-AppManagement `v0.4.114`, CasaOS-UI `v0.4.200`. Unchanged from v0.5.162: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **Docker cleanup, in the settings.** A new window lists what apps left behind on the disk and frees it, one row at a time: the old versions an update replaced, the build cache, the images no container uses, and the volumes no container uses. Images and volumes are judged against the installed apps, not against what runs: a stopped app, or one between the two halves of an update, keeps its images and its data. Images open ticked, since an app that needs one again downloads it. Volumes open with nothing ticked, each with the app that made it, its size and its date, and the question before a deletion names them. What Docker refuses is listed with its reason. Only the owner sees the window ([ReCasaOS/CasaOS#167](https://github.com/ReCasaOS/CasaOS/issues/167), [ReCasaOS/CasaOS-AppManagement#75](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/75), [ReCasaOS/CasaOS-UI#207](https://github.com/ReCasaOS/CasaOS-UI/pull/207)).
+
+### Changed
+
+- **Nothing is deleted while something runs on an app.** During an install, an update, a backup, a restore, a folder sync or a move of Docker's data, the window offers nothing and says why. The same when the compose file of an app cannot be read, which it names. While a cleanup deletes, no install or update starts.
+- **The old app versions leave alone an image an app pins by its digest.** "Free up" in the Storage widget and in the new window removes each old version by itself, never forced, and skips an image an installed app names by digest.
+
+### Proof
+
+CI passed on both pull requests, with the back end's tests run against Docker. The window was driven in a browser on the mock server: the review of volumes, the question, a refused volume. No deletion was run against the Docker of an installed box. Not in this release, from the request: a schedule, a run history, stopped containers of no app, unused networks. The release runs of CasaOS-AppManagement `v0.4.114` and CasaOS-UI `v0.4.200` passed on their tags. The install check of this release passed on all 12 legs (run 44621273737): 11 at once, and Ubuntu 26.04 on a second try, after archive.ubuntu.com answered 520 during the first. The workflow made the release the latest one on 2026-11-19.
+
+## [0.5.162] - 2026-11-19
+
+Components: CasaOS-AppManagement `v0.4.113`, CasaOS-UI `v0.4.199`. Unchanged from v0.5.161: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **The dashboard says when an app runs but its health check fails.** An app whose database stopped answering looked like one in good shape. The card of a running app now reads "Unhealthy" when one of its containers fails its Docker health check, and "Starting up" while a check has not passed yet. An app with no health check shows nothing more than before ([ReCasaOS/CasaOS#166](https://github.com/ReCasaOS/CasaOS/issues/166), [ReCasaOS/CasaOS-AppManagement#74](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/74), [ReCasaOS/CasaOS-UI#206](https://github.com/ReCasaOS/CasaOS-UI/pull/206)).
+- **The Health chip of a container opens its check.** In the Containers tab of an app, the chip shows the command Docker runs, how often, and the last five runs with what they printed. Two buttons lead to the Compose tab, where a check is edited, and to the container's logs. The command and its output are shown to the owner only.
+
+### Proof
+
+CI passed on both pull requests. The card was seen in a browser on the mock server; the Containers tab was not, and is covered by component tests. The shape of a check was read from a real Docker daemon; the new route was not tried on an installed box. The release runs of CasaOS-AppManagement `v0.4.113` and CasaOS-UI `v0.4.199` passed on their tags. The install check of this release passed on all 12 legs (run 44535021646), and the workflow made the release the latest one on 2026-11-19.
+
 ## [0.5.161] - 2026-11-18
 
 Components: CasaOS-UI `v0.4.198`. Unchanged from v0.5.160: CasaOS `v0.4.117`, CasaOS-Gateway `v0.4.38`, CasaOS-AppManagement `v0.4.112`, CasaOS-UserService `v0.4.37`, CasaOS-LocalStorage `v0.4.68`, module `virt` `v0.2.6`, CasaOS-MessageBus `v0.4.31`, rclone `v1.75.1`, restic `v0.19.1`.

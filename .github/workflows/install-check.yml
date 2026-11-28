@@ -2264,6 +2264,33 @@ jobs:
           grep -F '"event": "version_changed"' <<<"${sent}" >/dev/null
           echo "the core logged heartbeat and version_changed as sent"
 
+      # The fake installers of the automatic update below are signed, as a release's
+      # install.sh is, with a key pair made for this run only; the core is given its
+      # public half as a test key. A core that checks no signature ignores both.
+      - name: Checkout the signing tool
+        if: ${{ !matrix.engine_only }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          path: installer-src
+          sparse-checkout: tools/installer-sign
+
+      - name: Set up Go for the signing tool
+        if: ${{ !matrix.engine_only }}
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: installer-src/tools/installer-sign/go.mod
+          cache: false
+
+      - name: Make a key pair for this run
+        if: ${{ !matrix.engine_only }}
+        run: |
+          set -euo pipefail
+          go -C installer-src/tools/installer-sign build -o "${RUNNER_TEMP}/installer-sign" .
+          mkdir -m 0700 "${RUNNER_TEMP}/test-key"
+          "${RUNNER_TEMP}/installer-sign" keygen --out "${RUNNER_TEMP}/test-key" >/dev/null
+          echo "INSTALLER_TEST_PUBKEY=$(cat "${RUNNER_TEMP}/test-key/installer-signing.pub")" >> "$GITHUB_ENV"
+
       # An automatic update is the dashboard's update, started by the core at
       # night once a release is one day old. Here the night is now and the
       # releases are fake: a server on this runner answers a version.json and an
@@ -2320,12 +2347,22 @@ jobs:
             return 1
           }
 
+          # sign_served: signs the served install.sh with this run's key, next to it
+          sign_served() {
+            INSTALLER_TEST_KEY="$(cat "${RUNNER_TEMP}/test-key/installer-signing.key")" \
+              "${RUNNER_TEMP}/installer-sign" sign --key-env INSTALLER_TEST_KEY autoupdate-served/install.sh
+            "${RUNNER_TEMP}/installer-sign" verify --pub "${RUNNER_TEMP}/test-key/installer-signing.pub" autoupdate-served/install.sh
+          }
+
           mkdir -p autoupdate-served
+          # the core reads the release from this line and wants the one it asked for
           cat > autoupdate-served/install.sh <<'EOF'
+          readonly CASAOS_INSTALL_RELEASE_TAG="v99.0.0"
           echo "install check: installing v99.0.0"
           echo v99.0.0 > /var/lib/casaos/fork-release
           echo "[  OK  ] CasaOS upgrade successfully  "
           EOF
+          sign_served
           offer v99.0.0
           python3 -m http.server 18098 --bind 127.0.0.1 --directory autoupdate-served > autoupdate-server.log 2>&1 &
           server=$!
@@ -2351,14 +2388,15 @@ jobs:
           curl -fsS "${base}/version.json" | jq -c .
 
           sudo mkdir -p /etc/systemd/system/casaos.service.d
-          printf '[Service]\nEnvironment=CASAOS_AUTOUPDATE_START_DELAY=0s\nEnvironment=CASAOS_AUTOUPDATE_INTERVAL=10s\nEnvironment=CASAOS_AUTOUPDATE_VERSION_URL=%s\nEnvironment=CASAOS_AUTOUPDATE_INSTALLER_URL=%s\n' \
-            "${base}/version.json" "${base}/install.sh" | sudo tee "${dropin}"
+          printf '[Service]\nEnvironment=CASAOS_AUTOUPDATE_START_DELAY=0s\nEnvironment=CASAOS_AUTOUPDATE_INTERVAL=10s\nEnvironment=CASAOS_AUTOUPDATE_VERSION_URL=%s\nEnvironment=CASAOS_AUTOUPDATE_INSTALLER_URL=%s\nEnvironment=CASAOS_INSTALLER_TEST_PUBKEY=%s\n' \
+            "${base}/version.json" "${base}/install.sh" "${INSTALLER_TEST_PUBKEY}" | sudo tee "${dropin}"
           sudo systemctl daemon-reload
           restart_core
           pid="$(systemctl show -p MainPID --value casaos.service)"
           environ="$(sudo cat "/proc/${pid}/environ" | tr '\0' '\n')"
           grep -Fx "CASAOS_AUTOUPDATE_VERSION_URL=${base}/version.json" <<<"${environ}"
           grep -Fx "CASAOS_AUTOUPDATE_INSTALLER_URL=${base}/install.sh" <<<"${environ}"
+          grep -Fx "CASAOS_INSTALLER_TEST_PUBKEY=${INSTALLER_TEST_PUBKEY}" <<<"${environ}"
 
           state="$(view)"
           echo "after the install: ${state}"
@@ -2380,6 +2418,7 @@ jobs:
           first="$(date -d "$(jq -r '.last.started_at' <<<"${state}")" +%H:%M)"
           while [ "$(date +%H:%M)" = "${first}" ]; do sleep 1; done
           cat > autoupdate-served/install.sh <<'EOF'
+          readonly CASAOS_INSTALL_RELEASE_TAG="v99.0.1"
           echo "install check: v99.0.1 fails on purpose"
           echo v99.0.1 > /var/lib/casaos/fork-release
           sleep 15
@@ -2387,6 +2426,7 @@ jobs:
           echo "CasaOS upgrade failed"
           exit 1
           EOF
+          sign_served
           offer v99.0.1
           start="$(date +%H:%M)"
           end="$(date -d '+2 hours' +%H:%M)"
@@ -2792,7 +2832,7 @@ jobs:
 
       - name: Keep the installer log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: install-check-${{ inputs.tag }}-${{ matrix.arch }}-${{ matrix.docker }}${{ matrix.docker_version }}
           path: |
@@ -2908,7 +2948,7 @@ jobs:
       SEED: ${{ matrix.seed }}
       VARIANT: ${{ matrix.variant }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Fetch the published installer
         run: |
@@ -2918,6 +2958,38 @@ jobs:
           (cd published && sha256sum --check install.sh.sha256)
           grep -E '^(CASAOS_RELEASE_TAG|RCLONE_TAG|CASAOS_UI_TAG|CASAOS_TAG)=' published/components.lock > published/expected.env
           cat published/expected.env
+
+      - name: Set up Go for the signing tool
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: tools/installer-sign/go.mod
+          cache: false
+
+      # The box's core runs an installer only with a good signature: the one
+      # published has to be good for the repository's public key. Called by the
+      # release (the caller's event, a push), a release without install.sh.sig
+      # fails; only a run by hand against an older release goes on without one.
+      - name: Check the published installer's signature
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          assets="$(gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json assets -q '.assets[].name')"
+          grep -qxF install.sh <<<"${assets}" || {
+            echo "The asset list of release ${TAG} does not hold install.sh: it cannot be trusted." >&2
+            exit 1
+          }
+          if ! grep -qxF install.sh.sig <<<"${assets}"; then
+            if [ "${EVENT}" != "workflow_dispatch" ]; then
+              echo "Release ${TAG} publishes no install.sh.sig." >&2
+              exit 1
+            fi
+            echo "Release ${TAG} publishes no install.sh.sig: no signature to check on a run by hand."
+            exit 0
+          fi
+          gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -D published -p install.sh.sig
+          go -C tools/installer-sign build -o "${RUNNER_TEMP}/installer-sign" .
+          "${RUNNER_TEMP}/installer-sign" verify --pub release/installer-signing.pub published/install.sh
 
       - name: The distribution's cloud image
         run: |
@@ -2942,9 +3014,11 @@ jobs:
           [ "${UEFI}" != true ] || pkgs="${pkgs} ovmf"
           [ "${SEED}" != customize ] || pkgs="${pkgs} libguestfs-tools"
           # The runner's apt sometimes stalls without a word (it has taken a whole job
-          # before): a few bounded tries, for that and for nothing else.
+          # before): a few bounded tries, for that and for nothing else. The download
+          # comes first, alone: a slow mirror once ran the 300 s out mid-unpack, and
+          # the dpkg left behind held the lock against every later try.
           for attempt in 1 2 3; do
-            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq ${pkgs} && break
+            sudo timeout 120 apt-get update -qq && sudo timeout 600 apt-get install -y -qq -o DPkg::Lock::Timeout=120 --download-only ${pkgs} && sudo timeout 600 apt-get install -y -qq -o DPkg::Lock::Timeout=120 ${pkgs} && break
             [ "${attempt}" -lt 3 ] || exit 1
             echo "apt stalled or failed (try ${attempt}), again"
             sudo dpkg --configure -a || true
@@ -3096,7 +3170,7 @@ jobs:
 
       - name: Keep the installer log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: install-check-${{ inputs.tag }}-${{ matrix.id }}-${{ matrix.version }}${{ matrix.variant && format('-{0}', matrix.variant) || '' }}
           path: |

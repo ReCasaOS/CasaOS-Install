@@ -81,7 +81,6 @@ readonly CASA_STATE_DIR=/var/lib/casaos
 readonly CASAOS_APP_MANAGEMENT_TAG="__CASAOS_APP_MANAGEMENT_TAG__"
 readonly CASAOS_INSTALL_RELEASE_TAG="__CASAOS_RELEASE_TAG__"
 readonly CASAOS_RELEASE_BASE_URL="https://github.com/ReCasaOS/CasaOS-Install/releases/download/${CASAOS_INSTALL_RELEASE_TAG}"
-readonly CASAOS_INSTALLER_SELF_URL="${CASAOS_RELEASE_BASE_URL}/install.sh"
 readonly CASA_UNINSTALL_URL="${CASAOS_RELEASE_BASE_URL}/casaos-uninstall"
 # Component releases this installer was cut against. Every double-underscore
 # marker below is
@@ -100,6 +99,8 @@ readonly CASAOS_APPSTORE_TAG="__CASAOS_APPSTORE_TAG__"
 readonly RCLONE_TAG="__RCLONE_TAG__"
 readonly RESTIC_TAG="__RESTIC_TAG__"
 readonly CASAOS_UPDATE_LOG="/var/log/casaos/upgrade.log"
+# The root-only copy of this file that an update started inside casaos.service goes on from.
+readonly CASAOS_DETACHED_INSTALLER="/var/lib/casaos/update/install-detached.sh"
 readonly CASAOS_COMPAT_OVERLAY_FILE="linux-zz-casaos-compat-overlay-${CASAOS_INSTALL_RELEASE_TAG}.tar.gz"
 readonly CASAOS_CORE_PACKAGE_FILE_PREFIX="casaos-${CASAOS_TAG}"
 readonly CASAOS_APP_MANAGEMENT_SHA256_AMD64="__CASAOS_APP_MANAGEMENT_SHA256_AMD64__"
@@ -141,6 +142,12 @@ readonly CASAOS_MODULES_MIN_CORE_TAG="__CASAOS_MODULES_MIN_CORE_TAG__"
 # will not change (both came in v0.4.78), so it is written here; a core that reports an
 # older version is never asked to update a module.
 readonly CASAOS_MODULE_UPDATE_MIN_CORE_TAG="v0.4.78"
+# Not a marker: the oldest core whose `casaos module list` and `casaos module update` take
+# --shipped, which reads the catalogue of the release alone and not the one the box fetched
+# online. A tag of the core that exists and will not change (both came in v0.4.126, with the
+# online catalogue), so it is written here; an older core is not given it (it refuses an option
+# it does not know) and has no other catalogue to read.
+readonly CASAOS_MODULE_SHIPPED_MIN_CORE_TAG="v0.4.126"
 
 # REQUIREMENTS CONF PATH
 # Udevil
@@ -307,6 +314,14 @@ Show() {
     fi
 }
 
+# An update started from the dashboard never installs Docker: it stops before it
+# changes anything. An install typed by hand installs it as before.
+Refuse_Docker_Install_On_Update() {
+    if [[ "${CASAOS_INSTALLER_DETACHED:-0}" == "1" && ! -x "$(command -v docker)" ]]; then
+        Show 1 "Docker is missing on this box: install Docker, then update ReCasaOS from a terminal."
+    fi
+}
+
 Running_Under_CasaOS_Service() {
     [[ -r /proc/$$/cgroup ]] && grep -Eq '(^|/)casaos\.service($|/)' /proc/$$/cgroup
 }
@@ -321,15 +336,28 @@ Detach_From_CasaOS_Service() {
     fi
     Running_Under_CasaOS_Service || return 0
 
+    # Read from a pipe, there is no file to hand over, and the update would stop
+    # with casaos.service: it stops here, before it changes anything, rather than
+    # fetch an installer again. A file sourced by `bash -c 'source …'` has $0 bash
+    # and is taken as a pipe too.
+    if [[ "${BASH_SOURCE[0]}" != "$0" || ! -f "$0" ]]; then
+        Show 1 "This box's ReCasaOS is too old to update itself from the dashboard: update it from a terminal with the install command."
+    fi
+
     command -v systemd-run >/dev/null 2>&1 || Show 1 "systemd-run is required for in-app updates"
     ${sudo_cmd} install -d -m 0755 "$(dirname "${CASAOS_UPDATE_LOG}")" || Show 1 "Failed to prepare CasaOS update log directory"
     ${sudo_cmd} touch "${CASAOS_UPDATE_LOG}" || Show 1 "Failed to prepare CasaOS update log"
 
+    # Whoever started this file may remove it once it is handed over: the unit
+    # runs a copy that only root can read or change.
+    ${sudo_cmd} install -d -m 0700 "$(dirname "${CASAOS_DETACHED_INSTALLER}")" || Show 1 "Failed to prepare the directory of the detached update"
+    ${sudo_cmd} install -m 0700 "$0" "${CASAOS_DETACHED_INSTALLER}" || Show 1 "Failed to copy the installer for the detached update"
+
     release_unit=${CASAOS_INSTALL_RELEASE_TAG//./-}
     update_unit="casaos-update-${release_unit}-$(date +%s)-$$"
-    printf -v detached_command 'exec >> %q 2>&1; curl -fsSL %q | /bin/bash' \
+    printf -v detached_command 'exec >> %q 2>&1; exec /bin/bash %q' \
         "${CASAOS_UPDATE_LOG}" \
-        "${CASAOS_INSTALLER_SELF_URL}"
+        "${CASAOS_DETACHED_INSTALLER}"
 
     # The detached run gets no arguments: an opt-out goes through the environment.
     local opt_out_env=()
@@ -353,7 +381,7 @@ Detach_From_CasaOS_Service() {
         --property=Type=exec \
         --setenv=CASAOS_INSTALLER_DETACHED=1 \
         "${opt_out_env[@]}" \
-        /bin/bash -o pipefail -c "${detached_command}"; then
+        /bin/bash -c "${detached_command}"; then
         Show 1 "Failed to detach the in-app update from casaos.service"
     fi
 
@@ -1764,20 +1792,22 @@ Install_Module_Catalogue() {
     Show 0 "Module catalogue installed."
 }
 
-# `casaos module <install|update> <name> --yes` with the core's assistant: its lines as
-# they come (the steps and the sentences), then what its result line says
+# `casaos module <install|update> <name> --yes`, then what follows the name ($3...: the
+# update's --shipped), with the core's assistant: its lines as they come (the steps and the
+# sentences), then what its result line says
 # (CASAOS_MODULE_RESULT <nonce> <name> <ok|refused|failed> <step> <code> <undo> <time>) in
 # MODULE_KIND, MODULE_STEP, MODULE_CODE and MODULE_UNDO, and its exit status in
 # MODULE_STATUS. Status 1, and nothing run, when no temporary directory could be made.
 Run_Module_Job() {
     local verb="$1" name="$2" work line rname=""
 
+    shift 2
     MODULE_STATUS=0 MODULE_KIND="" MODULE_STEP="" MODULE_CODE="" MODULE_UNDO=""
     work="$(mktemp -d)" || return 1
     GreyStart
     # no input, so that it cannot read the rest of a script piped into bash; the
     # status of the assistant is kept in a file, the pipe's being tee's
-    { Run_Module_Assistant "${CASA_BIN}" module "${verb}" "${name}" --yes </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
+    { Run_Module_Assistant "${CASA_BIN}" module "${verb}" "${name}" --yes "$@" </dev/null 2>&1 || echo "$?" >"${work}/status"; } | tee "${work}/out" || true
     ColorReset
     if [ -s "${work}/status" ]; then
         read -r MODULE_STATUS <"${work}/status" || MODULE_STATUS=1
@@ -1860,12 +1890,14 @@ Install_Modules() {
 # to update (the assistant refuses an update to the same version or an older one), or not
 # updated, with the step that failed and whether the old version was put back. Adds the name
 # to MODULES_UPDATED or MODULES_NOT_UPDATED. Nothing here changes the exit status of this script.
+# What follows the name ($2: --shipped) is given to the update.
 Update_One_Module() {
     local name="$1" retry
 
+    shift
     retry="Retry from the Modules window of the dashboard, or with: sudo casaos module update ${name}"
     Show 2 "Updating the module ${name}..."
-    if ! Run_Module_Job update "${name}"; then
+    if ! Run_Module_Job update "${name}" "$@"; then
         Show 3 "The module ${name} was not updated: no temporary directory could be made. It keeps its old version. ${retry}"
     elif [ "${MODULE_KIND}" = ok ] && [ "${MODULE_STATUS}" = 0 ]; then
         Show 0 "The module ${name} is updated."
@@ -1875,6 +1907,11 @@ Update_One_Module() {
         case "${MODULE_KIND}:${MODULE_CODE}" in
         refused:up_to_date | refused:downgrade)
             Show 2 "The module ${name} has nothing to update (${MODULE_CODE})."
+            return 0
+            ;;
+        refused:withdrawn)
+            # (the list offers no withdrawn version: the catalogue withdrew it between the list and the update)
+            Show 2 "The module ${name} keeps its version: the one of this release was withdrawn from the catalogue (${MODULE_CODE})."
             return 0
             ;;
         refused:*)
@@ -1920,16 +1957,22 @@ Running_Under_Update_Unit() {
 # update. The units have none of this environment, so none of the CASAOS_MODULE variables.
 # systemd reads ${NAME}, $$ and % in the words of a unit's command as its own, so the script
 # is a file in a root-only directory of CASA_RUN_DIR, which it removes, and no word given to
-# systemd-run holds a $ or a %. The arguments are the names, each one that Valid_Module_Name
-# passed.
+# systemd-run holds a $ or a %. The arguments are --shipped, when the updates are to read the
+# release's catalogue alone, then the names, each one that Valid_Module_Name passed (none starts
+# with "-"); the script is given them in that order, after the log and the core.
 Hand_Off_Module_Updates() {
-    local dir="" plain=0
+    local dir="" plain=0 shipped=""
     # shellcheck disable=SC2016 # the unit's own script, given its values as arguments
     local script='trap '\''rm -f -- "$0"; rmdir -- "${0%/*}" 2>/dev/null'\'' EXIT
         trap '\''exit 143'\'' HUP INT TERM
         exec >>"$1" 2>&1
         bin="$2"
         shift 2
+        shipped=""
+        if [ "${1:-}" = --shipped ]; then
+            shipped=1
+            shift
+        fi
         n=0
         while [ "${n}" -lt 300 ]; do
             case "$(systemctl show casaos-update.service --property=ActiveState --value 2>/dev/null)" in
@@ -1939,10 +1982,14 @@ Hand_Off_Module_Updates() {
         done
         for name in "$@"; do
             echo "Updating the module ${name}..."
-            systemd-run --wait --pipe --collect --unit="casaos-update-modules-${name}-$(date +%s)" --property=Type=exec --property=KillMode=mixed --property=TimeoutStopSec=420 -- "${bin}" module update "${name}" --yes </dev/null ||
+            systemd-run --wait --pipe --collect --unit="casaos-update-modules-${name}-$(date +%s)" --property=Type=exec --property=KillMode=mixed --property=TimeoutStopSec=420 -- "${bin}" module update "${name}" --yes ${shipped:+--shipped} </dev/null ||
                 echo "The update of the module ${name} ended with exit status $?: the lines above say whether it is updated, and if not whether its old version was put back. To try again: the Modules window of the dashboard, or sudo casaos module update ${name}"
         done'
 
+    if [ "${1:-}" = --shipped ]; then
+        shipped=1
+        shift
+    fi
     case "${CASA_RUN_DIR}${CASAOS_UPDATE_LOG}${CASA_BIN}$*" in
     *'$'* | *'%'*) ;;
     *) plain=1 ;;
@@ -1951,7 +1998,7 @@ Hand_Off_Module_Updates() {
         dir="$(${sudo_cmd} mktemp -d "${CASA_RUN_DIR}/casaos-update-modules.XXXXXX")" &&
         printf '%s\n' "${script}" | ${sudo_cmd} tee "${dir}/run.sh" >/dev/null &&
         ${sudo_cmd} systemd-run --quiet --collect --unit=casaos-update-modules --property=Type=exec --property=KillMode=mixed --property=TimeoutStopSec=420 \
-            /bin/sh "${dir}/run.sh" "${CASAOS_UPDATE_LOG}" "${CASA_BIN}" "$@"; then
+            /bin/sh "${dir}/run.sh" "${CASAOS_UPDATE_LOG}" "${CASA_BIN}" ${shipped:+--shipped} "$@"; then
         Show 2 "The modules $* will be updated once this update has finished, by casaos-update-modules.service: what they say is added to ${CASAOS_UPDATE_LOG}, and the Modules window shows the version each one has."
     else
         if [ -n "${dir}" ]; then ${sudo_cmd} rm -rf "${dir}" || true; fi
@@ -1972,7 +2019,7 @@ Hand_Off_Module_Updates() {
 # assistant's own limits on each of its steps (the download, apt, systemctl, the route, the
 # rollback); no timeout is put around it, which would stop apt beside it.
 Update_Installed_Modules() {
-    local found shown work status=0 name names=""
+    local found shown work status=0 name names="" shipped=""
 
     MODULES_UPDATED="" MODULES_NOT_UPDATED=""
     if [ "${NO_MODULE_UPDATE}" = 1 ]; then
@@ -2001,6 +2048,13 @@ Update_Installed_Modules() {
         Show 3 "No module was updated: ${CASA_BIN} did not report a version of ${CASAOS_MODULE_UPDATE_MIN_CORE_TAG} or later, the first that has 'casaos module update' (it reported '${shown}'). ReCasaOS itself is installed and is not affected."
         return 0
     fi
+    # A core that also reads the catalogue the box fetched online lists and updates from the
+    # release's catalogue alone here: a release installed at night must not bring a module
+    # version that the box has seen for less than a day (the core's own night waits 24 hours),
+    # and a module already at a later version than the release's has no update in that list.
+    if Version_At_Least "${found}" "${CASAOS_MODULE_SHIPPED_MIN_CORE_TAG}"; then
+        shipped=1
+    fi
 
     work="$(mktemp -d)" || {
         Show 3 "No module was updated: no temporary directory could be made. Each module keeps the version it has."
@@ -2014,7 +2068,7 @@ Update_Installed_Modules() {
     # line; the name of an "available" is the "name" before it, and one that is not a module
     # name is dropped. (A line, not the whole list, is what grep and awk are given: a long line
     # makes grep -o slow beyond use.)
-    Run_Module_Assistant "${CASA_BIN}" module list </dev/null >"${work}/list" 2>/dev/null || status=$?
+    Run_Module_Assistant "${CASA_BIN}" module list ${shipped:+--shipped} </dev/null >"${work}/list" 2>/dev/null || status=$?
     tr '{' '\n' <"${work}/list" >"${work}/lines" 2>/dev/null || true
     if [ "${status}" != 0 ] || ! grep -Eq '"modules": *\[' "${work}/lines" 2>/dev/null; then
         ${sudo_cmd} rm -rf "${work}" || true
@@ -2035,11 +2089,11 @@ Update_Installed_Modules() {
     fi
     if Running_Under_Update_Unit; then
         # shellcheck disable=SC2086 # (names, split on purpose)
-        Hand_Off_Module_Updates ${names}
+        Hand_Off_Module_Updates ${shipped:+--shipped} ${names}
         return 0
     fi
     for name in ${names}; do
-        Update_One_Module "${name}"
+        Update_One_Module "${name}" ${shipped:+--shipped}
     done
     if [ -n "${MODULES_UPDATED}" ]; then
         Show 0 "Modules updated to the versions of this release: ${MODULES_UPDATED}."
@@ -2125,6 +2179,7 @@ Validate_Module_Request
 # Existing CasaOS releases start this installer inside casaos.service. Move the
 # real update into its own systemd unit before the installer stops CasaOS.
 Detach_From_CasaOS_Service
+Refuse_Docker_Install_On_Update
 
 # Step 0 : Get Download Url Domain
 # Step 1: Check ARCH

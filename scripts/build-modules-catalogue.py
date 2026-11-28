@@ -1,31 +1,50 @@
 #!/usr/bin/env python3
 """Builds the catalogue of the modules of a release (modules-catalogue-<tag>.json) from release/modules.env and from what each module's own release published.
 
-    build-modules-catalogue.py list     MODULES_ENV
+    build-modules-catalogue.py list     MODULES_ENV [--carry FILE]
     build-modules-catalogue.py archives CHECKSUMS TAG
-    build-modules-catalogue.py build    [--git-base URL] --out FILE MODULES_ENV STAGE
-    build-modules-catalogue.py proof    MODULES_ENV OUTPUT
+    build-modules-catalogue.py digest   MODULES_ENV NAME ARCH
+    build-modules-catalogue.py build    --git-base URL --out FILE [--schema 2 --serial N --generated DATE | --schema 3 --serial N --generated DATE --withdrawn FILE [--carry FILE]]
+                                        [--owners-git-base URL] MODULES_ENV STAGE
+    build-modules-catalogue.py proof    MODULES_ENV OUTPUT [--schema 2|3]
 
 The network is not used here, except by `git fetch` of the tag of a module. scripts/build-release-bundle.sh fetches, exactly as it fetches the checksums of
 the components, <stage>/<name>/checksums.txt and the two archives that checksums.txt names; this script judges them.
 
-`list` prints one line per module of modules.env: name, component, tag, commit, tier, and nothing when the file holds none (this script is the one reader of that
-file, so that no other tool can read it otherwise). `archives` prints the two archive names that a module's checksums.txt lists for a tag. `build` writes the
+`list` prints one line per module of modules.env: name, component, tag, commit, tier, owner, and nothing when the file holds none (this script is the one reader of that
+file, so that no other tool can read it otherwise). `archives` prints the two archive names that a module's checksums.txt lists for a tag, amd64 first then arm64. `digest` prints the SHA-256 that modules.env pins for the archive of a module
+for an architecture (amd64 or arm64), and nothing for a module of ReCasaOS, which pins none. `build` writes the
 catalogue, and writes nothing unless every module passes: a module whose files are not all there, whose archive is not the one checksums.txt names, whose tag is
 not at the pinned commit, whose module.json is not, byte for byte, the module.json that the repository has at that commit, whose two archives do not carry the
 same module.json or hold a path that a box would not unpack, or whose manifest and entry would not be accepted by the reader of the box (pkg/osmodule of the
 core: ParseCatalogue and Parse), is an error and there is no catalogue at all; so is a module that shares its unit, its route or its component with another.
-`proof` judges what the core's own `casaos module list` printed when it was run on the catalogue that was built. Exit status: 0 done, 1 refused (the reason on
-the standard error), 2 usage.
+Without options `build` writes what a release ships (schema 1), which holds the modules of ReCasaOS only: a modules.env that names a module of another owner is refused,
+the module named. With --schema 2 --serial N --generated DATE, the three together and in that order, it writes the same modules in the online format, for the repository
+that publishes the catalogue outside the releases: {"schema": 2, "serial": N, "generated": DATE, "modules": [...]}, N an integer from 1 with no sign and no leading zero,
+DATE a UTC time YYYY-MM-DDTHH:MM:SSZ; any other form is a usage error. Schema 2 leaves the modules of another owner out (they need no staged archive): it is the same
+bytes as the build of a modules.env that never had them. With --schema 3 --serial N --generated DATE --withdrawn FILE it writes every module in the format open to other
+owners: {"schema": 3, "serial": N, "generated": DATE, "withdrawn": [...], "modules": [...]}, each entry with its "repository" (<owner>/<component>) right after its
+"component" and its archives at the mirror of ReCasaOS, https://github.com/ReCasaOS/modules/releases/download/m-<name>-<tag>/<archive>. FILE holds one withdrawn version per
+line, <name> <tag> <reason> (the reason is the rest of the line, 1 to 200 characters, none of them a tab, a line end, "@" or "<!"), 64 at most, a name and a tag once; empty
+lines and lines that start with # are skipped. The tag of a module of ReCasaOS is read in <--git-base>/<component>, that of a module of another owner in
+<--owners-git-base>/<owner>/<component> (https://github.com by default), and each archive of the latter must also have the SHA-256 that modules.env pins. With --carry FILE, the last option of schema 3, FILE is a catalogue
+of schema 3 that was published before, read as strictly as a box reads one: a module of another owner whose name and tag it offers is carried over, with its commit, its
+archives (their mirror URLs and digests) and its manifest from FILE, its tier from modules.env, and neither its tag is read at its author's nor its archives are asked of STAGE;
+FILE must name the repository, the commit and the two digests that modules.env pins, or the build is refused, the module named. A module of ReCasaOS is never carried. `list`
+with --carry leaves out the modules that would be carried. `proof` judges
+what the core's own `casaos module list` printed when it was run on the catalogue that was built: every module of modules.env must be listed, except with --schema 2,
+which expects those of ReCasaOS only. Exit status: 0 done, 1 refused (the reason on the standard error), 2 usage.
 
 The rules of the reader of a box are copied here, to fail early with a sentence that says what is wrong; the core is the judge, and `proof` has it read the
 catalogue that is shipped. scripts/test-build-modules-catalogue.py holds this copy to the Go source of the core. Run this with Python 3.12: its Unicode tables
 (15.0) are those of the Go that builds the core, and the tables of 3.10 (13.0) refuse characters that the core takes.
 
-release/modules.env: MODULE_<NAME>_TAG, MODULE_<NAME>_COMMIT, MODULE_<NAME>_COMPONENT and MODULE_<NAME>_TIER for each module. <NAME> is upper case letters, digits and
+release/modules.env: MODULE_<NAME>_TAG, MODULE_<NAME>_COMMIT, MODULE_<NAME>_COMPONENT and MODULE_<NAME>_TIER for each module, and for a module kept in another owner's
+repository MODULE_<NAME>_OWNER, MODULE_<NAME>_SHA256_AMD64 and MODULE_<NAME>_SHA256_ARM64 (the owner is ReCasaOS when the file names none). <NAME> is upper case letters, digits and
 underscores, starts with a letter, and gives the module's name in lower case with each underscore a hyphen (VIRT is virt, VIRT_MANAGEMENT is virt-management). The file
 holds printable ASCII, tabs and line ends and nothing else: another character could end a line for one reader and not for another.
 """
+import datetime
 import hashlib
 
 import json
@@ -54,6 +73,10 @@ MAX_DESCRIPTION = 300
 MAX_CATALOGUE_BYTES = 1 << 20
 MAX_CATALOGUE_MODULES = 64
 MAX_URL_BYTES = 512
+COMMUNITY_SCHEMA = 3
+MAX_WITHDRAWN = 64
+MAX_REASON = 200
+MIRROR_URL = "https://github.com/ReCasaOS/modules/releases/download/"
 ORG_URL = "https://github.com/ReCasaOS/"
 ARCHES = ("amd64", "arm64")
 
@@ -68,8 +91,13 @@ OS_RE = re.compile(r"(debian|ubuntu):[0-9]{1,2}(\.[0-9]{2})?")
 TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+SERIAL_RE = re.compile(r"[1-9][0-9]{0,18}")
 ARCHIVE_RE = re.compile(r"linux-(amd64|arm64)-casaos-[a-z-]+-(v[0-9.]+)\.tar\.gz")
-ENV_KEY_RE = re.compile(r"MODULE_([A-Z][A-Z0-9_]*)_(TAG|COMMIT|COMPONENT|TIER)")
+ENV_KEY_RE = re.compile(r"MODULE_([A-Z][A-Z0-9_]*)_(TAG|COMMIT|COMPONENT|TIER|OWNER|SHA256_AMD64|SHA256_ARM64)")
+# a GitHub account or organisation: letters, digits and inner hyphens, 39 at most; nothing that a URL or a path would read otherwise
+OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
+OWNER = "ReCasaOS"
+OWNERS_GIT_BASE = "https://github.com"
 TIERS = ("core", "community")
 RESERVED_ROUTES = (
     "sys", "users", "usb", "disks", "storage", "cloud", "recover", "other", "zt", "samba", "file", "folder", "image", "notify", "gateway", "casaos",
@@ -77,14 +105,15 @@ RESERVED_ROUTES = (
 )
 BLANKS = "\u2800\u115f\u1160\u3164\uffa0"
 
-# the units of the box that a module's unit cannot be, and the two prefixes of those that cannot either (pkg/osmodule reservedUnits and reservedUnitPrefixes)
+# the units of the box that a module's unit cannot be, and the prefixes of those that cannot either (pkg/osmodule reservedUnits and reservedUnitPrefixes)
 RESERVED_UNITS = (
     "casaos-update.service", "casaos-package-update.service", "casaos-docker-update.service", "casaos-os-upgrade.service", "casaos-os-upgrade-measure.service",
+    "casaos-update-modules.service",
     "casaos.service", "casaos-gateway.service", "casaos-user-service.service", "casaos-message-bus.service", "casaos-local-storage.service", "casaos-app-management.service",
     "rclone.service", "casaos-wsdd.service",
     "apt-daily.service", "apt-daily-upgrade.service",
 )
-RESERVED_UNIT_PREFIXES = ("casaos-module-", "usb-mount@")
+RESERVED_UNIT_PREFIXES = ("casaos-module-", "casaos-update-modules-", "usb-mount@")
 # what an archive may put on a box (pkg/osmodule files.go and unpack.go): the directories, directly in which the files go, the programs that usr/bin may not hold,
 # and the bounds of an archive; the largest archive is what a box downloads
 ALLOWED_DIRS = ("usr/bin", "usr/lib/systemd/system", "lib/systemd/system", "etc/casaos")
@@ -264,7 +293,136 @@ def asset_url(component, tag, archive):
     return "%s%s/releases/download/%s/%s" % (ORG_URL, component, tag, archive)
 
 
-def validate_entry(e, at):
+def mirror_url(name, tag, archive):
+    """Where schema 3 has an archive: in the release m-<name>-<tag> of the repository that ReCasaOS keeps for the copies, never in the author's."""
+    return "%sm-%s-%s/%s" % (MIRROR_URL, name, tag, archive)
+
+
+def leading_zero(tag):
+    """Whether a tag has a number with a leading zero. Stricter than the core's pattern: the core compares the tags of withdrawn versions character for character, where
+    v0.02.0 is not v0.2.0."""
+    return any(len(number) > 1 and number.startswith("0") for number in tag[1:].split("."))
+
+
+def withdrawn_problem(items):
+    """(the index of the item, what is wrong with it) or None: the rules of the core's readWithdrawn, and the builder's own on a reason (no "@", no "<!", which could mention
+    people where the reason is shown)."""
+    seen = set()
+    for i, w in enumerate(items):
+        name, tag, reason = w.get("name", ""), w.get("tag", ""), w.get("reason", "")
+        if i >= MAX_WITHDRAWN:
+            return i, "more than %d versions are withdrawn" % MAX_WITHDRAWN
+        if NAME_RE.fullmatch(name) is None:
+            return i, "the name is not the name of a module"
+        if TAG_RE.fullmatch(tag) is None or leading_zero(tag):
+            return i, "the tag is not the tag of a module"
+        if not 1 <= len(reason) <= MAX_REASON:
+            return i, "the reason is not 1 to %d characters" % MAX_REASON
+        if not printable(reason) or not shows(reason):
+            return i, "the reason is not text that a person sees"
+        if "@" in reason or "<!" in reason:
+            return i, "the reason has an @ or a <! in it, which could mention people"
+        if (name, tag) in seen:
+            return i, "the version is withdrawn twice"
+        seen.add((name, tag))
+    return None
+
+
+def read_withdrawn(path):
+    """The withdrawn versions in the file path, [{name, tag, reason}] in the order of the file: one to a line, <name> <tag> <reason>, the reason being the rest of the line;
+    empty lines and lines that start with # are skipped. A line ends at a line feed and nowhere else, so that a carriage return is in the reason, and refused there."""
+    try:
+        with open(path, "rb") as f:
+            text = f.read().decode("utf-8")
+    except OSError as err:
+        raise Refused("the file of withdrawn versions cannot be read (%s)" % (err.strerror or type(err).__name__))
+    except UnicodeDecodeError:
+        raise Refused("the file of withdrawn versions is not UTF-8")
+    items, lines = [], []
+    for n, line in enumerate(text.split("\n"), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        name, _, rest = line.partition(" ")
+        tag, _, reason = rest.partition(" ")
+        if "\r" in line:
+            raise Refused("withdrawn versions, line %d: the line holds a carriage return; save the file with Unix line endings" % n)
+        items.append({"name": name, "tag": tag, "reason": reason})
+        lines.append(n)
+    found = withdrawn_problem(items)
+    if found:
+        raise Refused("withdrawn versions, line %d: %s" % (lines[found[0]], found[1]))
+    return items
+
+
+def read_carried(path):
+    """The entries of the catalogue of schema 3 in the file path, {name: entry}: the file is read as a box reads one (parse_catalogue: its size, a key twice, the shape,
+    the withdrawn versions and every rule of an entry), since it is data that came from the web."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(MAX_CATALOGUE_BYTES + 1)
+    except OSError as err:
+        raise Refused("the catalogue to carry over cannot be read (%s)" % (err.strerror or type(err).__name__))
+    try:
+        return {e["name"]: e for e in parse_catalogue(raw, COMMUNITY_SCHEMA)["modules"]}
+    except Refused as err:
+        who = ""
+        at = re.match(r"modules\.([0-9]+)\.", str(err))
+        if at:
+            # (the file did not hold: its entry may be of any shape, and its name is text from the web, named only when it is a module's name)
+            try:
+                name = json.loads(raw)["modules"][int(at.group(1))]["name"]
+            except (ValueError, KeyError, IndexError, TypeError):
+                name = None
+            if isinstance(name, str) and NAME_RE.fullmatch(name):
+                who = " (module %s)" % name
+        raise Refused("the catalogue to carry over is not a catalogue of schema 3%s: %s" % (who, err))
+
+
+def is_carried(module, carried):
+    """Whether the module is carried over: one of another owner, whose name and tag the file offers."""
+    return module["owner"] != OWNER and module["name"] in carried and carried[module["name"]]["tag"] == module["tag"]
+
+
+def carried_entry(module, carried):
+    """The entry of a carried module, in the form entry_of gives (schema 1), which community_entry turns into the very entry that the file holds."""
+    e, name = carried[module["name"]], module["name"].upper().replace("-", "_")
+    if e["repository"] != "%s/%s" % (module["owner"], module["component"]):
+        raise Refused("the repository in the catalogue to carry over is %s, not the pinned %s/%s" % (e["repository"], module["owner"], module["component"]))
+    if e["commit"] != module["commit"]:
+        raise Refused("the catalogue to carry over has it at commit %s, not at the pinned %s" % (e["commit"], module["commit"]))
+    for arch in ARCHES:
+        if e["assets"].get(arch, {}).get("sha256") != module["sha256"][arch]:
+            raise Refused("the %s archive in the catalogue to carry over is not the one modules.env pins (MODULE_%s_SHA256_%s)" % (arch, name, arch.upper()))
+    # the archives as a fresh build names them: this architecture, this tag, and one stem for both (what the author's checksums.txt gave)
+    names, stems = {}, set()
+    for arch in ARCHES:
+        names[arch] = e["assets"][arch]["url"].rsplit("/", 1)[1]
+        m = re.fullmatch(r"linux-%s-casaos-([a-z-]+)-%s\.tar\.gz" % (arch, re.escape(e["tag"])), names[arch])
+        if m is None:
+            raise Refused("the %s archive %s in the catalogue to carry over is not named for this architecture and tag" % (arch, names[arch]))
+        stems.add(m.group(1))
+    if len(stems) != 1:
+        raise Refused("the two archives in the catalogue to carry over are not of the same name (%s, %s)" % (names["amd64"], names["arm64"]))
+    # (the manifest is kept as the file has it, which is as module.json has it: a fresh build keeps the key order of module.json)
+    return {
+        "name": e["name"], "component": e["component"], "tier": module["tier"], "tag": e["tag"], "commit": e["commit"],
+        "assets": {arch: {"url": asset_url(e["component"], e["tag"], names[arch]), "sha256": e["assets"][arch]["sha256"]} for arch in ARCHES},
+        "manifest": e["manifest"],
+    }
+
+
+def community_entry(e, owner):
+    """The entry in schema 3: its repository right after its component, and its archives at the mirror."""
+    out = {}
+    for key, value in e.items():
+        out[key] = value
+        if key == "component":
+            out["repository"] = "%s/%s" % (owner, value)
+    out["assets"] = {arch: {"url": mirror_url(e["name"], e["tag"], a["url"].rsplit("/", 1)[1]), "sha256": a["sha256"]} for arch, a in e["assets"].items()}
+    return out
+
+
+def validate_entry(e, at, schema=CATALOGUE_SCHEMA):
     """pkg/osmodule Entry.validate()."""
     for field, ok in (
         ("name", NAME_RE.fullmatch(e["name"]) is not None),
@@ -275,10 +433,17 @@ def validate_entry(e, at):
     ):
         if not ok:
             raise invalid(at + "." + field, "value")
+    if schema == COMMUNITY_SCHEMA:
+        owner, _, repo = e["repository"].partition("/")
+        if OWNER_RE.fullmatch(owner) is None or repo != e["component"]:
+            raise invalid(at + ".repository", "value")
+        if owner != OWNER and e["tier"] != "community":
+            raise invalid(at + ".tier", "value")
     if not e["assets"]:
         raise invalid(at + ".assets", "missing")
     for arch, a in e["assets"].items():
-        url, prefix = a.get("url", ""), asset_url(e["component"], e["tag"], "")
+        url = a.get("url", "")
+        prefix = mirror_url(e["name"], e["tag"], "") if schema == COMMUNITY_SCHEMA else asset_url(e["component"], e["tag"], "")
         m = ARCHIVE_RE.fullmatch(url[len(prefix):])
         if not (url.startswith(prefix) and len(url) <= MAX_URL_BYTES and SHA256_RE.fullmatch(a.get("sha256", "")) and m and m.group(1) == arch and m.group(2) == e["tag"]):
             raise invalid(at + ".assets." + arch, "value")
@@ -290,25 +455,36 @@ def validate_entry(e, at):
         raise invalid(at + ".manifest.component", "value")
 
 
-def parse_catalogue(raw):
-    """pkg/osmodule ParseCatalogue(): the catalogue in the text raw, or why it is not one."""
+def parse_catalogue(raw, schema=CATALOGUE_SCHEMA):
+    """pkg/osmodule ParseCatalogue(), or ParseOnlineCatalogue() for schema 3 (the head of a schema 2 is not read here): the catalogue in the text raw, or why it is not one."""
     if len(raw) > MAX_CATALOGUE_BYTES:
         raise invalid("catalogue", "too large")
     c = load_json(raw)
-    exact_shape(c, {"schema": int, "modules": CATALOGUE_SHAPE["modules"]}, "catalogue")
-    if c.get("schema") != CATALOGUE_SCHEMA:
+    shape, keys = {"schema": int, "modules": CATALOGUE_SHAPE["modules"]}, ("name", "component", "tier", "tag", "commit", "assets", "manifest")
+    if schema == COMMUNITY_SCHEMA:
+        shape = {"schema": int, "serial": int, "generated": str, "withdrawn": [{"name": str, "tag": str, "reason": str}],
+                 "modules": [dict(CATALOGUE_SHAPE["modules"][0], repository=str)]}
+        keys += ("repository",)
+    exact_shape(c, shape, "catalogue")
+    if c.get("schema") != schema:
         raise invalid("schema", "schema")
     if "modules" not in c:
         raise invalid("modules", "missing")
+    if schema == COMMUNITY_SCHEMA:
+        if "withdrawn" not in c:
+            raise invalid("withdrawn", "missing")
+        found = withdrawn_problem(c["withdrawn"])
+        if found:
+            raise invalid("withdrawn.%d" % found[0], found[1])
     if len(c["modules"]) > MAX_CATALOGUE_MODULES:
         raise invalid("modules", "too many")
     seen = set()
     for i, e in enumerate(c["modules"]):
         at = "modules.%d" % i
-        for key in ("name", "component", "tier", "tag", "commit", "assets", "manifest"):
+        for key in keys:
             if key not in e:
                 raise invalid(at + "." + key, "missing")
-        validate_entry(e, at)
+        validate_entry(e, at, schema)
         if e["name"] in seen:
             raise invalid(at + ".name", "value")
         seen.add(e["name"])
@@ -333,7 +509,9 @@ def env_lines(raw):
 
 
 def read_modules_env(path):
-    """The modules of release/modules.env, sorted by name: [{name, component, tag, commit, tier}]. No entry is a catalogue of nothing, which the caller does not build."""
+    """The modules of release/modules.env, sorted by name: [{name, component, tag, commit, tier, owner, sha256}], owner "ReCasaOS" when the file names none and
+    sha256 {arch: digest} for a module of another owner, None for one of ReCasaOS (its digests are those of its checksums.txt). No entry is a catalogue of nothing,
+    which the caller does not build."""
     try:
         with open(path, "rb") as f:
             raw = f.read()
@@ -347,7 +525,7 @@ def read_modules_env(path):
         key, eq, value = line.partition("=")
         m = ENV_KEY_RE.fullmatch(key)
         if not eq or not m:
-            raise Refused("modules.env line %d: %r is not a MODULE_<NAME>_(TAG|COMMIT|COMPONENT|TIER) assignment" % (n, line[:60]))
+            raise Refused("modules.env line %d: %r is not a MODULE_<NAME>_(TAG|COMMIT|COMPONENT|TIER|OWNER|SHA256_AMD64|SHA256_ARM64) assignment" % (n, line[:60]))
         module, field = m.group(1), m.group(2).lower()
         if field in found.setdefault(module, {}):
             raise Refused("modules.env line %d: %s is set twice" % (n, key))
@@ -368,7 +546,26 @@ def read_modules_env(path):
         ):
             if not ok:
                 raise Refused("modules.env: the %s of module %s is not valid" % (field, module))
-        modules.append(dict(e, name=name))
+        if leading_zero(e["tag"]):
+            raise Refused("modules.env: MODULE_%s_TAG has a number with a leading zero" % module)
+        owner = e.get("owner", OWNER)
+        if OWNER_RE.fullmatch(owner) is None or owner.lower() == OWNER.lower() and owner != OWNER:
+            raise Refused("modules.env: MODULE_%s_OWNER is not a GitHub owner (letters, digits and inner hyphens, 39 at most; ReCasaOS spelled so)" % module)
+        for arch in ARCHES:
+            key = "MODULE_%s_SHA256_%s" % (module, arch.upper())
+            digest = e.get("sha256_" + arch)
+            if owner == OWNER and digest is not None:
+                raise Refused("modules.env: %s is set, and the digests of a module of ReCasaOS are those of its checksums.txt" % key)
+            if owner != OWNER and digest is None:
+                raise Refused("modules.env: %s is missing: a module of another owner than ReCasaOS names the digests of both its archives" % key)
+            if digest is not None and SHA256_RE.fullmatch(digest) is None:
+                raise Refused("modules.env: %s is not 64 lower case hexadecimal digits" % key)
+        if owner != OWNER and e["tier"] != "community":
+            raise Refused("modules.env: MODULE_%s_TIER is not community, and a module of another owner than ReCasaOS is" % module)
+        modules.append({
+            "name": name, "component": e["component"], "tag": e["tag"], "commit": e["commit"], "tier": e["tier"], "owner": owner,
+            "sha256": None if owner == OWNER else {arch: e["sha256_" + arch] for arch in ARCHES},
+        })
     return modules
 
 
@@ -596,6 +793,7 @@ def fetch_tag(git_base, component, tag):
 
 
 def entry_of(module, stage, git_base):
+    """The entry of the module, whose repository is <git_base>/<component>."""
     name, component, tag = module["name"], module["component"], module["tag"]
     folder = os.path.join(stage, name)
     try:
@@ -612,8 +810,12 @@ def entry_of(module, stage, git_base):
         path = os.path.join(folder, archive)
         if not os.path.isfile(path):
             raise Refused("%s was not fetched" % archive)
-        if sha256_of(path) != digest:
+        got = sha256_of(path)
+        if got != digest:
             raise Refused("%s is not the archive that checksums.txt names (its sha256 is not %s)" % (archive, digest))
+        # the archives that were reviewed are the ones the pull request pinned: a release replaced since then has another digest, in checksums.txt too
+        if module["sha256"] is not None and got != module["sha256"][arch]:
+            raise Refused("the %s archive %s is not the one modules.env pins (MODULE_%s_SHA256_%s)" % (arch, archive, name.upper().replace("-", "_"), arch.upper()))
         try:
             manifests[arch], members[arch] = read_archive(path)
         except Refused as err:
@@ -655,19 +857,49 @@ def check_distinct(entries):
                 raise Refused("modules %s and %s share the %s %s" % (first, e["name"], what, get(e)))
 
 
-def build(env_path, stage, out, git_base):
+def build(env_path, stage, out, git_base, header=None, owners_git_base=OWNERS_GIT_BASE, carried=None):
+    """With no header the catalogue is the one a release ships (schema 1), which holds the modules of ReCasaOS only. carried ({name: entry} of a catalogue of schema 3
+    that was published before, which only schema 3 takes) holds the versions of other owners that are taken from it and not fetched again."""
+    carried = carried or {}
     modules = read_modules_env(env_path)
     if not modules:
         raise Refused("%s has no module: there is no catalogue to build" % env_path)
+    for module in modules:
+        if header is None and module["owner"] != OWNER:
+            raise Refused("module %s is of %s: the catalogue of a release holds the modules of %s only" % (module["name"], module["owner"], OWNER))
+    if header is not None and header["schema"] == 2:
+        # schema 2 knows no other owner: those modules are left out, and so are their archives
+        modules = [m for m in modules if m["owner"] == OWNER]
+        if not modules:
+            raise Refused("%s has no module of %s: there is no catalogue of schema 2 to build" % (env_path, OWNER))
+    if header is not None and header["schema"] == COMMUNITY_SCHEMA:
+        offered = {(m["name"], m["tag"]) for m in modules}
+        for w in header["withdrawn"]:
+            if (w["name"], w["tag"]) in offered:
+                raise Refused("module %s %s is withdrawn and is also a module of the catalogue: a catalogue does not offer what it withdraws" % (w["name"], w["tag"]))
     entries = []
     for module in modules:
         try:
-            entries.append(entry_of(module, stage, git_base))
+            if is_carried(module, carried):
+                entries.append(carried_entry(module, carried))
+                continue
+            # (the owner passed OWNER_RE in read_modules_env: it is one element of a URL, nothing more)
+            base = git_base if module["owner"] == OWNER else "%s/%s" % (owners_git_base.rstrip("/"), module["owner"])
+            entries.append(entry_of(module, stage, base))
         except Refused as err:
             raise Refused("module %s: %s" % (module["name"], err))
     check_distinct(entries)
     text = (json.dumps({"schema": CATALOGUE_SCHEMA, "modules": entries}, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     parse_catalogue(text)  # what is written is what the box will read
+    if header is not None:
+        # the online format: the modules judged above, under the header that tells one publication from the next
+        if header["schema"] == COMMUNITY_SCHEMA:
+            entries = [community_entry(e, m["owner"]) for e, m in zip(entries, modules)]
+        text = (json.dumps(dict(header, modules=entries), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        if len(text) > MAX_CATALOGUE_BYTES:
+            raise invalid("catalogue", "too large")
+        if header["schema"] == COMMUNITY_SCHEMA:
+            parse_catalogue(text, COMMUNITY_SCHEMA)
     with open(out + ".tmp", "wb") as f:
         f.write(text)
     os.replace(out + ".tmp", out)
@@ -697,8 +929,9 @@ def check_list_output(raw, modules):
             raise Refused("the core lists module %s at %s/%s, not at the pinned %s/%s" % (module["name"], got.get("tag"), got.get("tier"), module["tag"], module["tier"]))
 
 
-def proof(env_path, output_path):
-    modules = read_modules_env(env_path)
+def proof(env_path, output_path, schema=COMMUNITY_SCHEMA):
+    """Every module of modules.env must be listed, except for schema 2, whose catalogue holds the modules of ReCasaOS only."""
+    modules = [m for m in read_modules_env(env_path) if schema != 2 or m["owner"] == OWNER]
     if not modules:
         raise Refused("%s has no module: there is nothing to prove" % env_path)
     try:
@@ -709,16 +942,52 @@ def proof(env_path, output_path):
     check_list_output(raw, modules)
 
 
-USAGE = "usage: build-modules-catalogue.py list MODULES_ENV | archives CHECKSUMS TAG | build --git-base URL --out FILE MODULES_ENV STAGE | proof MODULES_ENV OUTPUT"
+USAGE = ("usage: build-modules-catalogue.py list MODULES_ENV [--carry FILE] | archives CHECKSUMS TAG | digest MODULES_ENV NAME ARCH"
+         " | build --git-base URL --out FILE [--schema 2 --serial N --generated DATE | --schema 3 --serial N --generated DATE --withdrawn FILE [--carry FILE]]"
+         " [--owners-git-base URL] MODULES_ENV STAGE | proof MODULES_ENV OUTPUT [--schema 2|3]")
+
+
+def pinned_digest(env_path, name, arch):
+    """The SHA-256 that modules.env pins for the archive of the module name for arch, or "" for a module of ReCasaOS."""
+    module = next((m for m in read_modules_env(env_path) if m["name"] == name), None)
+    if module is None:
+        raise Refused("modules.env has no module of that name")
+    if arch not in ARCHES:
+        raise Refused("the architecture is neither amd64 nor arm64")
+    return "" if module["sha256"] is None else module["sha256"][arch]
+
+
+def online_header(schema, serial, generated, withdrawn):
+    """The header of the online format from the values of the command line (withdrawn: whether a file of withdrawn versions came with them, as schema 3 has and schema 2 has
+    not), or None when one of them is not in its one accepted form. The caller puts the withdrawn versions in."""
+    if schema != ("3" if withdrawn else "2") or SERIAL_RE.fullmatch(serial) is None or int(serial) >= 1 << 63:  # (the serial fits the int64 of a Go reader)
+        return None
+    try:
+        if datetime.datetime.strptime(generated, "%Y-%m-%dT%H:%M:%SZ").strftime("%Y-%m-%dT%H:%M:%SZ") != generated:
+            return None
+    except ValueError:
+        return None
+    return {"schema": int(schema), "serial": int(serial), "generated": generated}
 
 
 def main(argv):
     # a line ends with a new line and nothing else, also on Windows: bash reads these lines
     sys.stdout.reconfigure(newline="\n")
+    owners_git_base = OWNERS_GIT_BASE
+    if argv[:1] == ["build"] and len(argv) >= 4 and argv[-4] == "--owners-git-base":
+        # the one option that may follow the others, just before MODULES_ENV STAGE; what is left is one of the forms below or a usage error
+        owners_git_base, argv = argv[-3], argv[:-4] + argv[-2:]
+    carry = None
+    if argv[:1] == ["build"] and len(argv) == 17 and argv[11] == "--withdrawn" and argv[13] == "--carry" and argv[14]:
+        # (only after --withdrawn, which is schema 3's own: what is left must then be the schema 3 form)
+        carry, argv = argv[14], argv[:13] + argv[15:]
     try:
-        if len(argv) == 2 and argv[0] == "list":
+        if len(argv) in (2, 4) and argv[0] == "list" and (len(argv) == 2 or argv[2] == "--carry" and argv[3]):
+            carried = read_carried(argv[3]) if len(argv) == 4 else {}
             for m in read_modules_env(argv[1]):
-                print(m["name"], m["component"], m["tag"], m["commit"], m["tier"])
+                if is_carried(m, carried):
+                    continue
+                print(m["name"], m["component"], m["tag"], m["commit"], m["tier"], m["owner"])
         elif len(argv) == 3 and argv[0] == "archives":
             try:
                 with open(argv[1], encoding="utf-8") as f:
@@ -727,10 +996,23 @@ def main(argv):
                 raise Refused("%s cannot be read" % argv[1])
             for archive, _ in find_archives(text, argv[2]).values():
                 print(archive)
+        elif len(argv) == 4 and argv[0] == "digest":
+            digest = pinned_digest(argv[1], argv[2], argv[3])
+            if digest:
+                print(digest)
         elif len(argv) == 7 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out":
-            build(argv[5], argv[6], argv[4], argv[2])
+            build(argv[5], argv[6], argv[4], argv[2], owners_git_base=owners_git_base)
+        elif (len(argv) == 13 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out" and argv[5] == "--schema" and argv[7] == "--serial"
+              and argv[9] == "--generated" and (header := online_header(argv[6], argv[8], argv[10], False)) is not None):
+            build(argv[11], argv[12], argv[4], argv[2], header, owners_git_base)
+        elif (len(argv) == 15 and argv[0] == "build" and argv[1] == "--git-base" and argv[3] == "--out" and argv[5] == "--schema" and argv[7] == "--serial"
+              and argv[9] == "--generated" and argv[11] == "--withdrawn" and (header := online_header(argv[6], argv[8], argv[10], True)) is not None):
+            header["withdrawn"] = read_withdrawn(argv[12])
+            build(argv[13], argv[14], argv[4], argv[2], header, owners_git_base, read_carried(carry) if carry else None)
         elif len(argv) == 3 and argv[0] == "proof":
             proof(argv[1], argv[2])
+        elif len(argv) == 5 and argv[0] == "proof" and argv[3] == "--schema" and argv[4] in ("2", "3"):
+            proof(argv[1], argv[2], int(argv[4]))
         else:
             print(USAGE, file=sys.stderr)
             return 2

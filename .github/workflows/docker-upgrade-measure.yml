@@ -159,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            sudo timeout 120 apt-get update -qq && sudo timeout 300 apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils && break
+            sudo timeout 120 apt-get update -qq && sudo timeout 600 apt-get install -y -qq -o DPkg::Lock::Timeout=120 --download-only qemu-system-x86 qemu-utils cloud-image-utils && sudo timeout 600 apt-get install -y -qq -o DPkg::Lock::Timeout=120 qemu-system-x86 qemu-utils cloud-image-utils && break
             [ "${attempt}" -lt 3 ] || exit 1
             echo "apt stalled or failed (try ${attempt}), again"
             sudo dpkg --configure -a || true
