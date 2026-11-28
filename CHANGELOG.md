@@ -2,6 +2,19 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.210] - 2026-11-28
+
+Components: CasaOS-UI `v0.4.238`, module `vuln-scan` `v0.2.3`. Unchanged from v0.5.209: CasaOS `v0.4.133`, CasaOS-AppManagement `v0.4.127`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.7`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Added
+
+- **"Scan now" in an app's Security window scans that app only.** After fixing one app you no longer wait for every image of the box to be scanned again. The date shown in the window is that of the app's own last scan. Thanks to [@Vinz2168](https://github.com/Vinz2168) ([ReCasaOS/ReCasaOS-VulnScan#10](https://github.com/ReCasaOS/ReCasaOS-VulnScan/pull/10), [ReCasaOS/CasaOS-UI#250](https://github.com/ReCasaOS/CasaOS-UI/pull/250)).
+- **Shared folders for virtual machines.** A VM's page has a new Shared folders tab: pick a folder under `/DATA` or `/media`, give it a tag, and the tab shows the line to add to the guest's `/etc/fstab`. A change takes effect at the VM's next start. The host needs `virtiofsd`; the tab says how to install it when it is missing. Thanks to [@Vinz2168](https://github.com/Vinz2168) ([ReCasaOS/CasaOS-UI#166](https://github.com/ReCasaOS/CasaOS-UI/pull/166)).
+
+### Fixed
+
+- **Card subtitles no longer cut on wide screens.** The French line under the Logs card and the Brazilian Portuguese line under the AI access card were a few pixels too long and ended in an ellipsis; both are shorter ([ReCasaOS/CasaOS-UI#254](https://github.com/ReCasaOS/CasaOS-UI/pull/254)).
+
 ## [0.5.209] - 2026-11-28
 
 Components: CasaOS `v0.4.133`, CasaOS-UI `v0.4.237`, CasaOS-AppManagement `v0.4.127`, module `mcp` `v0.2.3`. Unchanged from v0.5.208: CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `virt` `v0.2.7`, module `vuln-scan` `v0.2.2`, rclone `v1.75.1`, restic `v0.19.1`.
