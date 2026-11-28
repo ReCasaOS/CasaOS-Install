@@ -2,6 +2,15 @@
 
 All notable changes to the CasaOS fork installer are documented here.
 
+## [0.5.213] - 2026-11-28
+
+Components: CasaOS-AppManagement `v0.4.128`. Unchanged from v0.5.212: CasaOS `v0.4.133`, CasaOS-UI `v0.4.239`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `virt` `v0.2.8`, module `vuln-scan` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
+
+### Changed
+
+- **The backup of the box takes everything the box keeps, not a list written in advance.** The backup of the box itself (its settings, not the apps) copied a fixed list of files, and what newer features keep was missing from it: the alert channels, the feeds, the weather place, which apps update by themselves, what is hidden from the dashboard, the fleet and TLS keys, the folders per account. A box rebuilt from such a backup came back without them. It now takes everything in the box's data folder (`/var/lib/casaos`) except a named list of things that do not belong in it, such as the apps, which have their own backups, what the installer or the store puts back, caches, statistics and logs, and the keys of the backup repositories. A new entry over 50 MB is left out, and the backup says so. What an optional module keeps outside that folder is not in it ([ReCasaOS/CasaOS-AppManagement#91](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/91)).
+- **A box restore brings back what the backup holds, and only into the box.** It follows the backup's own list of parts: one that is not a place of the box is written nowhere and reported. What comes back is readable by root only. The gateway is restarted at the end when its certificates or its own files came back, so the dashboard can be unreachable for a moment right after a restore ([ReCasaOS/CasaOS-AppManagement#91](https://github.com/ReCasaOS/CasaOS-AppManagement/pull/91), [ReCasaOS/CasaOS-Install#380](https://github.com/ReCasaOS/CasaOS-Install/pull/380), [ReCasaOS/CasaOS-Install#379](https://github.com/ReCasaOS/CasaOS-Install/pull/379)).
+
 ## [0.5.212] - 2026-11-28
 
 Components: module `virt` `v0.2.8`. Unchanged from v0.5.211: CasaOS `v0.4.133`, CasaOS-UI `v0.4.239`, CasaOS-AppManagement `v0.4.127`, CasaOS-Gateway `v0.4.41`, CasaOS-UserService `v0.4.40`, CasaOS-LocalStorage `v0.4.70`, CasaOS-MessageBus `v0.4.32`, module `mcp` `v0.2.3`, module `vuln-scan` `v0.2.3`, rclone `v1.75.1`, restic `v0.19.1`.
